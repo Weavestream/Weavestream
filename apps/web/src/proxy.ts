@@ -244,7 +244,9 @@ function shouldPreflightAuth(req: NextRequest): boolean {
     pathname.startsWith('/admin/') ||
     pathname === '/me' ||
     pathname.startsWith('/me/') ||
-    pathname.startsWith('/portal/')
+    pathname.startsWith('/portal/') ||
+    // Remote MCP consent: needs the signed-in user like any app page.
+    pathname.startsWith('/oauth/consent/')
   );
 }
 

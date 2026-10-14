@@ -12,7 +12,7 @@ import type { ApiKey, Prisma } from '@prisma/client';
 import type { CreateApiKeyInput } from '@weavestream/shared';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
-import { revokeApiKeysForUser } from './revoke-api-keys.js';
+import { revokeDelegatedAccessForUser, type RevokedDelegatedAccess } from './revoke-api-keys.js';
 
 /**
  * Presented-token format: `ws_<keyId>_<secret>`.
@@ -221,13 +221,15 @@ export class ApiKeyService {
    * leaving an attacker's key working, and the key is invisible on the
    * sessions page, so the user has no way to know it survived.
    *
-   * Returns the number revoked so callers can report it.
+   * Remote MCP connections are revoked with them, for the same reason.
+   *
+   * Returns the numbers revoked so callers can report them.
    */
   async revokeAllForUser(
     userId: string,
     tx?: Prisma.TransactionClient,
-  ): Promise<number> {
-    return revokeApiKeysForUser(tx ?? this.prisma, userId);
+  ): Promise<RevokedDelegatedAccess> {
+    return revokeDelegatedAccessForUser(tx ?? this.prisma, userId);
   }
 
   /**

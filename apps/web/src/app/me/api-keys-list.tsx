@@ -166,7 +166,7 @@ export function ApiKeysList({
           <ErrorBanner
             tone="warn"
             title="API keys are turned off for this workspace."
-            detail="Existing keys are refused and no new key can be created. An administrator can turn API keys on in Admin → Settings → Security."
+            detail="Existing keys are refused and no new key can be created. An administrator can turn API keys on in Admin → Settings → API & MCP."
           />
         </div>
       )}

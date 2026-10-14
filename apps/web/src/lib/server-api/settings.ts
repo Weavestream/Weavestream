@@ -32,6 +32,8 @@ export type Settings = {
   articleDefaultEditorMode: ArticleEditorMode;
   /** Instance-wide API key switch. Changed only via `PUT /settings/api-keys`. */
   apiKeysEnabled: boolean;
+  /** Instance-wide remote MCP switch. Changed only via `PUT /settings/mcp-remote`. */
+  mcpRemoteEnabled: boolean;
   updatedAt: string;
 };
 
@@ -51,6 +53,7 @@ const DEFAULT_SETTINGS: Settings = {
   articleAutosaveEnabled: false,
   articleDefaultEditorMode: 'tiptap',
   apiKeysEnabled: false,
+  mcpRemoteEnabled: false,
   updatedAt: new Date(0).toISOString(),
 };
 

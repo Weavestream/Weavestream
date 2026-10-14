@@ -10,6 +10,9 @@ const sha256 = (v: string) => createHash('sha256').update(v, 'utf8').digest('hex
 
 function makeService({ enabled = true }: { enabled?: boolean } = {}) {
   const rows = new Map<string, Record<string, unknown>>();
+  const connections = new Map<string, { userId: string; grantId: string; revokedAt: Date | null }>();
+  /** OAuth artifact id → the grant it belongs to. */
+  const artifacts = new Map<string, string>();
   const prisma = {
     apiKey: {
       create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
@@ -42,6 +45,37 @@ function makeService({ enabled = true }: { enabled?: boolean } = {}) {
       update: jest.fn(async () => ({})),
       findMany: jest.fn(async () => []),
     },
+    // Both stubs honour `revokedAt: null`, as the real queries do.
+    mcpConnection: {
+      findMany: jest.fn(
+        async ({ where }: { where: { userId: string; revokedAt: null } }) =>
+          [...connections.values()]
+            .filter((c) => c.userId === where.userId && c.revokedAt === where.revokedAt)
+            .map((c) => ({ grantId: c.grantId })),
+      ),
+      updateMany: jest.fn(
+        async ({ where }: { where: { userId: string; revokedAt: null } }) => {
+          let count = 0;
+          for (const c of connections.values()) {
+            if (c.userId !== where.userId || c.revokedAt !== where.revokedAt) continue;
+            c.revokedAt = new Date();
+            count += 1;
+          }
+          return { count };
+        },
+      ),
+    },
+    oAuthArtifact: {
+      deleteMany: jest.fn(async ({ where }: { where: { grantId: { in: string[] } } }) => {
+        let count = 0;
+        for (const [id, grantId] of artifacts) {
+          if (!where.grantId.in.includes(grantId)) continue;
+          artifacts.delete(id);
+          count += 1;
+        }
+        return { count };
+      }),
+    },
     // Interactive transaction: run the callback against the same stub.
     $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
   } as Record<string, unknown>;
@@ -55,6 +89,8 @@ function makeService({ enabled = true }: { enabled?: boolean } = {}) {
     rows,
     audit,
     prisma,
+    connections,
+    artifacts,
   };
 }
 
@@ -262,18 +298,71 @@ describe('ApiKeyService', () => {
       const b = await svc.mint({ userId: 'u-1', name: 'b', createdBy: 'u-1' });
       const other = await svc.mint({ userId: 'u-2', name: 'c', createdBy: 'u-2' });
 
-      await expect(svc.revokeAllForUser('u-1')).resolves.toBe(2);
+      await expect(svc.revokeAllForUser('u-1')).resolves.toEqual({ apiKeys: 2, mcpConnections: 0 });
       await expect(svc.verify(a.token)).resolves.toBeNull();
       await expect(svc.verify(b.token)).resolves.toBeNull();
       // A compromise response for one user must not sign out another.
       await expect(svc.verify(other.token)).resolves.not.toBeNull();
     });
 
+    /**
+     * u-1 has two live connections and one already revoked; u-2 has one live
+     * connection. Each grant owns a code, an access token and a refresh token.
+     */
+    function seedConnections(fx: ReturnType<typeof makeService>) {
+      const seed = (id: string, userId: string, revokedAt: Date | null) => {
+        const grantId = `grant-${id}`;
+        fx.connections.set(id, { userId, grantId, revokedAt });
+        for (const kind of ['code', 'access', 'refresh']) fx.artifacts.set(`${kind}-${id}`, grantId);
+      };
+      const earlier = new Date('2026-01-01T00:00:00Z');
+      seed('c-1', 'u-1', null);
+      seed('c-2', 'u-1', null);
+      seed('c-old', 'u-1', earlier);
+      seed('c-3', 'u-2', null);
+      return earlier;
+    }
+
+    it("revokes only the target user's live AI connections and deletes their OAuth artifacts", async () => {
+      const fx = makeService();
+      await fx.svc.mint({ userId: 'u-1', name: 'a', createdBy: 'u-1' });
+      const earlier = seedConnections(fx);
+
+      await expect(fx.svc.revokeAllForUser('u-1')).resolves.toEqual({ apiKeys: 1, mcpConnections: 2 });
+
+      expect(fx.connections.get('c-1')!.revokedAt).toBeInstanceOf(Date);
+      expect(fx.connections.get('c-2')!.revokedAt).toBeInstanceOf(Date);
+      // An earlier revocation keeps its own timestamp and is not counted again.
+      expect(fx.connections.get('c-old')!.revokedAt).toBe(earlier);
+      // Another user's connection and tokens are untouched.
+      expect(fx.connections.get('c-3')!.revokedAt).toBeNull();
+      expect([...fx.artifacts.keys()].sort()).toEqual([
+        'access-c-3',
+        'access-c-old',
+        'code-c-3',
+        'code-c-old',
+        'refresh-c-3',
+        'refresh-c-old',
+      ]);
+      // Only the grants that were live are targeted.
+      const { deleteMany } = fx.prisma.oAuthArtifact as { deleteMany: jest.Mock };
+      expect(deleteMany).toHaveBeenCalledTimes(1);
+      expect(deleteMany).toHaveBeenCalledWith({ where: { grantId: { in: ['grant-c-1', 'grant-c-2'] } } });
+    });
+
     it('is idempotent', async () => {
-      const { svc } = makeService();
-      await svc.mint({ userId: 'u-1', name: 'a', createdBy: 'u-1' });
-      await expect(svc.revokeAllForUser('u-1')).resolves.toBe(1);
-      await expect(svc.revokeAllForUser('u-1')).resolves.toBe(0);
+      const fx = makeService();
+      await fx.svc.mint({ userId: 'u-1', name: 'a', createdBy: 'u-1' });
+      seedConnections(fx);
+      await expect(fx.svc.revokeAllForUser('u-1')).resolves.toEqual({ apiKeys: 1, mcpConnections: 2 });
+      const revokedAt = fx.connections.get('c-1')!.revokedAt;
+      const artifactsAfterFirst = [...fx.artifacts.keys()].sort();
+
+      await expect(fx.svc.revokeAllForUser('u-1')).resolves.toEqual({ apiKeys: 0, mcpConnections: 0 });
+      expect(fx.connections.get('c-1')!.revokedAt).toBe(revokedAt);
+      expect([...fx.artifacts.keys()].sort()).toEqual(artifactsAfterFirst);
+      // Nothing live was left, so the second run deletes nothing at all.
+      expect((fx.prisma.oAuthArtifact as { deleteMany: jest.Mock }).deleteMany).toHaveBeenCalledTimes(1);
     });
   });
 

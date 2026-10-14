@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import type { AuthedUser } from '../../common/current-user.decorator.js';
+import { isProgrammatic, type AuthedUser } from '../../common/current-user.decorator.js';
 import { SKIP_CSRF_KEY } from '../../common/public.decorator.js';
 import { CsrfService } from '../csrf.service.js';
 import { EnvService } from '../../config/env.service.js';
@@ -33,7 +33,7 @@ export class CsrfGuard implements CanActivate {
     // only make every programmatic client fetch a token it cannot use.
     // Keyed off the principal AuthGuard already established, never off a
     // client-supplied header (CLAUDE.md §1).
-    if ((req as Request & { user?: AuthedUser }).user?.apiKeyId) return true;
+    if (isProgrammatic((req as Request & { user?: AuthedUser }).user)) return true;
 
     const skip = this.reflector.getAllAndOverride<boolean>(SKIP_CSRF_KEY, [
       ctx.getHandler(),

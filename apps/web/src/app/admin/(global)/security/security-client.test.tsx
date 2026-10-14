@@ -44,6 +44,8 @@ function renderConnectionTab(data: ConnectionDiagnostics) {
       egress={null}
       apiKeys={null}
       apiKeysEnabled={false}
+      connections={null}
+      mcpRemoteEnabled={false}
       canRevoke={false}
       currentUserId="u-1"
     />,
@@ -124,6 +126,8 @@ describe('API keys tab', () => {
             pageSize: 50,
           }}
           apiKeysEnabled={props.enabled ?? true}
+          connections={null}
+          mcpRemoteEnabled={false}
           canRevoke={props.canRevoke ?? true}
           currentUserId="u-1"
         />
@@ -169,5 +173,92 @@ describe('API keys tab', () => {
   it('says when keys are switched off instance-wide', () => {
     renderKeys({ enabled: false });
     expect(screen.getByText(/API keys are turned off/)).toBeInTheDocument();
+  });
+});
+
+describe('SecurityCenterClient — AI connections tab', () => {
+  const CONN = {
+    id: 'c-1',
+    clientId: 'https://chatgpt.com/oauth/client.json',
+    clientHost: 'chatgpt.com',
+    clientName: 'ChatGPT',
+    redirectHost: 'chatgpt.com',
+    allowWrite: false,
+    lastUsedAt: null,
+    expiresAt: '2027-10-01T00:00:00Z',
+    createdAt: '2026-10-01T00:00:00Z',
+    user: { id: 'u-9', name: 'Pat Doe', email: 'pat@example.com' },
+  };
+
+  function renderConnections(props: { enabled?: boolean; canRevoke?: boolean; total?: number; page?: number } = {}) {
+    render(
+      <ToastProvider>
+        <SecurityCenterClient
+          initialTab="ai-connections"
+          initialWindow={24}
+          activity={null}
+          lockouts={null}
+          blocks={null}
+          sessions={null}
+          egress={null}
+          apiKeys={null}
+          apiKeysEnabled
+          connections={{ items: [CONN], total: props.total ?? 1, page: props.page ?? 1, pageSize: 50 }}
+          mcpRemoteEnabled={props.enabled ?? true}
+          canRevoke={props.canRevoke ?? true}
+          currentUserId="u-1"
+        />
+      </ToastProvider>,
+    );
+  }
+
+  beforeEach(() => {
+    apiFetch.mockReset();
+    jest.spyOn(window, 'confirm').mockReturnValue(true);
+  });
+
+  it('shows every connection with its owner, app host and access', () => {
+    renderConnections();
+    expect(screen.getAllByText('ChatGPT').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('chatgpt.com').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('pat@example.com').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('read-only').length).toBeGreaterThan(0);
+  });
+
+  it('revokes through the admin route after confirmation', async () => {
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: { revoked: 1 } });
+    renderConnections();
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Revoke' })[0]!);
+    });
+    expect(window.confirm).toHaveBeenCalled();
+    expect(apiFetch).toHaveBeenCalledWith('/security/mcp-connections/c-1', { method: 'DELETE' });
+  });
+
+  it('a network failure clears the busy state and says nothing was revoked', async () => {
+    apiFetch.mockRejectedValue(new TypeError('Failed to fetch'));
+    renderConnections();
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Revoke' })[0]!);
+    });
+    expect(screen.getByText(/could not be reached. The connection was not revoked/)).toBeInTheDocument();
+    for (const b of screen.getAllByRole('button', { name: 'Revoke' })) expect(b).toBeEnabled();
+  });
+
+  it('hides revoke from admins without user.manage', () => {
+    renderConnections({ canRevoke: false });
+    expect(screen.queryByRole('button', { name: 'Revoke' })).not.toBeInTheDocument();
+  });
+
+  it('pages with its own parameter', () => {
+    renderConnections({ total: 120, page: 2 });
+    const page3 = screen.getByRole('link', { name: 'Page 3' });
+    expect(page3.getAttribute('href')).toContain('connPage=3');
+    expect(page3.getAttribute('href')).toContain('tab=ai-connections');
+  });
+
+  it('says when remote connections are switched off instance-wide', () => {
+    renderConnections({ enabled: false });
+    expect(screen.getByText(/Remote AI connections are turned off/)).toBeInTheDocument();
   });
 });

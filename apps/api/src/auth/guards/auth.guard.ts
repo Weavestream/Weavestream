@@ -16,6 +16,9 @@ import { SettingsService } from '../../settings/settings.service.js';
 import { cookieNames, setAccessCookie, setSessionCookie } from '../cookies.js';
 import { ipOf, userAgentOf } from '../../common/request-meta.js';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
+import { isInternalListenerRequest } from '../../common/internal-listener.js';
+import { DELEGATION_PREFIX, McpDelegationService } from '../../mcp/mcp-delegation.service.js';
+import { McpConnectionsService } from '../../mcp-oauth/mcp-connections.service.js';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -27,6 +30,8 @@ export class AuthGuard implements CanActivate {
     private readonly env: EnvService,
     private readonly apiKeys: ApiKeyService,
     private readonly settings: SettingsService,
+    private readonly delegations: McpDelegationService,
+    private readonly mcpConnections: McpConnectionsService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -46,6 +51,7 @@ export class AuthGuard implements CanActivate {
     // cookies. A Bearer that is not ours (an SSO proxy's JWT in front of the
     // app) is ignored entirely, so it cannot log every browser out.
     const bearer = this.bearerOf(req);
+    if (bearer?.startsWith(DELEGATION_PREFIX)) return this.authenticateDelegation(req, bearer);
     if (bearer) return this.authenticateApiKey(req, bearer);
 
     const names = cookieNames(this.env);
@@ -99,7 +105,60 @@ export class AuthGuard implements CanActivate {
     const [scheme, ...rest] = header.split(' ');
     if (scheme?.toLowerCase() !== 'bearer') return undefined;
     const value = rest.join(' ').trim();
-    return value.startsWith('ws_') ? value : undefined;
+    return value.startsWith('ws_') || value.startsWith(DELEGATION_PREFIX) ? value : undefined;
+  }
+
+  /**
+   * Authenticate a remote MCP connection's tool call: a single-use
+   * delegation handle minted by the `/mcp` endpoint for exactly this method
+   * and path, presented on the API's internal listener.
+   *
+   * The handle is honoured only on a request that arrived through the
+   * internal listener (an in-process marker, not a header or a peer
+   * address), and it is taken out of the store before anything else, so it
+   * works once at most. The connection and the user are re-read here, so a
+   * revocation or deactivation between the `/mcp` check and this call still
+   * stops it.
+   *
+   * The principal has the same shape as a key's: `isProgrammatic()` holds,
+   * so the API-key containment applies unchanged — no `@InteractiveOnly`,
+   * no `@VaultReveal`, no step-up, and the HTTP-method read-only rule on the
+   * connection's grant. `apiKeyId` stays unset so audit rows never mix keys
+   * and connections; `mcpConnectionId` carries the attribution instead.
+   */
+  private async authenticateDelegation(
+    req: Request & { user?: AuthedUser },
+    presented: string,
+  ): Promise<boolean> {
+    if (!isInternalListenerRequest(req)) throw new UnauthorizedException();
+    const delegation = this.delegations.take(presented);
+    if (!delegation) throw new UnauthorizedException();
+    if (req.method.toUpperCase() !== delegation.method || req.path !== delegation.path) {
+      throw new UnauthorizedException();
+    }
+    if (!(await this.settings.mcpRemoteEnabled())) throw new UnauthorizedException();
+
+    const connection = await this.mcpConnections.findActiveById(delegation.connectionId);
+    if (!connection || connection.userId !== delegation.userId) throw new UnauthorizedException();
+    const user = await this.prisma.user.findUnique({ where: { id: connection.userId } });
+    if (!user || !user.isActive) throw new UnauthorizedException();
+
+    req.user = {
+      id: user.id,
+      email: user.email,
+      role: user.role,
+      globalAccess: user.globalAccess ?? null,
+      platformCapabilities: user.platformCapabilities ?? [],
+      // An opaque correlation handle, never a credential (CLAUDE.md §2).
+      // Nothing writes a step-up marker under it, so step-up routes refuse.
+      sessionId: connection.id,
+      mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
+      mfaPending: false,
+      mcpConnectionId: connection.id,
+      apiKeyAllowWrite: connection.allowWrite,
+      apiKeyAllowPasswordReveal: false,
+    };
+    return true;
   }
 
   /**

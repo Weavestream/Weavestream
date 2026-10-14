@@ -29,6 +29,7 @@ export interface SystemSettingsDTO {
   articleAutosaveEnabled: boolean;
   articleDefaultEditorMode: ArticleEditorMode;
   apiKeysEnabled: boolean;
+  mcpRemoteEnabled: boolean;
   updatedAt: string;
 }
 
@@ -146,6 +147,44 @@ export class SettingsService {
     enabled: boolean,
     meta: { ip: string; userAgent: string },
   ): Promise<SystemSettingsDTO> {
+    return this.setAccessSwitch('apiKeysEnabled', AUDIT_ACTIONS.settings.apiKeysToggle, actor, enabled, meta);
+  }
+
+  /**
+   * Whether remote MCP connections (ChatGPT, Claude over OAuth) are on. Read
+   * on every `/mcp` request, every internal tool call, and every token
+   * exchange, through the same 5 s cache as `apiKeysEnabled()`.
+   */
+  async mcpRemoteEnabled(): Promise<boolean> {
+    return (await this.get()).mcpRemoteEnabled;
+  }
+
+  /**
+   * Turn remote MCP connections on or off. Off refuses every `/mcp` call,
+   * token exchange and consent; it does not revoke connections.
+   */
+  async setMcpRemoteEnabled(
+    actor: AuthedUser,
+    enabled: boolean,
+    meta: { ip: string; userAgent: string },
+  ): Promise<SystemSettingsDTO> {
+    return this.setAccessSwitch('mcpRemoteEnabled', AUDIT_ACTIONS.settings.mcpRemoteToggle, actor, enabled, meta);
+  }
+
+  /**
+   * Flip one instance-wide access switch. The write and its audit row commit
+   * in one transaction: a change to who can authenticate must never exist
+   * without its record, and a failed audit must leave the policy as it was.
+   * The cache is dropped in `finally`, so even an unexpected failure cannot
+   * leave this replica's guards serving a value the database no longer holds.
+   */
+  private async setAccessSwitch(
+    field: 'apiKeysEnabled' | 'mcpRemoteEnabled',
+    action: string,
+    actor: AuthedUser,
+    enabled: boolean,
+    meta: { ip: string; userAgent: string },
+  ): Promise<SystemSettingsDTO> {
     await this.loadOrSeed();
     try {
       const after = await this.prisma.$transaction(async (tx) => {
@@ -153,21 +192,21 @@ export class SettingsService {
         // exactly the transition that committed.
         const before = await tx.systemSetting.findUniqueOrThrow({
           where: { id: SINGLETON_ID },
-          select: { apiKeysEnabled: true },
+          select: { [field]: true } as { apiKeysEnabled: true } | { mcpRemoteEnabled: true },
         });
         const row = await tx.systemSetting.update({
           where: { id: SINGLETON_ID },
-          data: { apiKeysEnabled: enabled, updatedBy: actor.id },
+          data: { [field]: enabled, updatedBy: actor.id },
         });
         await this.audit.logWithClient(tx, {
           actorId: actor.id,
-          action: AUDIT_ACTIONS.settings.apiKeysToggle,
+          action,
           entityType: 'SystemSetting',
           entityId: SINGLETON_ID,
           ip: meta.ip,
           userAgent: meta.userAgent,
-          before: { apiKeysEnabled: before.apiKeysEnabled },
-          after: { apiKeysEnabled: row.apiKeysEnabled, sessionId: actor.sessionId },
+          before: { [field]: (before as Record<string, boolean>)[field] },
+          after: { [field]: row[field], sessionId: actor.sessionId },
         });
         return row;
       });
@@ -206,6 +245,7 @@ type SystemSettingRow = {
   articleAutosaveEnabled: boolean;
   articleDefaultEditorMode: string;
   apiKeysEnabled: boolean;
+  mcpRemoteEnabled: boolean;
   updatedAt: Date;
 };
 
@@ -246,6 +286,7 @@ function toDto(row: SystemSettingRow): SystemSettingsDTO {
     articleAutosaveEnabled: row.articleAutosaveEnabled,
     articleDefaultEditorMode: readDefaultEditorMode(row.articleDefaultEditorMode),
     apiKeysEnabled: row.apiKeysEnabled,
+    mcpRemoteEnabled: row.mcpRemoteEnabled,
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -263,5 +304,6 @@ function stripForAudit(row: SystemSettingRow) {
     articleAutosaveEnabled: row.articleAutosaveEnabled,
     articleDefaultEditorMode: readDefaultEditorMode(row.articleDefaultEditorMode),
     apiKeysEnabled: row.apiKeysEnabled,
+    mcpRemoteEnabled: row.mcpRemoteEnabled,
   };
 }

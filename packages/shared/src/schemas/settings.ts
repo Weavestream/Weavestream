@@ -33,6 +33,7 @@ export const systemSettingsSchema = z.object({
   articleAutosaveEnabled: z.boolean(),
   articleDefaultEditorMode: articleEditorModeSchema,
   apiKeysEnabled: z.boolean(),
+  mcpRemoteEnabled: z.boolean(),
   updatedAt: z.string(),
 });
 
@@ -60,6 +61,13 @@ export const updateSettingsSchema = z
  */
 export const updateApiKeysSettingSchema = z.object({ enabled: z.boolean() }).strict();
 export type UpdateApiKeysSettingInput = z.infer<typeof updateApiKeysSettingSchema>;
+
+/**
+ * Same shape for the remote MCP switch (`PUT /settings/mcp-remote`): turning
+ * on ChatGPT/Claude connections is a security decision with the same rules.
+ */
+export const updateMcpRemoteSettingSchema = updateApiKeysSettingSchema;
+export type UpdateMcpRemoteSettingInput = UpdateApiKeysSettingInput;
 
 export type SystemSettings = z.infer<typeof systemSettingsSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;

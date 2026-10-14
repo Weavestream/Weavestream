@@ -13,6 +13,10 @@
       "types": "./dist/server.d.ts",
       "default": "./dist/server.js"
     },
+    "./mcp-tools": {
+      "types": "./dist/mcp-tools.d.ts",
+      "default": "./dist/mcp-tools.js"
+    },
     "./browser": {
       "types": "./dist/browser/index.d.ts",
       "default": "./dist/browser/index.js"

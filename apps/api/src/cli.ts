@@ -14,7 +14,7 @@ import {
   SecretEncryptionService,
   passwordVaultAad,
 } from './crypto/secret-encryption.service.js';
-import { revokeApiKeysForUser } from './auth/revoke-api-keys.js';
+import { revokeDelegatedAccessForUser } from './auth/revoke-api-keys.js';
 
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule, { bufferLogs: true });
@@ -198,7 +198,7 @@ async function resetPassword(
   const hash = await passwords.hash(answers.password);
   // One unit, as on the HTTP paths: a dropped connection must not leave the
   // password rotated with the attacker's sessions or keys still live.
-  const { sessionsRevoked, apiKeysRevoked } = await prisma.$transaction(async (tx) => {
+  const { sessionsRevoked, apiKeysRevoked, mcpConnectionsRevoked } = await prisma.$transaction(async (tx) => {
     await tx.user.update({
       where: { id: user.id },
       data: { passwordHash: hash },
@@ -209,8 +209,12 @@ async function resetPassword(
     });
     // Keys die with sessions on every break-glass path, same invariant the
     // HTTP handlers hold.
-    const keys = await revokeApiKeysForUser(tx, user.id);
-    return { sessionsRevoked: sessions.count, apiKeysRevoked: keys };
+    const revoked = await revokeDelegatedAccessForUser(tx, user.id);
+    return {
+      sessionsRevoked: sessions.count,
+      apiKeysRevoked: revoked.apiKeys,
+      mcpConnectionsRevoked: revoked.mcpConnections,
+    };
   });
   await audit.log({
     actorId: null,
@@ -220,11 +224,11 @@ async function resetPassword(
     ip: 'cli',
     userAgent: 'cli',
     before: null,
-    after: { sessionsRevoked, apiKeysRevoked },
+    after: { sessionsRevoked, apiKeysRevoked, mcpConnectionsRevoked },
   });
   // eslint-disable-next-line no-console
   console.log(
-    `Password reset for ${user.email}. Revoked ${sessionsRevoked} sessions and ${apiKeysRevoked} API keys.`,
+    `Password reset for ${user.email}. Revoked ${sessionsRevoked} sessions, ${apiKeysRevoked} API keys and ${mcpConnectionsRevoked} AI connections.`,
   );
 }
 
@@ -243,7 +247,7 @@ async function resetMfa(
     process.exit(1);
   }
 
-  const apiKeysRevoked = await prisma.$transaction(async (tx) => {
+  const { apiKeys: apiKeysRevoked, mcpConnections: mcpConnectionsRevoked } = await prisma.$transaction(async (tx) => {
     await tx.user.update({
       where: { id: user.id },
       data: {
@@ -259,7 +263,7 @@ async function resetMfa(
     });
     // Keys die with sessions on every break-glass path, same invariant the
     // HTTP handlers hold.
-    return revokeApiKeysForUser(tx, user.id);
+    return revokeDelegatedAccessForUser(tx, user.id);
   });
 
   await audit.log({
@@ -273,10 +277,10 @@ async function resetMfa(
       mfaEnabled: user.mfaEnabled,
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
     },
-    after: { mfaEnabled: false, mfaEnforcementCompletedAt: null, apiKeysRevoked },
+    after: { mfaEnabled: false, mfaEnforcementCompletedAt: null, apiKeysRevoked, mcpConnectionsRevoked },
   });
   console.log(
-    `MFA reset for ${user.email}. Backup codes removed, sessions and ${apiKeysRevoked} API keys revoked.`,
+    `MFA reset for ${user.email}. Backup codes removed, sessions, ${apiKeysRevoked} API keys and ${mcpConnectionsRevoked} AI connections revoked.`,
   );
 }
 
@@ -298,10 +302,11 @@ async function listUsers(prisma: PrismaService): Promise<void> {
 }
 
 async function rotateSessions(prisma: PrismaService, audit: AuditLogService): Promise<void> {
-  // This command signs *everyone* out, so it revokes every key in the system
-  // too. A key that outlived it would be the one credential the operator's
-  // blast-radius reset did not reach. Both in one transaction.
-  const [res, keys] = await prisma.$transaction([
+  // This command signs *everyone* out, so it revokes every key and every
+  // remote AI connection in the system too. A credential that outlived it
+  // would be the one the operator's blast-radius reset did not reach. All in
+  // one transaction; the OAuth artifacts (codes, tokens, grants) go with them.
+  const [res, keys, connections] = await prisma.$transaction([
     prisma.session.updateMany({
       where: { revokedAt: null },
       data: { revokedAt: new Date() },
@@ -310,6 +315,11 @@ async function rotateSessions(prisma: PrismaService, audit: AuditLogService): Pr
       where: { revokedAt: null },
       data: { revokedAt: new Date() },
     }),
+    prisma.mcpConnection.updateMany({
+      where: { revokedAt: null },
+      data: { revokedAt: new Date() },
+    }),
+    prisma.oAuthArtifact.deleteMany({}),
   ]);
   await audit.log({
     actorId: null,
@@ -319,10 +329,12 @@ async function rotateSessions(prisma: PrismaService, audit: AuditLogService): Pr
     ip: 'cli',
     userAgent: 'cli',
     before: null,
-    after: { revokedCount: res.count, apiKeysRevoked: keys.count },
+    after: { revokedCount: res.count, apiKeysRevoked: keys.count, mcpConnectionsRevoked: connections.count },
   });
   // eslint-disable-next-line no-console
-  console.log(`Revoked ${res.count} sessions and ${keys.count} API keys (all users).`);
+  console.log(
+    `Revoked ${res.count} sessions, ${keys.count} API keys and ${connections.count} AI connections (all users).`,
+  );
 }
 
 async function reindexSearch(

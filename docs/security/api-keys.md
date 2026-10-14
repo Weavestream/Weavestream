@@ -11,7 +11,7 @@ An API key lets a script, integration or AI agent call the Weavestream API as yo
 
 ## Turning API keys on
 
-API keys are **off** on a new instance. A user with the settings permission turns them on in **Admin → Settings → Security → Allow API keys**. This asks for MFA again (step-up), and an API key can never change it.
+API keys are **off** on a new instance. A user with the settings permission turns them on in **Admin → Settings → API & MCP → Allow API keys**. This asks for MFA again (step-up), and an API key can never change it.
 
 While the switch is off, every request with a key is refused, and no one can create a key. Keys are not deleted, so turning the switch back on restores them.
 
@@ -60,6 +60,10 @@ A key is contained so that a leaked key is a revocable loss, not an account take
 
 By default a key can list vault entries but **cannot** reveal passwords, TOTP codes or decrypted notes. Tick **Allow this key to reveal stored passwords** only for a key that genuinely needs it, and never for an AI agent you do not fully control. Reveals made with a key are rate-limited together with your other keys.
 
+## Remote AI connections
+
+ChatGPT and Claude do not use API keys. They connect to `/mcp` with OAuth after you sign in and approve, and their token works only on `/mcp`. See [MCP Server](../integrations/mcp.md) and [Authentication](authentication.md#remote-ai-connections-oauth).
+
 ## Revocation
 
 Revoke a key from **Account → API keys**. An administrator with the user-management permission can also see and revoke **every** user's key in **Admin → Security center → API keys** (this asks for MFA again). Every key you hold is also revoked automatically when:
@@ -67,6 +71,8 @@ Revoke a key from **Account → API keys**. An administrator with the user-manag
 - you change your password, or sign out all other sessions
 - an admin resets your MFA, re-invites you, or deactivates you
 - the `reset-password`, `reset-mfa` or `rotate-sessions` CLI commands run
+
+The same events revoke every remote AI connection you hold.
 
 ## Auditing
 

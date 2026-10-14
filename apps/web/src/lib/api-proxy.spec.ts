@@ -93,6 +93,23 @@ describe('proxyToApi — internal-only deny', () => {
   });
 });
 
+describe('proxyToApi — remote MCP delegation handles', () => {
+  it('never forwards a Bearer wsd_ handle, but keeps other Authorization headers', async () => {
+    const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }));
+    try {
+      await proxyToApi(makeReq({ headers: { authorization: 'Bearer wsd_abc123' } }), '/api/v1/companies');
+      await proxyToApi(makeReq({ headers: { authorization: 'bearer   WSD_abc123' } }), '/api/v1/companies');
+      await proxyToApi(makeReq({ headers: { authorization: 'Bearer ws_0123_secret' } }), '/api/v1/companies');
+      const sent = fetchSpy.mock.calls.map((c) => (c[1] as RequestInit).headers as Headers);
+      expect(sent[0]!.has('authorization')).toBe(false);
+      expect(sent[1]!.has('authorization')).toBe(false);
+      expect(sent[2]!.get('authorization')).toBe('Bearer ws_0123_secret');
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+});
+
 describe('proxyToApi — connection diagnostics headers', () => {
   const WHOAMI = '/api/v1/security/whoami';
   const savedHops = process.env.TRUST_PROXY_HOPS;

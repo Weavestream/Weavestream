@@ -4,7 +4,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { parseConfig, WeavestreamClient } from './client.js';
-import { registerTools } from './tools.js';
+import { MCP_TOOLS, registerTools } from '@weavestream/shared/mcp-tools';
 
 const KEY = 'ws_0123456789abcdef01_c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0';
 const CO = '11111111-1111-4111-8111-111111111111';
@@ -12,7 +12,7 @@ const ASSET = '22222222-2222-4222-8222-222222222222';
 
 type Call = { url: string; init: RequestInit };
 
-async function connect(opts: { respond?: (c: Call) => Response } = {}) {
+async function connect(opts: { respond?: (c: Call) => Response; allowWrite?: boolean } = {}) {
   const calls: Call[] = [];
   const fetchImpl = (async (url: URL, init: RequestInit) => {
     const call = { url: String(url), init };
@@ -23,6 +23,7 @@ async function connect(opts: { respond?: (c: Call) => Response } = {}) {
   registerTools(
     server,
     new WeavestreamClient({ baseUrl: 'https://ws.example.com', apiKey: KEY, fetchImpl }),
+    { allowWrite: opts.allowWrite ?? true },
   );
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '0' });
@@ -136,4 +137,76 @@ test('empty Markdown is rejected before any request', async () => {
   const r = await client.callTool({ name: 'create_article', arguments: { companyId: CO, title: 'x', markdownSource: '' } });
   assert.equal(r.isError, true);
   assert.equal(calls.length, 0);
+});
+
+const ALL_TOOLS = [
+  'whoami',
+  'list_companies',
+  'search',
+  'list_layouts',
+  'get_layout',
+  'list_assets',
+  'get_asset',
+  'create_asset',
+  'update_asset',
+  'list_domains',
+  'get_domain',
+  'list_passwords',
+  'get_password',
+  'list_articles',
+  'get_article',
+  'create_article',
+  'update_article',
+];
+const WRITE_TOOLS = ['create_asset', 'update_asset', 'create_article', 'update_article'];
+
+test('the catalogue is exactly the 17 published tools', async () => {
+  const names = (await (await connect()).client.listTools()).tools.map((t) => t.name);
+  assert.deepEqual([...names].sort(), [...ALL_TOOLS].sort());
+});
+
+test('without write access the write tools are neither listed nor callable', async () => {
+  const { client, calls } = await connect({ allowWrite: false });
+  const names = (await client.listTools()).tools.map((t) => t.name);
+  assert.deepEqual([...names].sort(), ALL_TOOLS.filter((n) => !WRITE_TOOLS.includes(n)).sort());
+  const r = await client.callTool({
+    name: 'create_asset',
+    arguments: { companyId: CO, assetLayoutId: ASSET, fieldValues: {} },
+  });
+  assert.equal(r.isError, true);
+  assert.equal(calls.length, 0);
+});
+
+test('read hints match access, and every read tool issues GET, every write tool POST or PATCH', async () => {
+  const { client, calls } = await connect();
+  const listed = new Map((await client.listTools()).tools.map((t) => [t.name, t]));
+  const sample: Record<string, Record<string, unknown>> = {
+    whoami: {},
+    list_companies: {},
+    search: { q: 'x' },
+    list_layouts: {},
+    get_layout: { layoutId: ASSET },
+    list_assets: { companyId: CO },
+    get_asset: { companyId: CO, assetId: ASSET },
+    create_asset: { companyId: CO, assetLayoutId: ASSET, fieldValues: {} },
+    update_asset: { companyId: CO, assetId: ASSET, name: 'x' },
+    list_domains: { companyId: CO },
+    get_domain: { companyId: CO, domainId: ASSET },
+    list_passwords: { companyId: CO },
+    get_password: { companyId: CO, passwordId: ASSET },
+    list_articles: { companyId: CO },
+    get_article: { companyId: CO, articleId: ASSET },
+    create_article: { companyId: CO, title: 't', markdownSource: '# x' },
+    update_article: { companyId: CO, articleId: ASSET, title: 't' },
+  };
+  for (const tool of MCP_TOOLS) {
+    assert.equal(listed.get(tool.name)?.annotations?.readOnlyHint, tool.access === 'read', tool.name);
+    const before = calls.length;
+    const r = await client.callTool({ name: tool.name, arguments: sample[tool.name] });
+    assert.notEqual(r.isError, true, tool.name);
+    assert.equal(calls.length, before + 1, tool.name);
+    const method = calls[calls.length - 1]!.init.method;
+    if (tool.access === 'read') assert.equal(method, 'GET', tool.name);
+    else assert.ok(method === 'POST' || method === 'PATCH', tool.name);
+  }
 });

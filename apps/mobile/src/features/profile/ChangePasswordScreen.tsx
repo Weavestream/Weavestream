@@ -1,6 +1,7 @@
 import {
   API_KEY_REVOCATION_WARNING,
   apiKeysRevokedNotice,
+  mcpConnectionsRevokedNotice,
   isCurrentPasswordInvalidProblem,
   passwordSchema,
 } from '@weavestream/shared';
@@ -108,7 +109,7 @@ export function ChangePasswordScreen() {
         // devices and integrations just stopped and they should not discover
         // that later.
         toast.push(
-          `Password updated. Other sessions signed out.${apiKeysRevokedNotice(result?.apiKeysRevoked ?? 0)}`,
+          `Password updated. Other sessions signed out.${apiKeysRevokedNotice(result?.apiKeysRevoked ?? 0)}${mcpConnectionsRevokedNotice(result?.mcpConnectionsRevoked ?? 0)}`,
           'ok',
         );
         // `back()`, NOT a replace-navigation to `/profile`. A replace

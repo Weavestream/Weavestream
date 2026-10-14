@@ -83,6 +83,14 @@ describe('SessionsList revoke others', () => {
     expect(screen.getByRole('dialog')).not.toHaveTextContent('API key');
   });
 
+  it('names AI connections, which are revoked too', () => {
+    render(<SessionsList sessions={sessions} apiKeyCount={0} connectionCount={2} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke 2 other sessions' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('You have 2 AI connections.');
+    expect(screen.getByRole('button', { name: 'Revoke sessions and access' })).toBeInTheDocument();
+  });
+
   it('does nothing on cancel', () => {
     render(<SessionsList sessions={sessions} apiKeyCount={2} />);
     fireEvent.click(screen.getByRole('button', { name: 'Revoke 2 other sessions' }));
@@ -97,7 +105,7 @@ describe('SessionsList revoke others', () => {
     render(<SessionsList sessions={sessions} apiKeyCount={2} />);
     fireEvent.click(screen.getByRole('button', { name: 'Revoke 2 other sessions' }));
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Revoke sessions and keys' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Revoke sessions and access' }));
     });
 
     expect(apiFetch).toHaveBeenCalledWith('/me/sessions/revoke-others', { method: 'POST' });

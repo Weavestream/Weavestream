@@ -7,6 +7,7 @@ import type {
   SecuritySessionRow,
   ThrottleBlockEntry,
   AdminApiKeyPage,
+  AdminMcpConnectionPage,
 } from '@weavestream/shared';
 import { serverApiFetch } from './core';
 
@@ -73,6 +74,16 @@ export async function getSecurityApiKeys(
 ): Promise<AdminApiKeyPage | null> {
   const q = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
   const res = await serverApiFetch<AdminApiKeyPage>(`/security/api-keys?${q.toString()}`);
+  return res.ok ? res.data : null;
+}
+
+/** One page of every live remote AI connection with its owner, or null when the read failed. */
+export async function getSecurityMcpConnections(
+  page: number,
+  pageSize: number,
+): Promise<AdminMcpConnectionPage | null> {
+  const q = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+  const res = await serverApiFetch<AdminMcpConnectionPage>(`/security/mcp-connections?${q.toString()}`);
   return res.ok ? res.data : null;
 }
 

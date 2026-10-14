@@ -33,6 +33,8 @@ import { FoldersModule } from './folders/folders.module.js';
 import { ArticlesModule } from './articles/articles.module.js';
 import { SearchModule } from './search/search.module.js';
 import { SettingsModule } from './settings/settings.module.js';
+import { McpOAuthModule } from './mcp-oauth/mcp-oauth.module.js';
+import { McpModule } from './mcp/mcp.module.js';
 import { QueuesModule } from './queues/queues.module.js';
 import { DomainsModule } from './domains/domains.module.js';
 import {
@@ -162,6 +164,8 @@ const httpSerializers = {
     ArticlesModule,
     SearchModule,
     SettingsModule,
+    McpOAuthModule,
+    McpModule,
     QueuesModule,
     DomainsModule,
     PasswordsModule,

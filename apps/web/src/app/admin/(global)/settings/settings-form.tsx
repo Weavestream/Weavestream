@@ -43,15 +43,15 @@ export function GeneralSettingsForm({ initial }: { initial: Settings }) {
   return <SettingsForm initial={initial} section="general" />;
 }
 
-export function SecuritySettingsForm({ initial }: { initial: Settings }) {
-  return <SettingsForm initial={initial} section="security" />;
+export function PasswordSettingsForm({ initial }: { initial: Settings }) {
+  return <SettingsForm initial={initial} section="passwords" />;
 }
 
 export function ArticleSettingsForm({ initial }: { initial: Settings }) {
   return <SettingsForm initial={initial} section="articles" />;
 }
 
-type SettingsSection = 'general' | 'security' | 'articles';
+type SettingsSection = 'general' | 'passwords' | 'articles';
 
 function SettingsForm({
   initial,
@@ -426,7 +426,7 @@ function SettingsForm({
         </>
       )}
 
-      {section === 'security' && (
+      {section === 'passwords' && (
         <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <SectionHeader
             label="Password generator defaults"

@@ -21,6 +21,11 @@ export interface TenantContext {
    * key's actions are never indistinguishable from its owner's.
    */
   apiKeyId?: string;
+  /**
+   * The remote MCP connection behind this request (OAuth, `/mcp`). Stamped on
+   * audit rows like `apiKeyId`, so a connection's actions stay attributable.
+   */
+  mcpConnectionId?: string;
   ip: string;
   userAgent: string;
 }

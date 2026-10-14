@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../lib/api';
 import { Btn, Field, Input } from '../../components/ui';
+import { nextQuery, safeNextPath } from '../../lib/safe-next-path';
 
 interface LoginResponse {
   mfaSetupRequired: boolean;
@@ -11,7 +12,8 @@ interface LoginResponse {
   user: { id: string; email: string };
 }
 
-export default function LoginForm() {
+/** `next`: an already-validated return path (see `safeNextPath`), or null. */
+export default function LoginForm({ next = null }: { next?: string | null }) {
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,9 +34,9 @@ export default function LoginForm() {
       else setError('Invalid credentials.');
       return;
     }
-    if (res.data.mfaSetupRequired) router.push('/mfa/setup');
-    else if (res.data.mfaChallengeRequired) router.push('/mfa/challenge');
-    else router.push('/');
+    if (res.data.mfaSetupRequired) router.push(`/mfa/setup${nextQuery(next)}`);
+    else if (res.data.mfaChallengeRequired) router.push(`/mfa/challenge${nextQuery(next)}`);
+    else router.push(safeNextPath(next) ?? '/');
   }
 
   return (

@@ -111,11 +111,13 @@ export interface CreatedApiKey extends ApiKeySummary {
 export interface ChangePasswordResult {
   ok: true;
   apiKeysRevoked: number;
+  mcpConnectionsRevoked: number;
 }
 
 export interface RevokeOtherSessionsResult {
   revoked: number;
   apiKeysRevoked: number;
+  mcpConnectionsRevoked: number;
 }
 
 /**
@@ -124,7 +126,7 @@ export interface RevokeOtherSessionsResult {
  * everywhere.
  */
 export const API_KEY_REVOCATION_WARNING =
-  'This also permanently revokes every API key you hold. Scripts and AI agents (MCP) that use them stop working until you create new keys.';
+  'This also permanently revokes every API key and AI connection you hold. Scripts and AI agents (MCP, ChatGPT, Claude) that use them stop working until you create new keys or reconnect.';
 
 /**
  * Sentence appended to a success message when keys were revoked as a side
@@ -135,4 +137,15 @@ export function apiKeysRevokedNotice(count: number): string {
   return count === 1
     ? ' 1 API key revoked — create a new one for any script or AI agent that used it.'
     : ` ${count} API keys revoked — create new ones for any scripts or AI agents that used them.`;
+}
+
+/**
+ * The same notice for remote AI connections (ChatGPT, Claude), which the
+ * same actions revoke. Empty when none were.
+ */
+export function mcpConnectionsRevokedNotice(count: number): string {
+  if (!Number.isFinite(count) || count <= 0) return '';
+  return count === 1
+    ? ' 1 AI connection revoked — reconnect Weavestream in that AI app.'
+    : ` ${count} AI connections revoked — reconnect Weavestream in those AI apps.`;
 }

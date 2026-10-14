@@ -12,12 +12,14 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { parseConfig, WeavestreamClient } from './client.js';
-import { registerTools } from './tools.js';
+import { registerTools } from '@weavestream/shared/mcp-tools';
 
 async function main(): Promise<void> {
   const config = parseConfig(process.env);
   const server = new McpServer({ name: 'weavestream', version: '0.1.0' });
-  registerTools(server, new WeavestreamClient(config));
+  // Every tool is offered; the key itself decides what the server allows
+  // (a read-only key gets 403 on the write tools).
+  registerTools(server, new WeavestreamClient(config), { allowWrite: true });
   await server.connect(new StdioServerTransport());
 }
 

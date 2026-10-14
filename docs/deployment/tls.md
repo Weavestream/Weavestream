@@ -46,6 +46,8 @@ API_URL=https://your-domain.com/api
 
 Browsers stream every uploaded file (thumbnails, attachments, logos, export PDFs) through the API on the same origin as the web app, so there is no second virtual host to configure.
 
+`APP_URL` is also the public identity of the [remote MCP endpoint](/integrations/mcp/): ChatGPT and Claude connect to `APP_URL` followed by `/mcp`, and OAuth tokens are bound to that exact address. It must be the `https://` address users type, with no path.
+
 Restart the stack after changing these: `docker compose up -d`
 
 ## Client IP Headers
@@ -188,6 +190,25 @@ your-domain.com {
 
 **`cloudflared` straight to `web`.** Point the tunnel's public hostname at `http://web:3000` when `cloudflared` joins the compose network, or at `http://localhost:3000` when it runs on the host. Keep `TRUST_PROXY_HOPS=1`. A request that reaches `web` without the tunnel can choose its own `X-Forwarded-For`, so remove the published `web` port or bind it to loopback (see the next section).
 
+## Remote MCP (ChatGPT, Claude)
+
+Nothing extra to route: `/mcp`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server` and `/api/v1/oauth/*` all go through the same catch-all to `web` as the rest of the app. Check these when you put a proxy or firewall in front:
+
+- **Do not block `/.well-known/`.** A rule that blocks dot-paths must exempt `/.well-known/`, or ChatGPT and Claude cannot discover how to sign in.
+- **Allow JSON `POST` bodies to `/mcp`.** A web application firewall that inspects bodies may flag JSON-RPC requests; exempt `/mcp` if it does.
+- **Pass `WWW-Authenticate` through.** The first request from an AI app gets a `401` whose `WWW-Authenticate` header points to the sign-in metadata. A proxy that drops or rewrites 401 responses breaks the connection.
+- **IP rules.** If you use IP allow rules, allow the AI app's address ranges (Claude: `160.79.104.0/21`; ChatGPT: `https://openai.com/chatgpt-connectors.json`).
+
+Check from outside, without signing in:
+
+```bash
+curl -s https://your-domain.com/.well-known/oauth-authorization-server
+curl -s https://your-domain.com/.well-known/oauth-protected-resource/mcp
+curl -si -X POST https://your-domain.com/mcp -H 'content-type: application/json' -d '{}'
+```
+
+The first two return JSON with `issuer` and `resource` equal to your `APP_URL` (and `APP_URL` + `/mcp`); the last returns `401` with `WWW-Authenticate: Bearer resource_metadata="…"`.
+
 ## Bind `web` to loopback (proxy on the same host)
 
 If your reverse proxy runs on the **same host** as the Compose stack, there's no reason to publish `web` on every interface. Bind it to loopback so the port is reachable only by the local proxy, not by anything else on the network. In `compose.yml`, change the `web` port mapping to:
@@ -271,4 +292,6 @@ For internal deployments where Let's Encrypt isn't available:
 | 502 Bad Gateway | `web` container not running or proxy pointing at wrong port |
 | Audit log shows the proxy IP for every request | `TRUST_PROXY_HOPS` is too low for your edge tier, or the proxy is not setting `X-Forwarded-For` correctly |
 | **Resolved client IP** on the Connection tab is a Docker address (for example `172.18.0.4`) | Check the **Inbound chain** row. If your public IP is in it, `TRUST_PROXY_HOPS` is too low: follow [Find the correct `TRUST_PROXY_HOPS`](#find-the-correct-trust_proxy_hops). If it is not, the client entry was lost before `web`. A proxy replaced `X-Forwarded-For` with the address of the hop in front of it (Caddy with `header_up X-Forwarded-For {remote_host}`, or Caddy behind `cloudflared` without `trusted_proxies`), or nothing set the header and `web` recorded the proxy's own address (for example with Cloudflare's **Remove visitor IP headers** Managed Transform). Fix the proxy: no `TRUST_PROXY_HOPS` value can recover a lost entry. |
+| ChatGPT or Claude says the server is unreachable or sign-in fails at once | Run the three checks under [Remote MCP](#remote-mcp-chatgpt-claude). A wrong `issuer` or `resource` means `APP_URL` is not the public address; a `403`/`404` on `/.well-known/` or `/mcp` means a proxy, WAF or IP rule blocks it. |
+| The consent page says remote AI connections are turned off | An administrator turns them on in **Admin → Settings → API & MCP**. |
 | The Connection tab shows different `TRUST_PROXY_HOPS` values for web and API | Only one container was recreated after `.env` changed. The web value is in effect. Run `docker compose up -d --force-recreate web api`. |

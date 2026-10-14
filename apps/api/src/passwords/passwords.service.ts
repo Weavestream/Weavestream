@@ -25,7 +25,7 @@ import {
   SecretEncryptionService,
   passwordVaultAad,
 } from '../crypto/secret-encryption.service.js';
-import type { AuthedUser } from '../common/current-user.decorator.js';
+import { isProgrammatic, type AuthedUser } from '../common/current-user.decorator.js';
 import { EnvService } from '../config/env.service.js';
 import { QueuesService } from '../queues/queues.service.js';
 import { StarsService } from '../stars/stars.service.js';
@@ -1463,5 +1463,5 @@ export type { Password, PasswordVersion };
  * GET away from being bypassed. Interactive sessions are unaffected.
  */
 function mayReadVaultNotes(actor: AuthedUser): boolean {
-  return !actor.apiKeyId || actor.apiKeyAllowPasswordReveal === true;
+  return !isProgrammatic(actor) || actor.apiKeyAllowPasswordReveal === true;
 }

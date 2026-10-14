@@ -282,6 +282,7 @@ export class MeService {
     const passwordHash = await this.passwords.hash(input.newPassword);
 
     let apiKeysRevoked = 0;
+    let mcpConnectionsRevoked = 0;
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: user.id }, data: { passwordHash } });
       // Keep the current session live; revoke every other session.
@@ -298,7 +299,8 @@ export class MeService {
       // and a key that outlives it hands the attacker persistence the user
       // believes they just severed. In the same transaction so a partial
       // failure cannot leave the password rotated but the keys live.
-      apiKeysRevoked = await this.apiKeys.revokeAllForUser(user.id, tx);
+      ({ apiKeys: apiKeysRevoked, mcpConnections: mcpConnectionsRevoked } =
+        await this.apiKeys.revokeAllForUser(user.id, tx));
     });
 
     await this.audit.log({
@@ -309,10 +311,10 @@ export class MeService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { sessionKept: actor.sessionId, apiKeysRevoked },
+      after: { sessionKept: actor.sessionId, apiKeysRevoked, mcpConnectionsRevoked },
     });
 
-    return { ok: true, apiKeysRevoked };
+    return { ok: true, apiKeysRevoked, mcpConnectionsRevoked };
   }
 
   async revokeOtherSessions(
@@ -321,7 +323,7 @@ export class MeService {
   ) {
     // One transaction so a failure part-way cannot leave sessions revoked but
     // keys live — the same partial state `changePassword` guards against.
-    const { result, keysRevoked } = await this.prisma.$transaction(async (tx) => {
+    const { result, keysRevoked, connectionsRevoked } = await this.prisma.$transaction(async (tx) => {
       const result = await tx.session.updateMany({
         where: {
           userId: actor.id,
@@ -334,8 +336,8 @@ export class MeService {
       // credential that never appears in the session list, so leaving keys
       // alive here would let an attacker survive the exact action a user takes
       // on suspecting compromise — while the UI reports success.
-      const keysRevoked = await this.apiKeys.revokeAllForUser(actor.id, tx);
-      return { result, keysRevoked };
+      const revoked = await this.apiKeys.revokeAllForUser(actor.id, tx);
+      return { result, keysRevoked: revoked.apiKeys, connectionsRevoked: revoked.mcpConnections };
     });
     await this.audit.log({
       actorId: actor.id,
@@ -345,11 +347,20 @@ export class MeService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { revoked: result.count, apiKeysRevoked: keysRevoked, sessionId: actor.sessionId },
+      after: {
+        revoked: result.count,
+        apiKeysRevoked: keysRevoked,
+        mcpConnectionsRevoked: connectionsRevoked,
+        sessionId: actor.sessionId,
+      },
     });
     // Surfaced, not just audited: signing out everywhere silently kills every
     // CI/MCP integration the user has, and they need to know to re-issue them.
-    return { revoked: result.count, apiKeysRevoked: keysRevoked };
+    return {
+      revoked: result.count,
+      apiKeysRevoked: keysRevoked,
+      mcpConnectionsRevoked: connectionsRevoked,
+    };
   }
 
   async regenerateMfaBackupCodes(

@@ -15,7 +15,7 @@ import { AuditLogService } from '../audit/audit.service.js';
 import { MembershipCacheService } from '../cache/membership-cache.service.js';
 import { SetupTokenService } from './setup-token.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
-import { revokeApiKeysForUser } from '../auth/revoke-api-keys.js';
+import { revokeDelegatedAccessForUser } from '../auth/revoke-api-keys.js';
 
 export interface UserListOptions {
   q?: string;
@@ -370,7 +370,7 @@ export class UsersService {
         // on `!isActive`, so without this a reactivation a week later silently
         // resurrects every key an attacker minted beforehand, and none of them
         // appear in the sessions UI to warn anyone.
-        await revokeApiKeysForUser(tx, id);
+        await revokeDelegatedAccessForUser(tx, id);
       }
 
       return row;
@@ -463,7 +463,8 @@ export class UsersService {
     // for days, or never be used, and the keys would stay live throughout.
     // Revoke *before* issuing so a failure in between can only leave the
     // account more locked down, never with a fresh link and live keys.
-    const apiKeysRevoked = await revokeApiKeysForUser(this.prisma, id);
+    const { apiKeys: apiKeysRevoked, mcpConnections: mcpConnectionsRevoked } =
+      await revokeDelegatedAccessForUser(this.prisma, id);
     const invite = await this.setupTokens.issue(id, actor.id);
 
     await this.audit.log({
@@ -474,7 +475,7 @@ export class UsersService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { expiresAt: invite.expiresAt.toISOString(), apiKeysRevoked },
+      after: { expiresAt: invite.expiresAt.toISOString(), apiKeysRevoked, mcpConnectionsRevoked },
     });
 
     return { setupUrl: invite.url, expiresAt: invite.expiresAt };
@@ -513,7 +514,7 @@ export class UsersService {
       // MfaEnrollmentGuard would refuse a key while enrollment is incomplete,
       // but only until the user re-enrolls — at which point every surviving
       // key silently resumes full access, invisible on the sessions page.
-      await revokeApiKeysForUser(tx, id);
+      await revokeDelegatedAccessForUser(tx, id);
     });
 
     await this.audit.log({

@@ -98,6 +98,10 @@ export async function proxyToApi(
   const outgoing = new Headers();
   for (const [key, value] of req.headers.entries()) {
     if (HOP_BY_HOP_HEADERS.has(key.toLowerCase())) continue;
+    // A remote MCP delegation handle (`Bearer wsd_…`) is minted by the API
+    // for its own internal listener and is refused anywhere else. It never
+    // comes from a browser or client legitimately, so it never transits.
+    if (key.toLowerCase() === 'authorization' && /^\s*bearer\s+wsd_/i.test(value)) continue;
     if (key.toLowerCase() === 'x-forwarded-for') continue;
     if (key.toLowerCase() === 'x-real-ip') continue;
     if (key.toLowerCase() === 'x-forwarded-host') continue;
@@ -134,6 +138,14 @@ export async function proxyToApi(
     method,
     headers: outgoing,
     redirect: 'manual',
+    // `omit` keeps undici out of the Fetch spec's HTTP-authentication step:
+    // with credentials included, a 401 to a request with a streamed body
+    // becomes a network error ("expected non-null body source"), so every
+    // 401 to a POST came back from this proxy as a 500 — fatal for `/mcp`,
+    // where the 401 challenge is how ChatGPT and Claude start sign-in.
+    // Nothing is lost: server-side fetch has no cookie jar, and the inbound
+    // Cookie and Authorization headers are forwarded explicitly above.
+    credentials: 'omit',
     // Stream the inbound body through so file uploads and SSE-style
     // chunked POSTs don't get buffered. `duplex: 'half'` is required
     // by `undici` whenever the body is a ReadableStream.

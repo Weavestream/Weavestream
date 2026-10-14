@@ -200,4 +200,15 @@ describe('PasswordForm API key disclosure', () => {
     render(<PasswordForm apiKeyCount={0} />);
     expect(screen.queryByText(/API key/)).not.toBeInTheDocument();
   });
+
+  it('warns about AI connections even when the user holds no key', () => {
+    render(<PasswordForm apiKeyCount={0} connectionCount={1} />);
+    expect(screen.getByText(/You have 1 AI connection\./)).toBeInTheDocument();
+    expect(screen.getByText(/every API key and AI connection/)).toBeInTheDocument();
+  });
+
+  it('names both counts', () => {
+    render(<PasswordForm apiKeyCount={2} connectionCount={3} />);
+    expect(screen.getByText(/You have 2 API keys and 3 AI connections\./)).toBeInTheDocument();
+  });
 });

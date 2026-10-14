@@ -28,7 +28,8 @@ Every create, update, delete, archive, restore, and sensitive access operation w
 - **Export** PDF vault export triggered, completed, failed
 - **Security** session revocation, IP rule CRUD, egress blocks
 - **Login** events (success, failure, MFA success/failure, logout, refresh)
-- **Auth** MFA enroll/complete, sessions revoke others
+- **Auth** MFA enroll/complete, sessions revoke others, remote AI connection approved (`auth.mcp_connection.create`) and revoked (`auth.mcp_connection.revoke`)
+- **Settings** the API key and remote AI connection switches (`settings.api_keys.toggle`, `settings.mcp_remote.toggle`)
 
 ## Audit Entry Fields
 
@@ -46,6 +47,8 @@ Every create, update, delete, archive, restore, and sensitive access operation w
 | `userAgent` | Browser or client user-agent |
 | `before` | JSON snapshot of the record before the change |
 | `after` | JSON snapshot of the record after the change |
+| `apiKeyId` | The [API key](/security/api-keys/) that performed the action, when it was not an interactive session |
+| `mcpConnectionId` | The remote AI connection (ChatGPT, Claude) that performed the action, when it came through [`/mcp`](/integrations/mcp/) |
 
 For password operations, the `before`/`after` blobs contain metadata only (name, username, URL, tag). Ciphertext is never written to the audit log. Reveal entries log the password ID and actor only — the plaintext is never recorded.
 
@@ -55,6 +58,7 @@ For security actions:
 - **Session revocation** — `entityId` carries the targeted session; `after.targetUserId` identifies the affected user
 - **Egress blocks** — `after` carries `{ url, hostname, resolvedIps, reason, matchedCidr }` for each blocked outbound request
 - **IP rules** — changes to global IP allow/deny rules are fully audited with the rule configuration
+- **Remote AI connections** — on approval, `after` carries the app's client id and host, the return host, whether changes were allowed, and the approving `sessionId`. On revocation, `after.targetUserId` is the owner and `after.reason` is `user`, `admin`, `token_reuse` (a code or refresh token was replayed) or `client_revoked` (the app revoked its token). Tokens and codes are never logged. Changes made through a connection carry the user as the actor and the connection in `mcpConnectionId`, with the client IP and user agent of the AI app's request
 
 ## Tamper Protection
 

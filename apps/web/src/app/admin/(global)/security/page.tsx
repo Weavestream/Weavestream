@@ -3,11 +3,14 @@ import { redirect } from 'next/navigation';
 import {
   ADMIN_API_KEY_DEFAULT_PAGE_SIZE,
   ADMIN_API_KEY_PAGE_SIZES,
+  ADMIN_MCP_CONNECTION_DEFAULT_PAGE_SIZE,
+  ADMIN_MCP_CONNECTION_PAGE_SIZES,
   describeCatchAllFamilyGap,
 } from '@weavestream/shared';
 import { requireMe } from '../../../../lib/server-api/auth';
 import {
   getSecurityApiKeys,
+  getSecurityMcpConnections,
   getSecurityEgressBlocks,
   getSecurityIpRuleCoverage,
   getSecurityLockouts,
@@ -39,6 +42,8 @@ export default async function SecurityCenterPage({
     window?: string;
     keyPage?: string;
     keyPageSize?: string;
+    connPage?: string;
+    connPageSize?: string;
   }>;
 }) {
   const me = await requireMe();
@@ -47,7 +52,7 @@ export default async function SecurityCenterPage({
   const sp = await searchParams;
   const requestedWindow = parseWindow(sp.window);
 
-  const [activity, lockouts, blocks, sessions, egress, ipRuleCoverage, apiKeys, settings] =
+  const [activity, lockouts, blocks, sessions, egress, ipRuleCoverage, apiKeys, connections, settings] =
     await Promise.all([
       getSecurityLoginActivity(requestedWindow),
       getSecurityLockouts(),
@@ -56,6 +61,10 @@ export default async function SecurityCenterPage({
       getSecurityEgressBlocks(168),
       getSecurityIpRuleCoverage(),
       getSecurityApiKeys(parseKeyPage(sp.keyPage), parseKeyPageSize(sp.keyPageSize)),
+      getSecurityMcpConnections(
+        parseKeyPage(sp.connPage),
+        parsePageSize(sp.connPageSize, ADMIN_MCP_CONNECTION_PAGE_SIZES, ADMIN_MCP_CONNECTION_DEFAULT_PAGE_SIZE),
+      ),
       getSettings(),
     ]);
 
@@ -180,6 +189,8 @@ export default async function SecurityCenterPage({
           egress={egress}
           apiKeys={apiKeys}
           apiKeysEnabled={settings.apiKeysEnabled}
+          connections={connections}
+          mcpRemoteEnabled={settings.mcpRemoteEnabled}
           canRevoke={canRevoke}
           currentUserId={me.id}
         />
@@ -194,10 +205,12 @@ function parseKeyPage(raw: string | undefined): number {
 }
 
 function parseKeyPageSize(raw: string | undefined): number {
-  const n = raw ? parseInt(raw, 10) : ADMIN_API_KEY_DEFAULT_PAGE_SIZE;
-  return (ADMIN_API_KEY_PAGE_SIZES as readonly number[]).includes(n)
-    ? n
-    : ADMIN_API_KEY_DEFAULT_PAGE_SIZE;
+  return parsePageSize(raw, ADMIN_API_KEY_PAGE_SIZES, ADMIN_API_KEY_DEFAULT_PAGE_SIZE);
+}
+
+function parsePageSize(raw: string | undefined, allowed: readonly number[], fallback: number): number {
+  const n = raw ? parseInt(raw, 10) : fallback;
+  return allowed.includes(n) ? n : fallback;
 }
 
 function parseWindow(raw: string | undefined): number {
@@ -212,6 +225,7 @@ const VALID_TABS = [
   'blocks',
   'sessions',
   'api-keys',
+  'ai-connections',
   'egress',
   'diagnostics',
 ] as const;

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import {
   API_KEY_REVOCATION_WARNING,
   apiKeysRevokedNotice,
+  mcpConnectionsRevokedNotice,
   isCurrentPasswordInvalidProblem,
   type ChangePasswordResult,
   passwordSchema,
@@ -12,9 +13,11 @@ import {
 } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
 import { Btn, Field, Icon, Input, useToast } from '../../components/ui';
+import { revocationCountSentence, shouldWarnOfRevocation } from '../../lib/revocation-warning';
 
 export function PasswordForm({
   apiKeyCount = null,
+  connectionCount = 0,
 }: {
   /**
    * Live API keys the user holds, or null when unknown. A password change
@@ -22,7 +25,10 @@ export function PasswordForm({
    * there may be any.
    */
   apiKeyCount?: number | null;
+  /** Live AI connections, or null when unknown; revoked the same way. */
+  connectionCount?: number | null;
 } = {}) {
+  const countSentence = revocationCountSentence(apiKeyCount, connectionCount);
   const toast = useToast();
   const router = useRouter();
   const [current, setCurrent] = useState('');
@@ -83,7 +89,7 @@ export function PasswordForm({
       return;
     }
     toast.push(
-      `Password updated. Other sessions signed out.${apiKeysRevokedNotice(res.data?.apiKeysRevoked ?? 0)}`,
+      `Password updated. Other sessions signed out.${apiKeysRevokedNotice(res.data?.apiKeysRevoked ?? 0)}${mcpConnectionsRevokedNotice(res.data?.mcpConnectionsRevoked ?? 0)}`,
       'ok',
     );
     setCurrent('');
@@ -140,7 +146,7 @@ export function PasswordForm({
           gap: 12,
         }}
       >
-        {apiKeyCount !== 0 && (
+        {shouldWarnOfRevocation(apiKeyCount, connectionCount) && (
           <p
             style={{
               margin: 0,
@@ -156,11 +162,7 @@ export function PasswordForm({
               size={13}
               style={{ color: 'var(--warn)', marginRight: 6, verticalAlign: '-2px' }}
             />
-            {apiKeyCount ? (
-              <strong>
-                You have {apiKeyCount} API key{apiKeyCount === 1 ? '' : 's'}.{' '}
-              </strong>
-            ) : null}
+            {countSentence ? <strong>{countSentence} </strong> : null}
             {API_KEY_REVOCATION_WARNING}
           </p>
         )}

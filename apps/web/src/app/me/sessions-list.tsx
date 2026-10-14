@@ -5,8 +5,10 @@ import { useRouter } from 'next/navigation';
 import {
   API_KEY_REVOCATION_WARNING,
   apiKeysRevokedNotice,
+  mcpConnectionsRevokedNotice,
   type RevokeOtherSessionsResult,
 } from '@weavestream/shared';
+import { revocationCountSentence, shouldWarnOfRevocation } from '../../lib/revocation-warning';
 import { apiFetch } from '../../lib/api';
 import { FormattedRelative } from '../../lib/timezone-context';
 import {
@@ -32,6 +34,7 @@ type Session = {
 export function SessionsList({
   sessions,
   apiKeyCount,
+  connectionCount = 0,
 }: {
   sessions: Session[];
   /**
@@ -40,7 +43,11 @@ export function SessionsList({
    * to say so before the user commits.
    */
   apiKeyCount: number | null;
+  /** Live AI connections, or null when unknown; revoked the same way. */
+  connectionCount?: number | null;
 }) {
+  const warn = shouldWarnOfRevocation(apiKeyCount, connectionCount);
+  const countSentence = revocationCountSentence(apiKeyCount, connectionCount);
   const router = useRouter();
   const toast = useToast();
   const [pending, setPending] = useState(false);
@@ -58,7 +65,7 @@ export function SessionsList({
     }
     // The server's count is the truth: a key minted in another tab after
     // this page loaded is revoked too, and the user should hear about it.
-    toast.push(`Other sessions revoked.${apiKeysRevokedNotice(res.data?.apiKeysRevoked ?? 0)}`, 'ok');
+    toast.push(`Other sessions revoked.${apiKeysRevokedNotice(res.data?.apiKeysRevoked ?? 0)}${mcpConnectionsRevokedNotice(res.data?.mcpConnectionsRevoked ?? 0)}`, 'ok');
     router.refresh();
   }
 
@@ -146,7 +153,7 @@ export function SessionsList({
                 void revokeOthers();
               }}
             >
-              {apiKeyCount ? 'Revoke sessions and keys' : 'Revoke sessions'}
+              {apiKeyCount || connectionCount ? 'Revoke sessions and access' : 'Revoke sessions'}
             </Btn>
           </>
         }
@@ -155,13 +162,9 @@ export function SessionsList({
           <p style={{ margin: 0 }}>
             Sign out {others} other session{others === 1 ? '' : 's'}. This device stays signed in.
           </p>
-          {apiKeyCount !== 0 && (
+          {warn && (
             <p style={{ margin: 0 }}>
-              {apiKeyCount ? (
-                <strong>
-                  You have {apiKeyCount} API key{apiKeyCount === 1 ? '' : 's'}.{' '}
-                </strong>
-              ) : null}
+              {countSentence ? <strong>{countSentence} </strong> : null}
               {API_KEY_REVOCATION_WARNING}
             </p>
           )}

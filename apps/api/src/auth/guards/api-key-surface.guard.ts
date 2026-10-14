@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import type { AuthedUser } from '../../common/current-user.decorator.js';
+import { isProgrammatic, type AuthedUser } from '../../common/current-user.decorator.js';
 import { INTERACTIVE_ONLY_KEY } from '../interactive-only.decorator.js';
 import { VAULT_REVEAL_KEY } from '../vault-reveal.decorator.js';
 
@@ -44,6 +44,8 @@ const DENIED_PREFIXES = [
   '/me/mfa',              // backup-code regeneration
   '/me/change-password',  // the real route — MeController has no '/me/password'
   '/me/api-keys',         // a key must not mint or revoke keys; only a human may
+  '/me/mcp-connections',  // nor list or revoke remote AI connections
+  '/oauth-consent',       // nor approve an OAuth connection for itself
 ] as const;
 
 /**
@@ -57,7 +59,7 @@ const ALLOWED_EXACT = new Set(['/auth/me']);
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 const DENIED_MESSAGE =
-  'API keys cannot be used on account-management endpoints. Sign in interactively.';
+  'API keys and AI connections cannot be used on account-management endpoints. Sign in interactively.';
 
 /**
  * Reduce a raw request path to the stable route shape the lists above are
@@ -87,7 +89,9 @@ export class ApiKeySurfaceGuard implements CanActivate {
 
   canActivate(ctx: ExecutionContext): boolean {
     const req = ctx.switchToHttp().getRequest<Request & { user?: AuthedUser }>();
-    if (!req.user?.apiKeyId) return true;
+    if (!isProgrammatic(req.user)) return true;
+    const user = req.user!;
+    const credential = user.mcpConnectionId ? 'connection' : 'API key';
 
     // Primary check: the route declares its own requirement, so it cannot
     // drift away from a list maintained elsewhere.
@@ -104,9 +108,9 @@ export class ApiKeySurfaceGuard implements CanActivate {
       VAULT_REVEAL_KEY,
       [ctx.getHandler(), ctx.getClass()],
     );
-    if (vaultReveal && !req.user.apiKeyAllowPasswordReveal) {
+    if (vaultReveal && !user.apiKeyAllowPasswordReveal) {
       throw new ForbiddenException(
-        'This API key is not permitted to reveal stored credentials.',
+        `This ${credential} is not permitted to reveal stored credentials.`,
       );
     }
 
@@ -116,12 +120,14 @@ export class ApiKeySurfaceGuard implements CanActivate {
     // exception is the `@VaultReveal()` routes: they are POSTs that change
     // nothing, and they already passed their own, stricter gate above.
     if (
-      !req.user.apiKeyAllowWrite &&
+      !user.apiKeyAllowWrite &&
       !SAFE_METHODS.has(req.method.toUpperCase()) &&
       !vaultReveal
     ) {
       throw new ForbiddenException(
-        'This API key is read-only. Create a key with "Allow changes" to modify data.',
+        user.mcpConnectionId
+          ? 'This connection is read-only. Reconnect with "Read and change" to modify data.'
+          : 'This API key is read-only. Create a key with "Allow changes" to modify data.',
       );
     }
 

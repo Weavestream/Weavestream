@@ -37,6 +37,7 @@ export class TenantContextInterceptor implements NestInterceptor {
       globalAccess: req.user.globalAccess,
       requestId: (req.id as string | undefined) ?? 'unknown',
       apiKeyId: req.user.apiKeyId,
+      mcpConnectionId: req.user.mcpConnectionId,
       ip: ipOf(req),
       userAgent: userAgentOf(req),
     };

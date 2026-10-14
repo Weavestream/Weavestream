@@ -18,6 +18,8 @@ export interface AuditEntry {
    * request's tenant context, so ordinary call sites need not thread it.
    */
   apiKeyId?: string | null;
+  /** Remote MCP connection; defaults from the tenant context like apiKeyId. */
+  mcpConnectionId?: string | null;
 }
 
 /**
@@ -102,6 +104,7 @@ export class AuditLogService {
         before: (entry.before ?? null) as never,
         after: (entry.after ?? null) as never,
         apiKeyId: entry.apiKeyId ?? getTenantContext()?.apiKeyId ?? null,
+        mcpConnectionId: entry.mcpConnectionId ?? getTenantContext()?.mcpConnectionId ?? null,
       },
       select: {
         id: true,
@@ -166,6 +169,7 @@ export class AuditLogService {
         before: (entry.before ?? null) as never,
         after: (entry.after ?? null) as never,
         apiKeyId: entry.apiKeyId ?? getTenantContext()?.apiKeyId ?? null,
+        mcpConnectionId: entry.mcpConnectionId ?? getTenantContext()?.mcpConnectionId ?? null,
       },
     });
   }
@@ -187,6 +191,7 @@ export class AuditLogService {
           before: (entry.before ?? null) as never,
           after: (entry.after ?? null) as never,
           apiKeyId: entry.apiKeyId ?? getTenantContext()?.apiKeyId ?? null,
+          mcpConnectionId: entry.mcpConnectionId ?? getTenantContext()?.mcpConnectionId ?? null,
         })),
       });
     }

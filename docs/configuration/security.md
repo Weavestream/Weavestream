@@ -118,7 +118,7 @@ Detailed diagnostics moved to authenticated endpoints:
 
 ## Admin Security Controls
 
-- **Security Center (`/admin/security`)** provides visibility into login events, active lockouts, rate-limit blocks, active sessions, and egress blocks.
+- **Security Center (`/admin/security`)** provides visibility into login events, active lockouts, rate-limit blocks, active sessions, API keys, remote AI connections, and egress blocks.
 - Access requires `SECURITY_READ` capability (or `SUPER_ADMIN`).
 - **Connection diagnostics** (`/admin/security?tab=diagnostics`, or `GET /api/v1/security/whoami`, same `SECURITY_READ` gate) report how the current request was attributed — resolved client IP, socket peer, whether forwarding was trusted, the inbound `X-Forwarded-For` chain, the `TRUST_PROXY_HOPS` value the web tier applied next to the API container's value, and interpretation notes (for example a hop-count mismatch between `web` and `api`, a chain shorter than the hop count, or a private resolved IP). Use it to verify client-IP attribution behind your real proxy; see [Find the correct `TRUST_PROXY_HOPS`](/deployment/tls/#find-the-correct-trust_proxy_hops) and [Verify forged `X-Forwarded-For` is ignored](/deployment/tls/#verify-forged-x-forwarded-for-is-ignored).
 - **IP rules (`/admin/ip-rules`)** allow global ALLOW/DENY rules for IPv4 and IPv6 addresses and CIDR ranges (for example `192.0.2.1`, `10.0.0.0/8`, `2001:db8::1`, `2001:db8::/32`) with priority ordering. IPv6 values are stored in canonical lower-case, compressed form. Zone IDs (`fe80::1%eth0`), brackets, ports, and IPv4-mapped forms (`::ffff:192.0.2.1`) are rejected; an IPv4-mapped client already matches IPv4 rules.

@@ -16,6 +16,7 @@ import { configureEgressGuard } from './common/egress/safe-fetch.js';
 import { AuditLogService } from './audit/audit.service.js';
 import { AUDIT_ACTIONS } from './audit/audit-actions.js';
 import { topologyWarnings } from '@weavestream/shared/server';
+import { startInternalListener } from './common/internal-listener.js';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -166,6 +167,12 @@ async function bootstrap() {
   });
 
   await app.listen(4000, '0.0.0.0');
+
+  // Loopback-only second listener for the remote MCP endpoint's own tool
+  // calls (see `common/internal-listener.ts`). Same Express app, same guards;
+  // never published, never proxied by web.
+  const internal = await startInternalListener(app.getHttpAdapter().getInstance());
+  app.getHttpServer().on('close', () => internal.close());
 }
 
 bootstrap().catch((err) => {

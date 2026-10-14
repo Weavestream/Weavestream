@@ -519,6 +519,8 @@ function makeInviteService(
     userSetupToken: { updateMany: jest.Mock };
     userMfaBackupCode: { deleteMany: jest.Mock };
     apiKey: { updateMany: jest.Mock };
+    mcpConnection: { findMany: jest.Mock; updateMany: jest.Mock };
+    oAuthArtifact: { deleteMany: jest.Mock };
     session: { create: jest.Mock };
     $transaction: jest.Mock;
   } = {
@@ -531,6 +533,12 @@ function makeInviteService(
     },
     userMfaBackupCode: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     apiKey: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    mcpConnection: {
+      // One live remote AI connection, so revocation has something to revoke.
+      findMany: jest.fn().mockResolvedValue([{ grantId: 'grant-1' }]),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    oAuthArtifact: { deleteMany: jest.fn().mockResolvedValue({ count: 3 }) },
     session: { create: jest.fn().mockResolvedValue({ id: 's-new' }) },
     // Pass the same mock object as the transaction client so the guarded
     // tx.userSetupToken.updateMany above is the one asserted below.
@@ -583,6 +591,21 @@ describe('AuthService.acceptInvite', () => {
     expect(audit.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'user.invite.accepted' }),
     );
+  });
+
+  it('revokes the user\'s AI connections with their keys, in the same transaction', async () => {
+    const { svc, prisma } = makeInviteService();
+
+    await svc.acceptInvite('tok', 'new-password', '1.2.3.4', 'jest');
+
+    expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
+      where: { userId: 'u-1', revokedAt: null },
+      data: { revokedAt: expect.any(Date) },
+    });
+    expect(prisma.oAuthArtifact.deleteMany).toHaveBeenCalledWith({
+      where: { grantId: { in: ['grant-1'] } },
+    });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
   it('rejects when the guarded consume matches no row (race loser or expired in flight): no password, no session, no audit', async () => {

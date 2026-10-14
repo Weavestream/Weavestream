@@ -194,4 +194,66 @@ describe('ApiKeySurfaceGuard', () => {
       expect(guard.canActivate(ctxFor(ASSET, undefined, false, false, 'DELETE'))).toBe(true);
     });
   });
+
+  /**
+   * A remote MCP connection's tool call reaches REST as a principal with
+   * `mcpConnectionId` (never `apiKeyId`). Every containment rule for keys must
+   * hold for it unchanged.
+   */
+  describe('remote MCP connection principals', () => {
+    function connectionCtx(path: string, method = 'GET', allowWrite = false) {
+      const req = {
+        path,
+        method,
+        user: {
+          id: 'u-1',
+          mcpConnectionId: 'c-1',
+          apiKeyAllowWrite: allowWrite,
+          apiKeyAllowPasswordReveal: false,
+        },
+      };
+      return {
+        switchToHttp: () => ({ getRequest: () => req }),
+        getHandler: () => undefined,
+        getClass: () => undefined,
+      } as never;
+    }
+
+    it('refuses @InteractiveOnly routes', () => {
+      currentInteractiveOnly = true;
+      expect(() => guard.canActivate(connectionCtx('/api/v1/users'))).toThrow(ForbiddenException);
+    });
+
+    it('refuses password reveal: a connection never has that grant', () => {
+      currentVaultReveal = true;
+      expect(() =>
+        guard.canActivate(connectionCtx('/api/v1/companies/c/passwords/p/reveal', 'POST', true)),
+      ).toThrow(ForbiddenException);
+    });
+
+    it('a read-only connection may read, never write — by the REST call\'s own method', () => {
+      expect(guard.canActivate(connectionCtx('/api/v1/companies/c/assets'))).toBe(true);
+      for (const method of ['POST', 'PATCH', 'PUT', 'DELETE']) {
+        expect(() => guard.canActivate(connectionCtx('/api/v1/companies/c/assets', method))).toThrow(
+          /connection is read-only/,
+        );
+      }
+    });
+
+    it('a write connection may write', () => {
+      expect(guard.canActivate(connectionCtx('/api/v1/companies/c/assets', 'POST', true))).toBe(true);
+    });
+
+    it('is kept out of the account-management trees, including connections and consent', () => {
+      for (const p of [
+        '/api/v1/auth/logout',
+        '/api/v1/me/api-keys',
+        '/api/v1/me/mcp-connections',
+        '/api/v1/oauth-consent/abc/approve',
+      ]) {
+        expect(() => guard.canActivate(connectionCtx(p))).toThrow(ForbiddenException);
+      }
+      expect(guard.canActivate(connectionCtx('/api/v1/auth/me'))).toBe(true);
+    });
+  });
 });

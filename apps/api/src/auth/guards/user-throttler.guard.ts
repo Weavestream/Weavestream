@@ -12,7 +12,7 @@ import {
 } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { ipLimitKey } from '@weavestream/shared';
-import type { AuthedUser } from '../../common/current-user.decorator.js';
+import { isProgrammatic, type AuthedUser } from '../../common/current-user.decorator.js';
 import { AuditLogService } from '../../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../../audit/audit-actions.js';
 import { RedisService } from '../../redis/redis.service.js';
@@ -81,7 +81,7 @@ export class UserThrottlerGuard extends ThrottlerGuard {
     // keyed by *user*, not by key: a per-key bucket would let anyone who can
     // mint keys multiply every per-route cap (password reveals included) by
     // the number of keys they hold.
-    if (expressReq.user?.apiKeyId) return `apikey-user:${expressReq.user.id}`;
+    if (isProgrammatic(expressReq.user)) return `apikey-user:${expressReq.user!.id}`;
     if (expressReq.user?.id) return `user:${expressReq.user.id}`;
 
     // Prefer the forwarded chain's leftmost entry. Express already
@@ -169,6 +169,7 @@ export class UserThrottlerGuard extends ThrottlerGuard {
           // Guards run before TenantContextInterceptor, so the context
           // fallback in AuditLogService is empty here; pass it explicitly.
           apiKeyId: req.user?.apiKeyId ?? null,
+          mcpConnectionId: req.user?.mcpConnectionId ?? null,
           action: AUDIT_ACTIONS.security.ratelimitBlocked,
           entityType: 'RateLimit',
           entityId: null,

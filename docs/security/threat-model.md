@@ -25,6 +25,7 @@ Internet → TLS (reverse proxy) → web (Next.js) → api (NestJS)
 - Postgres and Redis are **not exposed** to the host network in the default `compose.yml`.
 - Uploaded files live on a host-bind-mounted directory shared by `api` and `worker`. The directory has no network surface — browsers always go through the API's streaming endpoints.
 - The `api` and `worker` are the only services with database credentials.
+- The `api` also listens on `127.0.0.1:4001`, inside its own container only, for the remote MCP endpoint's tool calls. It is never published and `web` never proxies to it.
 - Health endpoints expose no version or backend diagnostics to unauthenticated requests.
 
 ## Threat Actors
@@ -81,6 +82,21 @@ An attacker who has obtained valid credentials and TOTP for an `OPERATOR` accoun
 - The **reveal audit trail** records every credential decryption, so exposure scope is visible after the fact.
 - **Security Center** provides real-time visibility into login activity, active sessions, and lockouts to detect compromise early.
 - **IP allow/deny rules** can block access from unauthorized source networks even with valid credentials.
+
+### Compromised AI App or Connection Token
+
+An attacker who controls a ChatGPT or Claude account connected to Weavestream, or who obtains a connection's OAuth tokens, or who plants instructions in documentation an AI app reads.
+
+**Mitigations:**
+
+- A connection acts only as the user who approved it, with that user's permissions, and is **read-only unless the user allowed changes**. Approving needs the user's login, MFA and a fresh step-up.
+- The access token is valid **only on `/mcp`** (audience-bound) and refused by the REST API, so the token can reach only the MCP tools: no password reveal, no delete, archive or purge, no user, permission, key or setting changes. New articles are created hidden from client users.
+- Each tool call reaches the REST API through a **single-use internal credential** bound to one method and path, on a loopback-only listener, so the full permission and tenant checks run for every call. The external token is never forwarded.
+- Access tokens last one hour; refresh tokens rotate, and **reusing a code or refresh token ends the connection**. Simultaneous reuse is caught atomically.
+- Only `chatgpt.com` and `claude.ai` client metadata documents are accepted, with return addresses on their own hosts; there is no open client registration, and a consent link works only in the browser that started it.
+- The user, an administrator, or any credential-revoking event (password change, sign out everywhere, MFA reset, deactivation) **revokes the connection**, effective on its next request. An instance switch refuses every connection at once without revoking it; turning the switch back on restores existing connections.
+- Changes are **audited with the connection's id**, and the Security Center lists every connection.
+- Content returned to the model is labelled as data, not instructions. This reduces, but cannot remove, the risk that planted text steers an AI app; read-only connections limit what such text could cause.
 
 ### Insider Threat (Operator)
 

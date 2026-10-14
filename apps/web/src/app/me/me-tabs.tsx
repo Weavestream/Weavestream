@@ -10,11 +10,19 @@ import { ProfileForm } from './profile-form';
 import { PasswordForm } from './password-form';
 import { SessionsList } from './sessions-list';
 import { ApiKeysList } from './api-keys-list';
-import type { ApiKeySummary } from '@weavestream/shared';
+import type { ApiKeySummary, McpConnectionSummary } from '@weavestream/shared';
+import { McpConnectionsList } from './mcp-connections-list';
 import { AppearanceForm } from './appearance-form';
 import { MfaBackupCodes } from './mfa-backup-codes';
 
-type TabId = 'profile' | 'memberships' | 'appearance' | 'security' | 'sessions' | 'api-keys';
+type TabId =
+  | 'profile'
+  | 'memberships'
+  | 'appearance'
+  | 'security'
+  | 'sessions'
+  | 'api-keys'
+  | 'ai-connections';
 
 type Session = {
   id: string;
@@ -56,6 +64,11 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     label: 'API keys',
     help: 'Keys for scripts and AI agents that act as you.',
   },
+  {
+    id: 'ai-connections',
+    label: 'AI connections',
+    help: 'ChatGPT, Claude and other AI apps you connected.',
+  },
 ];
 
 export function MeTabs({
@@ -65,14 +78,21 @@ export function MeTabs({
   apiKeys,
   apiKeysLoadFailed,
   apiKeysEnabled,
+  connections,
+  connectionsLoadFailed,
+  mcpRemoteEnabled,
 }: {
   initialTab: TabId;
   me: Me;
   apiKeys: ApiKeySummary[];
   apiKeysLoadFailed: boolean;
   apiKeysEnabled: boolean;
+  connections: McpConnectionSummary[];
+  connectionsLoadFailed: boolean;
+  mcpRemoteEnabled: boolean;
   sessions: Session[];
 }) {
+  const connectionCount = connectionsLoadFailed ? null : connections.length;
   const router = useRouter();
   const sp = useSearchParams();
   const [tab, setTab] = useState<TabId>(initialTab);
@@ -285,9 +305,12 @@ export function MeTabs({
 
               <Section
                 title="Change password"
-                description="Update your account password. Other sessions are signed out and every API key is revoked after a successful change."
+                description="Update your account password. Other sessions are signed out, and every API key and AI connection is revoked after a successful change."
               >
-                <PasswordForm apiKeyCount={apiKeysLoadFailed ? null : apiKeys.length} />
+                <PasswordForm
+                  apiKeyCount={apiKeysLoadFailed ? null : apiKeys.length}
+                  connectionCount={connectionCount}
+                />
               </Section>
             </div>
           </Panel>
@@ -298,6 +321,7 @@ export function MeTabs({
             <SessionsList
               sessions={sessions}
               apiKeyCount={apiKeysLoadFailed ? null : apiKeys.length}
+              connectionCount={connectionCount}
             />
           </Panel>
         )}
@@ -308,6 +332,20 @@ export function MeTabs({
               keys={apiKeys}
               loadFailed={apiKeysLoadFailed}
               enabled={apiKeysEnabled}
+            />
+          </Panel>
+        )}
+
+        {tab === 'ai-connections' && (
+          <Panel
+            title={connectionsLoadFailed ? 'AI connections' : `AI connections (${connections.length})`}
+            flush
+            noPad
+          >
+            <McpConnectionsList
+              connections={connections}
+              loadFailed={connectionsLoadFailed}
+              enabled={mcpRemoteEnabled}
             />
           </Panel>
         )}

@@ -13,6 +13,23 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Added
+
+- **Connect ChatGPT and Claude.** A remote MCP endpoint at `https://<your-instance>/mcp` lets ChatGPT on the web and claude.ai use Weavestream's MCP tools without a local process or an API key. A user adds the address in the AI app, signs in with their normal Weavestream login and MFA, and approves the connection with a fresh MFA step-up. A connection acts only as that user, is **read-only** unless they allow changes, can never see passwords, TOTP codes or vault notes, and cannot delete anything. Its token works only on `/mcp`. Only ChatGPT and Claude can connect; no external identity provider is needed. See [MCP Server](/integrations/mcp/).
+- **Allow remote AI connections.** A new instance switch under **Admin → Settings → API & MCP**, off by default. Changing it needs MFA step-up and is audited; off refuses every connection without deleting them.
+- **AI connections lists.** **Account → AI connections** lists your connections and revokes them. **Security center → AI connections** lists every user's connections; an administrator with the user-management permission revokes any of them (MFA step-up). Approving and revoking are audited, and every change made through a connection records the connection's id (`mcpConnectionId`) next to the user.
+
+### Changed
+
+- **Settings tabs.** The **Security** tab under **Admin → Settings** is split: password generator defaults are under **Passwords**, and the API key and remote AI connection switches are under **API & MCP**. Old links to the Security tab open **API & MCP**.
+- **Revoking access revokes AI connections too.** Changing your password, signing out other sessions, an MFA reset, a re-invite, deactivation, and the `reset-password`, `reset-mfa` and `rotate-sessions` CLI commands now revoke remote AI connections along with API keys, and the warnings and confirmations say so.
+- **Local MCP server.** The local (stdio) server and the remote endpoint share one tool catalogue, and the local server now uses MCP SDK 1.32.1. Build it with `pnpm --filter @weavestream/mcp... build`, which also builds the shared package it now depends on.
+
+### Fixed
+
+- **401 responses to `POST` requests.** The web tier returned `500` instead of `401` when the API refused a `POST` with a body (for example after a session ended). It now passes the `401` and its `WWW-Authenticate` header through.
+- **Clean API shutdown.** The API now closes the Redis connections it gives its job queues when it stops.
+
 ## [1.10.0] - 2026-10-13
 
 ### Added

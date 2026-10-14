@@ -27,6 +27,8 @@ function makePrisma() {
     session: { updateMany: jest.Mock };
     userMfaBackupCode: { deleteMany: jest.Mock };
     apiKey: { updateMany: jest.Mock };
+    mcpConnection: { findMany: jest.Mock; updateMany: jest.Mock };
+    oAuthArtifact: { deleteMany: jest.Mock };
     $transaction: jest.Mock;
   } = {
     user: {
@@ -39,9 +41,30 @@ function makePrisma() {
     session: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
     userMfaBackupCode: { deleteMany: jest.fn().mockResolvedValue({ count: 0 }) },
     apiKey: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+    mcpConnection: {
+      // One live remote AI connection, so revocation has something to revoke.
+      findMany: jest.fn().mockResolvedValue([{ grantId: 'grant-1' }]),
+      updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+    },
+    oAuthArtifact: { deleteMany: jest.fn().mockResolvedValue({ count: 3 }) },
     $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
   };
   return prisma;
+}
+
+/** The user's live AI connections were revoked and their OAuth artifacts deleted. */
+function expectConnectionsRevoked(prisma: ReturnType<typeof makePrisma>, userId: string) {
+  expect(prisma.mcpConnection.findMany).toHaveBeenCalledWith({
+    where: { userId, revokedAt: null },
+    select: { grantId: true },
+  });
+  expect(prisma.mcpConnection.updateMany).toHaveBeenCalledWith({
+    where: { userId, revokedAt: null },
+    data: { revokedAt: expect.any(Date) },
+  });
+  expect(prisma.oAuthArtifact.deleteMany).toHaveBeenCalledWith({
+    where: { grantId: { in: ['grant-1'] } },
+  });
 }
 
 function makeAudit() {
@@ -359,11 +382,13 @@ describe('UsersService deactivation consequences', () => {
     expect(cache.invalidate).toHaveBeenCalledWith('u-1');
     const actions = audit.log.mock.calls.map((c) => c[0].action);
     expect(actions).toEqual(expect.arrayContaining(['user.deactivate']));
+    // A deactivated user's AI connections must not come back on reactivation.
+    expectConnectionsRevoked(prisma, 'u-1');
   });
 });
 
 describe('UsersService.resetMfa', () => {
-  it('revokes the user\u2019s API keys too', async () => {
+  it('revokes the user\u2019s API keys and AI connections too', async () => {
     const prisma = makePrisma();
     prisma.user.findUnique.mockResolvedValueOnce({
       id: 'u-1',
@@ -388,6 +413,7 @@ describe('UsersService.resetMfa', () => {
       where: { userId: 'u-1', revokedAt: null },
       data: { revokedAt: expect.any(Date) },
     });
+    expectConnectionsRevoked(prisma, 'u-1');
   });
 
   it('clears MFA, revokes sessions, audits', async () => {

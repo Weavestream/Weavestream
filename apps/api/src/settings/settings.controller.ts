@@ -2,8 +2,10 @@ import { Body, Controller, Get, Patch, Put, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import {
   updateApiKeysSettingSchema,
+  updateMcpRemoteSettingSchema,
   updateSettingsSchema,
   type UpdateApiKeysSettingInput,
+  type UpdateMcpRemoteSettingInput,
   type UpdateSettingsInput,
 } from '@weavestream/shared';
 import { SettingsService } from './settings.service.js';
@@ -62,5 +64,22 @@ export class SettingsController {
     @Req() req: Request,
   ) {
     return this.settings.setApiKeysEnabled(user, dto.enabled, requestMetaOf(req));
+  }
+
+  /**
+   * Turn remote MCP connections (ChatGPT, Claude over OAuth) on or off for the
+   * instance. Same rules as the API key switch above: step-up, and never
+   * reachable by an API key or a connection.
+   */
+  @Put('mcp-remote')
+  @RequirePermission('settings.manage')
+  @RequireStepUp()
+  @InteractiveOnly()
+  async setMcpRemote(
+    @CurrentUser() user: AuthedUser,
+    @Body(new ZodBody(updateMcpRemoteSettingSchema)) dto: UpdateMcpRemoteSettingInput,
+    @Req() req: Request,
+  ) {
+    return this.settings.setMcpRemoteEnabled(user, dto.enabled, requestMetaOf(req));
   }
 }

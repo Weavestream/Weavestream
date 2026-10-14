@@ -1,20 +1,96 @@
 ---
 label: MCP Server
 icon: cpu
-description: Let AI agents read and update Weavestream through the Model Context Protocol, acting as you with an API key.
+description: Let AI agents read and update Weavestream through the Model Context Protocol, from ChatGPT and Claude or from a local agent, always acting as you.
 ---
 
 # MCP Server
 
-`apps/mcp` is a [Model Context Protocol](https://modelcontextprotocol.io) server that lets an AI agent (Claude Code, Claude Desktop, any MCP client) work with Weavestream. It calls the Weavestream REST API with an [API key](../security/api-keys.md), so the agent has **exactly** the key owner's permissions and nothing more. Every guard, tenant scope, rate limit and audit entry is the server's own.
+Weavestream speaks the [Model Context Protocol](https://modelcontextprotocol.io) (MCP), so an AI agent can find and read your documentation, and, if you allow it, create and update assets and articles. There are two ways to connect. Both offer the same tools and act **only as you**, with exactly your permissions: every guard, tenant scope, rate limit and audit entry is the server's own.
 
-## Setup
+| | Remote (ChatGPT, Claude) | Local (stdio) |
+|---|---|---|
+| For | ChatGPT on the web, claude.ai | Claude Code, Claude Desktop, any MCP client that runs a local process |
+| Address | `https://<your-instance>/mcp` | `node apps/mcp/dist/index.js` on your machine |
+| Sign-in | Your normal Weavestream login and MFA (OAuth) | An [API key](../security/api-keys.md) |
+| Turned on by | **Admin → Settings → API & MCP → Allow remote AI connections** | **Admin → Settings → API & MCP → Allow API keys** |
+| Managed in | **Account → AI connections** | **Account → API keys** |
+| Reaches | The MCP tools only | Every REST route its owner can use |
 
-1. Make sure API keys are turned on: **Admin → Settings → Security → Allow API keys** (an administrator does this once).
+## Remote: ChatGPT and Claude
+
+### Requirements
+
+- Weavestream must be reachable on the internet over HTTPS, and `APP_URL` must be that public address (for example `https://docs.example.com`). The MCP address is always `APP_URL` followed by `/mcp`. See [TLS & Reverse Proxy](../deployment/tls.md).
+- An administrator turns on **Admin → Settings → API & MCP → Allow remote AI connections** once. This asks for MFA again (step-up). Remote connections are **off** on a new instance.
+- If you restrict access with [IP rules](../configuration/security.md#admin-security-controls), allow the address ranges the AI app connects from: Claude uses `160.79.104.0/21`; ChatGPT publishes its ranges at `https://openai.com/chatgpt-connectors.json`.
+
+### Connect Claude
+
+On Pro and Max plans:
+
+1. In claude.ai, open **Customize → Connectors**.
+2. Select **+ Add**, then **Add custom connector**.
+3. Enter a name (for example `Weavestream`) and the server URL `https://<your-instance>/mcp` exactly. Select **Continue**.
+4. Review the detected authentication settings and select **Continue**.
+5. Under **Authentication**, choose **Sign in now** (or **Sign in when needed**).
+6. Under **OAuth client**, choose **Use Claude's published identity (Recommended)**. Do not choose **Register automatically**: Weavestream has no automatic client registration, so that option fails.
+7. Leave **Request headers** empty and select **Add**.
+8. Your browser opens Weavestream. Sign in with your password and MFA if you are not signed in already, then [approve the connection](#the-consent-page).
+
+On Team and Enterprise plans, an owner adds the connector once: **Organization settings → Connectors → Add → Custom → Web**, then steps 3–7 above. Each member then opens **Customize → Connectors**, finds the connector (labelled **Custom**), selects **Connect**, and approves it with their own Weavestream account.
+
+**Use it in a conversation:** select **+** at the lower left of the chat, then **Connectors**, and turn **Weavestream** on for that conversation.
+
+### Connect ChatGPT
+
+1. In ChatGPT on the web, open **Plugins** (`chatgpt.com/plugins`), select **+**, then **Add custom MCP server**.
+2. Enter a name (for example `Weavestream`) and an optional description. Under **Connection**, enter the **Server URL** `https://<your-instance>/mcp`.
+3. Under authentication, choose **OAuth**, and use the client metadata document (CIMD) as the registration method, not dynamic client registration: Weavestream has no automatic client registration.
+4. Review the risk warning and select **I understand and want to continue**.
+5. Select **Create as a plugin**.
+6. Find the new plugin under your personal plugins (or the workspace you created it in) and **install** it. ChatGPT opens Weavestream: sign in with your password and MFA if needed, then [approve the connection](#the-consent-page).
+
+**Use it in a conversation:** type `@` in the prompt box and select **Weavestream**.
+
+**Confirmations for changes.** By default, ChatGPT asks you to confirm each call to a tool that changes data (the create and update tools). In the prompt you can choose to remember your approval for that tool for the rest of the conversation; after that, ChatGPT calls it without asking again until a new conversation. Do not rely on a prompt for every change: if an agent should never change data, connect it with **Read only**, which Weavestream enforces on the server. Workspace policies set by your ChatGPT administrator apply to custom MCP servers.
+
+### The consent page
+
+The page shows who you are signed in as, the app's name, the **app address** and the **return address**. Weavestream has checked both addresses; the name is what the app says about itself. Only approve a connection you started yourself.
+
+| Access | The app can |
+|---|---|
+| **Read only** (default) | Find and read companies, assets, articles, domains and password names. |
+| **Read and change** | Also create and update assets and articles. New articles stay hidden from client users. |
+
+Whatever you choose, the app can never see passwords, TOTP codes or vault notes, and cannot delete or archive anything or manage users, permissions or settings. To change the access later, revoke the connection and connect again.
+
+### Revoking a connection
+
+- **You:** **Account → AI connections → Revoke**.
+- **An administrator:** **Admin → Security center → AI connections → Revoke** (needs the user-management permission and MFA step-up).
+- **Automatically**, together with your API keys, when you change your password or sign out other sessions, or when an administrator resets your MFA, re-invites or deactivates you, and when the `reset-password`, `reset-mfa` or `rotate-sessions` CLI commands run.
+
+A revoked connection stops working on its next request. Turning **Allow remote AI connections** off refuses every connection at once without deleting them; turning it back on restores them.
+
+### How a remote connection is secured
+
+- **OAuth 2.1 with PKCE.** Weavestream is its own authorization server for this; no external identity provider is needed. It never asks for your password itself: signing in is the normal Weavestream login with MFA, and approving needs a fresh MFA step-up, like creating an API key.
+- **Only ChatGPT and Claude.** The app identifies itself with a client metadata document, which Weavestream accepts only from `chatgpt.com` and `claude.ai`, and only with return addresses on `chatgpt.com`, `claude.ai` or `claude.com`. There is no open client registration. Claude Code, which uses a local return address, cannot connect remotely; use the local server below.
+- **The token works on `/mcp` only.** It is issued for the MCP address and refused everywhere else, including the REST API, so the app can only ever use the tools listed below. Each tool call runs inside Weavestream as you, through the same permission checks as the web app.
+- **Short-lived and rotating.** Access tokens last one hour; refresh tokens rotate on every use, and reusing an old one ends the connection. A connection lasts at most one year.
+- **Attributed.** Every change made through a connection is audited with you as the actor and the connection's id (`mcpConnectionId`), so it can be told apart from your own work.
+
+## Local: stdio with an API key
+
+`apps/mcp` is a local MCP server. It calls the Weavestream REST API with an [API key](../security/api-keys.md), so the agent has **exactly** the key owner's permissions.
+
+1. Make sure API keys are turned on: **Admin → Settings → API & MCP → Allow API keys** (an administrator does this once).
 2. Create an API key: **Account → API keys → New API key**.
    - Leave **Allow this key to make changes** off if the agent only needs to answer questions. The write tools then fail with a clear error.
    - Leave **Allow password reveal** off: the MCP server never reveals passwords, so an agent's key does not need it.
-3. Build the server: `pnpm --filter @weavestream/mcp build`.
+3. Build the server and the shared package it uses: `pnpm --filter @weavestream/mcp... build`.
 4. Register it with your MCP client. For Claude Code:
 
 ```bash
@@ -31,31 +107,37 @@ Keep the key in a secret manager and inject it rather than pasting it into share
 | `WEAVESTREAM_URL` | yes | Instance origin. `https://` only (`http://` is accepted for `localhost`). |
 | `WEAVESTREAM_API_KEY` | yes | A `ws_…` API key. |
 
+!!!danger Leaving out a tool is not a permission for an API key
+The tool list decides what an agent is *offered*, not what the key *can do*. The key carries its owner's permissions on the whole REST API, and an agent with shell access can read the key from its MCP config and call any route directly. Limit the key itself: a read-only key cannot change or delete anything, whatever the agent tries. Keys have no per-company or per-route scopes yet, so to narrow an agent further, mint its key from a user with fewer permissions. A remote connection is different: its token works only on `/mcp`.
+!!!
+
 ## Tools
 
-| Tool | Does |
-|---|---|
-| `whoami` | The key's user, role and permissions |
-| `list_companies`, `search` | Find companies and records |
-| `list_layouts`, `get_layout` | Asset types and their field ids |
-| `list_assets`, `get_asset`, `create_asset`, `update_asset` | Assets |
-| `list_domains`, `get_domain` | Monitored domains, incl. Cloudflare registrar data |
-| `list_passwords`, `get_password` | Vault metadata only: never the password, TOTP or notes |
-| `list_articles`, `get_article`, `create_article`, `update_article` | Knowledge base (Markdown). New articles are always hidden from client users. |
+Both ways of connecting offer the same tools. A read-only remote connection is offered only the read tools.
 
-There are deliberately **no** password-reveal, delete, archive or purge tools, and none for users, memberships, IP rules or API keys.
+| Tool | Does | Changes data |
+|---|---|---|
+| `whoami` | The user, role and permissions it acts as | no |
+| `list_companies`, `search` | Find companies and records | no |
+| `list_layouts`, `get_layout` | Asset types and their field slugs | no |
+| `list_assets`, `get_asset` | Assets | no |
+| `create_asset`, `update_asset` | Create and update assets | yes |
+| `list_domains`, `get_domain` | Monitored domains, incl. Cloudflare registrar data | no |
+| `list_passwords`, `get_password` | Vault metadata only: never the password, TOTP or notes | no |
+| `list_articles`, `get_article` | Knowledge base | no |
+| `create_article`, `update_article` | Markdown articles. New articles are always hidden from client users. | yes |
 
-!!!danger Leaving out a tool is not a permission
-The tool list decides what an agent is *offered*, not what the key *can do*. The key carries its owner's permissions on the whole REST API, and an agent with shell access can read the key from its MCP config and call any route directly. Limit the key itself: a read-only key cannot change or delete anything, whatever the agent tries. Keys have no per-company or per-route scopes yet, so to narrow an agent further, mint its key from a user with fewer permissions.
-!!!
+Customer-specific tools always need an explicit `companyId`; `search` without one searches every company you can reach. There is no "current company" kept between calls.
+
+There are deliberately **no** password-reveal, delete, archive or purge tools, and none for users, memberships, IP rules, API keys or connections.
 
 ### Why there is no password reveal
 
-Everything a tool returns goes into the model's context: to the model provider, and into conversation transcripts that clients store on disk. A decrypted customer credential must not travel there, so the MCP server has no reveal tool and strips vault notes from `get_password`, even when the key itself may reveal. Scripts that genuinely need a password can call `POST /passwords/:id/reveal` directly with a key minted for that.
+Everything a tool returns goes into the model's context: to the model provider, and into conversation transcripts. A decrypted customer credential must not travel there, so there is no reveal tool and `get_password` strips vault notes. Scripts that genuinely need a password can call `POST /passwords/:id/reveal` directly with an API key minted for that.
 
 ### Why new articles are hidden from clients
 
-The agent reads text people typed into Weavestream, and that text can contain instructions aimed at the model. `create_article` always sends `visibleToClients: false` (the server default is `true`), so injected instructions cannot publish one company's data to another company's client users. A person reviews and publishes.
+The agent reads text people typed into Weavestream, and that text can contain instructions aimed at the model. `create_article` always creates the article hidden from client users (the server default is visible), so injected instructions cannot publish one company's data to its client users. A person reviews and publishes.
 
 !!!warning Treat returned content as data
 Everything a tool returns was typed by a person into Weavestream. A note that says "ignore previous instructions" is just text in a note. The tool descriptions say so to the model, but choose what an agent may do with that data accordingly.

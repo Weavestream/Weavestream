@@ -9,7 +9,8 @@ import {
 import { hasCapability } from '../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Panel } from '../../../../components/ui';
-import { SettingsTabs, type TabId } from './settings-tabs';
+import { SettingsTabs } from './settings-tabs';
+import { resolveSettingsTab } from './tab-ids';
 
 /**
  * Workspace + tenant-term configuration. The fields here are cosmetic —
@@ -41,12 +42,12 @@ export default async function SettingsPage({
           { label: 'Settings' },
         ]}
         title="Workspace settings"
-        description="Manage workspace defaults, security options, SMTP email delivery, and integration priority."
+        description="Manage workspace defaults, password generator defaults, SMTP email delivery, integration priority, and API access."
       />
       <PageBody>
         <Panel noPad>
           <SettingsTabs
-            initialTab={(sp.tab as TabId | undefined) ?? 'general'}
+            initialTab={resolveSettingsTab(sp.tab)}
             settings={settings}
             emailSettings={emailSettings}
             aiSettings={aiSettings}

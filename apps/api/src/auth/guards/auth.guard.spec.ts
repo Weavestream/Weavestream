@@ -2,6 +2,8 @@ import { UnauthorizedException } from '@nestjs/common';
 import type { ExecutionContext } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthGuard } from './auth.guard.js';
+import { McpDelegationService } from '../../mcp/mcp-delegation.service.js';
+import { internalListenerHandler } from '../../common/internal-listener.js';
 
 const ENV = {
   values: {
@@ -14,7 +16,17 @@ const ENV = {
 
 function makeGuard(
   rotateResult: unknown,
-  { apiKeysEnabled = true, key = null }: { apiKeysEnabled?: boolean; key?: unknown } = {},
+  {
+    apiKeysEnabled = true,
+    key = null,
+    mcpRemoteEnabled = true,
+    connection = { id: 'c-1', userId: 'u-1', allowWrite: false },
+  }: {
+    apiKeysEnabled?: boolean;
+    key?: unknown;
+    mcpRemoteEnabled?: boolean;
+    connection?: { id: string; userId: string; allowWrite: boolean } | null;
+  } = {},
 ) {
   const reflector = { getAllAndOverride: jest.fn().mockReturnValue(false) } as never;
   // No access cookie is sent, so verifyAccessToken is never reached and the
@@ -48,7 +60,12 @@ function makeGuard(
     verify: jest.fn().mockResolvedValue(key),
     touch: jest.fn().mockResolvedValue(undefined),
   };
-  const settings = { apiKeysEnabled: jest.fn().mockResolvedValue(apiKeysEnabled) };
+  const settings = {
+    apiKeysEnabled: jest.fn().mockResolvedValue(apiKeysEnabled),
+    mcpRemoteEnabled: jest.fn().mockResolvedValue(mcpRemoteEnabled),
+  };
+  const delegations = new McpDelegationService();
+  const mcpConnections = { findActiveById: jest.fn().mockResolvedValue(connection) };
   const guard = new AuthGuard(
     reflector,
     tokens,
@@ -57,8 +74,10 @@ function makeGuard(
     ENV,
     apiKeys as never,
     settings as never,
+    delegations,
+    mcpConnections as never,
   );
-  return { guard, auth, apiKeys, settings };
+  return { guard, auth, apiKeys, settings, delegations, mcpConnections, prisma };
 }
 
 function makeCtx() {
@@ -184,5 +203,121 @@ describe('AuthGuard bearer handling', () => {
     const user = (req as unknown as { user: { apiKeyId: string; apiKeyAllowWrite: boolean } }).user;
     expect(user.apiKeyId).toBe('k-1');
     expect(user.apiKeyAllowWrite).toBe(false);
+  });
+});
+
+describe('AuthGuard remote MCP delegation handles', () => {
+  const PATH = '/api/v1/companies/11111111-1111-4111-8111-111111111111/assets';
+
+  /** A request as the internal listener (or the public port) would deliver it. */
+  function makeDelegatedCtx(
+    handle: string,
+    { internal = true, method = 'GET', path = PATH }: { internal?: boolean; method?: string; path?: string } = {},
+  ) {
+    const req = {
+      method,
+      path,
+      signedCookies: {},
+      ip: '127.0.0.1',
+      headers: { authorization: `Bearer ${handle}` },
+    } as unknown as Request & { user?: Record<string, unknown> };
+    // Mark it exactly as the internal listener does.
+    if (internal) internalListenerHandler(() => undefined)(req as never, {} as never);
+    const ctx = {
+      switchToHttp: () => ({ getRequest: () => req, getResponse: () => ({}) }),
+      getHandler: () => ({}),
+      getClass: () => ({}),
+    } as unknown as ExecutionContext;
+    return { ctx, req };
+  }
+
+  const grant = { connectionId: 'c-1', userId: 'u-1', method: 'GET' as const, path: PATH };
+
+  it('authenticates the connection\'s user once, with key-style containment and no apiKeyId', async () => {
+    const { guard, delegations, apiKeys } = makeGuard(null);
+    const handle = delegations.mint(grant);
+    const { ctx, req } = makeDelegatedCtx(handle);
+
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(req.user).toMatchObject({
+      id: 'u-1',
+      sessionId: 'c-1',
+      mcpConnectionId: 'c-1',
+      mfaPending: false,
+      apiKeyAllowWrite: false,
+      apiKeyAllowPasswordReveal: false,
+    });
+    expect(req.user).not.toHaveProperty('apiKeyId');
+    expect(apiKeys.verify).not.toHaveBeenCalled();
+
+    // Single use: the same handle again is refused.
+    const again = makeDelegatedCtx(handle);
+    await expect(guard.canActivate(again.ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('carries the connection\'s write grant', async () => {
+    const { guard, delegations } = makeGuard(null, {
+      connection: { id: 'c-1', userId: 'u-1', allowWrite: true },
+    });
+    const { ctx, req } = makeDelegatedCtx(delegations.mint(grant));
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(req.user).toMatchObject({ apiKeyAllowWrite: true, apiKeyAllowPasswordReveal: false });
+  });
+
+  it('refuses a valid handle on the public listener, even from a loopback peer', async () => {
+    const { guard, delegations } = makeGuard(null);
+    const { ctx } = makeDelegatedCtx(delegations.mint(grant), { internal: false });
+    await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it.each([
+    ['another method', { method: 'POST' }],
+    ['another path', { path: '/api/v1/companies/11111111-1111-4111-8111-111111111111/passwords' }],
+  ])('refuses the handle for %s, and burns it', async (_label, opts) => {
+    const { guard, delegations } = makeGuard(null);
+    const handle = delegations.mint(grant);
+    await expect(guard.canActivate(makeDelegatedCtx(handle, opts).ctx)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    await expect(guard.canActivate(makeDelegatedCtx(handle).ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('refuses an unknown or expired handle', async () => {
+    const { guard, delegations } = makeGuard(null);
+    await expect(guard.canActivate(makeDelegatedCtx('wsd_unknown').ctx)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
+    const handle = delegations.mint(grant);
+    const real = Date.now.bind(Date);
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => real() + 31_000);
+    try {
+      await expect(guard.canActivate(makeDelegatedCtx(handle).ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('refuses when the connection was revoked, belongs to someone else, or the switch is off', async () => {
+    for (const opts of [
+      { connection: null },
+      { connection: { id: 'c-1', userId: 'u-2', allowWrite: false } },
+      { mcpRemoteEnabled: false },
+    ]) {
+      const { guard, delegations } = makeGuard(null, opts);
+      await expect(guard.canActivate(makeDelegatedCtx(delegations.mint(grant)).ctx)).rejects.toBeInstanceOf(
+        UnauthorizedException,
+      );
+    }
+  });
+
+  it('refuses a deactivated user', async () => {
+    const { guard, delegations, prisma } = makeGuard(null);
+    (prisma as unknown as { user: { findUnique: jest.Mock } }).user.findUnique.mockResolvedValue({
+      id: 'u-1',
+      isActive: false,
+    });
+    await expect(guard.canActivate(makeDelegatedCtx(delegations.mint(grant)).ctx)).rejects.toBeInstanceOf(
+      UnauthorizedException,
+    );
   });
 });

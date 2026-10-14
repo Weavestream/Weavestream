@@ -4,8 +4,9 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../../lib/api';
 import { Btn, Field, Input } from '../../../components/ui';
+import { safeNextPath } from '../../../lib/safe-next-path';
 
-export default function MfaChallengeForm() {
+export default function MfaChallengeForm({ next = null }: { next?: string | null }) {
   const router = useRouter();
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -24,7 +25,7 @@ export default function MfaChallengeForm() {
       setError('Invalid code.');
       return;
     }
-    router.push('/');
+    router.push(safeNextPath(next) ?? '/');
   }
 
   return (

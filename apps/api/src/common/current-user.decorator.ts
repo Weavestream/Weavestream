@@ -35,6 +35,23 @@ export interface AuthedUser {
    * a deliberate act at mint time. Absent for interactive principals.
    */
   apiKeyAllowWrite?: boolean;
+  /**
+   * Set when the principal is a remote MCP connection (OAuth on `/mcp`),
+   * reaching REST only through the API's internal listener. Such a principal
+   * reuses the two grant fields above: `apiKeyAllowWrite` is the connection's
+   * grant, and `apiKeyAllowPasswordReveal` is always false. It never carries
+   * `apiKeyId`, so audit rows never mix keys and connections.
+   */
+  mcpConnectionId?: string;
+}
+
+/**
+ * True for every non-interactive principal: an API key or a remote MCP
+ * connection. Containment checks key off this, never off `apiKeyId` alone,
+ * so a new programmatic principal cannot slip past them.
+ */
+export function isProgrammatic(user: AuthedUser | undefined): boolean {
+  return !!(user?.apiKeyId || user?.mcpConnectionId);
 }
 
 export const CurrentUser = createParamDecorator(

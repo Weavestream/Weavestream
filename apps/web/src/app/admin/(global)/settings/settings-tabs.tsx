@@ -7,14 +7,13 @@ import type { Settings } from '../../../../lib/server-api/settings';
 import {
   ArticleSettingsForm,
   GeneralSettingsForm,
-  SecuritySettingsForm,
+  PasswordSettingsForm,
 } from './settings-form';
 import { EmailSettingsForm } from './email-settings-form';
 import { AiSettingsForm } from './ai-settings-form';
-import { ApiKeysSwitch } from './api-keys-switch';
+import { ApiKeysSwitch, McpRemoteSwitch } from './api-keys-switch';
 import { IntegrationPriorityList } from './integration-priority-list';
-
-export type TabId = 'general' | 'security' | 'articles' | 'email' | 'ai' | 'integrations';
+import type { TabId } from './tab-ids';
 
 const TABS: Array<{ id: TabId; label: string; help: string }> = [
   {
@@ -23,9 +22,9 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     help: 'Workspace branding and tenant terminology.',
   },
   {
-    id: 'security',
-    label: 'Security',
-    help: 'Password generator defaults and security-related settings.',
+    id: 'passwords',
+    label: 'Passwords',
+    help: 'Password generator defaults.',
   },
   {
     id: 'articles',
@@ -46,6 +45,11 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     id: 'integrations',
     label: 'Integrations',
     help: 'Which integration wins when several fill one asset. Google and Microsoft apps are set up on their integration.',
+  },
+  {
+    id: 'api',
+    label: 'API & MCP',
+    help: 'Programmatic access: API keys, and remote AI connections from ChatGPT and Claude.',
   },
 ];
 
@@ -122,12 +126,7 @@ export function SettingsTabs({
       </div>
       <div style={{ padding: 18 }}>
         {tab === 'general' && <GeneralSettingsForm initial={settings} />}
-        {tab === 'security' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
-            <ApiKeysSwitch enabled={settings.apiKeysEnabled} />
-            <SecuritySettingsForm initial={settings} />
-          </div>
-        )}
+        {tab === 'passwords' && <PasswordSettingsForm initial={settings} />}
         {tab === 'articles' && <ArticleSettingsForm initial={settings} />}
         {tab === 'email' && (
           <EmailSettingsForm
@@ -139,6 +138,12 @@ export function SettingsTabs({
         {tab === 'integrations' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
             {integrationPriority && <IntegrationPriorityList initial={integrationPriority.order} />}
+          </div>
+        )}
+        {tab === 'api' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
+            <ApiKeysSwitch enabled={settings.apiKeysEnabled} />
+            <McpRemoteSwitch enabled={settings.mcpRemoteEnabled} />
           </div>
         )}
       </div>

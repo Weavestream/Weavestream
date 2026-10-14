@@ -9,6 +9,7 @@ import {
   copyBackupCodesToClipboard,
 } from '../../../components/auth/backup-code-list';
 import { Btn, Field, Input, useToast } from '../../../components/ui';
+import { safeNextPath } from '../../../lib/safe-next-path';
 
 /**
  * `qr` is an SVG path in module units, not a `data:` PNG.
@@ -29,7 +30,9 @@ interface VerifyResponse {
   backupCodes?: string[];
 }
 
-export default function MfaSetupClient() {
+/** `next`: an already-validated return path (see `safeNextPath`), or null. */
+export default function MfaSetupClient({ next = null }: { next?: string | null }) {
+  const done = safeNextPath(next) ?? '/';
   const router = useRouter();
   const toast = useToast();
   const [secret, setSecret] = useState<string | null>(null);
@@ -74,7 +77,7 @@ export default function MfaSetupClient() {
       setBackupCodes(res.data.backupCodes);
       return;
     }
-    router.push('/');
+    router.push(done);
   }
 
   // Both copy paths go through the shared clipboard helper rather than
@@ -142,7 +145,7 @@ export default function MfaSetupClient() {
             kind="primary"
             size="md"
             disabled={!acknowledged}
-            onClick={() => router.push('/')}
+            onClick={() => router.push(done)}
           >
             Continue
           </Btn>

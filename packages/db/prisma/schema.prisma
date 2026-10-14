@@ -252,6 +252,7 @@ model User {
 
   @@map("users")
   apiKeys ApiKey[]
+  mcpConnections McpConnection[]
 }
 
 model Company {
@@ -498,6 +499,51 @@ model ApiKey {
   @@map("api_keys")
 }
 
+/// A remote MCP client (ChatGPT, Claude) a user approved through OAuth. It
+/// acts as that user only, on `/mcp` only. Revoked with the user's API keys.
+model McpConnection {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  /// Client ID Metadata Document URL, e.g. https://chatgpt.com/oauth/client.json.
+  clientId     String    @map("client_id")
+  /// `client_name` from that document. Stated by the client; display only.
+  clientName   String    @map("client_name")
+  /// Host of the redirect URI the user approved (verified against the document).
+  redirectHost String    @map("redirect_host")
+  /// oidc-provider grant this connection's tokens belong to.
+  grantId      String    @unique @map("grant_id")
+  /// Opt-in at consent, default read-only. Enforced per tool operation.
+  allowWrite   Boolean   @default(false) @map("allow_write")
+  lastUsedAt   DateTime? @map("last_used_at")
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt], map: "mcp_connections_user_revoked_idx")
+  @@map("mcp_connections")
+}
+
+/// oidc-provider storage for the remote MCP authorization server. Codes and
+/// tokens are keyed by the SHA-256 of their value and stored without it;
+/// see apps/api/src/mcp-oauth/oauth-adapter.ts for the per-model rules.
+model OAuthArtifact {
+  id         String    @id
+  kind       String
+  payload    Json
+  grantId    String?   @map("grant_id")
+  uid        String?
+  expiresAt  DateTime? @map("expires_at")
+  consumedAt DateTime? @map("consumed_at")
+
+  @@index([grantId])
+  @@index([uid])
+  @@index([expiresAt])
+  @@map("oauth_artifacts")
+}
+
 model UserMfaBackupCode {
   id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId     String    @map("user_id") @db.Uuid
@@ -547,6 +593,8 @@ model AuditLog {
   /// API key that performed the action, when it was not an interactive session.
   /// No FK: the audit row must outlive the key.
   apiKeyId   String?  @map("api_key_id") @db.Uuid
+  /// Remote MCP connection that performed the action. No FK, like apiKeyId.
+  mcpConnectionId String? @map("mcp_connection_id") @db.Uuid
   createdAt  DateTime @default(now()) @map("created_at")
 
   actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
@@ -1020,6 +1068,10 @@ model SystemSetting {
   // off. While off, AuthGuard refuses every key and no key can be created;
   // keys are not revoked, so turning it back on restores them.
   apiKeysEnabled            Boolean  @default(false) @map("api_keys_enabled")
+  // Remote MCP connections (ChatGPT, Claude over OAuth) are off on a new
+  // instance. While off, /mcp refuses every token and no consent is given;
+  // connections are kept, so turning it back on restores them.
+  mcpRemoteEnabled          Boolean  @default(false) @map("mcp_remote_enabled")
   // Which integration's values win when several are bound to one asset:
   // driver keys, highest priority first. NULL = the shared default order
   // (DEFAULT_INTEGRATION_PRIORITY); read through resolveIntegrationPriority.

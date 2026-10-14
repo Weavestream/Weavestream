@@ -4,7 +4,7 @@ import { getSettings } from '../../lib/server-api/settings';
 import { PageBody, PageHeader } from '../../components/shell/page-header';
 import { Panel } from '../../components/ui';
 import { MeTabs } from './me-tabs';
-import type { ApiKeySummary } from '@weavestream/shared';
+import type { ApiKeySummary, McpConnectionSummary } from '@weavestream/shared';
 
 type Session = {
   id: string;
@@ -22,6 +22,7 @@ const VALID_TABS = [
   'security',
   'sessions',
   'api-keys',
+  'ai-connections',
 ] as const;
 type TabId = (typeof VALID_TABS)[number];
 
@@ -36,8 +37,10 @@ export default async function MePage({
   const sessions = sessionsRes.data ?? [];
   const apiKeysRes = await serverApiFetch<ApiKeySummary[]>('/me/api-keys');
   const apiKeys = apiKeysRes.ok ? (apiKeysRes.data ?? []) : [];
+  const connectionsRes = await serverApiFetch<McpConnectionSummary[]>('/me/mcp-connections');
+  const connections = connectionsRes.ok ? (connectionsRes.data ?? []) : [];
   // Request-scoped cache: the root layout already loaded settings.
-  const { apiKeysEnabled } = await getSettings();
+  const { apiKeysEnabled, mcpRemoteEnabled } = await getSettings();
 
   const initialTab: TabId = VALID_TABS.includes(sp.tab as TabId)
     ? (sp.tab as TabId)
@@ -48,7 +51,7 @@ export default async function MePage({
       <PageHeader
         crumbs={[{ label: 'Account', href: '/me' }, { label: 'Profile' }]}
         title="Your profile"
-        description="Manage your profile, memberships, security, sessions, and API keys."
+        description="Manage your profile, memberships, security, sessions, API keys, and AI connections."
       />
       <PageBody>
         <Panel noPad>
@@ -59,6 +62,9 @@ export default async function MePage({
             apiKeys={apiKeys}
             apiKeysLoadFailed={!apiKeysRes.ok}
             apiKeysEnabled={apiKeysEnabled}
+            connections={connections}
+            connectionsLoadFailed={!connectionsRes.ok}
+            mcpRemoteEnabled={mcpRemoteEnabled}
           />
         </Panel>
       </PageBody>

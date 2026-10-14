@@ -5,6 +5,12 @@ import { EnvService } from '../config/env.service.js';
 @Injectable()
 export class RedisService implements OnModuleDestroy {
   readonly client: Redis;
+  /**
+   * Connections handed to BullMQ. BullMQ never closes a connection it was
+   * given, so they are closed here on shutdown; otherwise every queue and
+   * queue-events object leaves a socket open after the app closes.
+   */
+  private readonly duplicates = new Set<Redis>();
 
   constructor(env: EnvService) {
     this.client = new Redis(env.values.REDIS_URL, {
@@ -15,6 +21,9 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async onModuleDestroy(): Promise<void> {
+    // Best effort on shutdown: a connection that is already gone needs no quit.
+    await Promise.all([...this.duplicates].map((c) => c.quit().catch(() => undefined)));
+    this.duplicates.clear();
     await this.client.quit().catch(() => undefined);
   }
 
@@ -38,9 +47,11 @@ export class RedisService implements OnModuleDestroy {
    * during process startup.
    */
   bullmqConnection(): Redis {
-    return this.client.duplicate({
+    const connection = this.client.duplicate({
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
     });
+    this.duplicates.add(connection);
+    return connection;
   }
 }

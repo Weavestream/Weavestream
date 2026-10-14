@@ -2,7 +2,7 @@
 import '@testing-library/jest-dom';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { ToastProvider } from '../../../../components/ui';
-import { ApiKeysSwitch } from './api-keys-switch';
+import { ApiKeysSwitch, McpRemoteSwitch } from './api-keys-switch';
 
 const apiFetch = jest.fn();
 const refresh = jest.fn();
@@ -47,5 +47,51 @@ describe('ApiKeysSwitch', () => {
     });
     expect(box).not.toBeChecked();
     expect(screen.queryByText(/Could not change/)).not.toBeInTheDocument();
+  });
+});
+
+describe('McpRemoteSwitch', () => {
+  it('saves through its own step-up route', async () => {
+    apiFetch.mockResolvedValue({ ok: true, status: 200, data: {} });
+    render(
+      <ToastProvider>
+        <McpRemoteSwitch enabled={false} />
+      </ToastProvider>,
+    );
+    const box = screen.getByRole('checkbox', { name: /Allow remote AI connections/ });
+    await act(async () => {
+      fireEvent.click(box);
+    });
+    expect(apiFetch).toHaveBeenCalledWith('/settings/mcp-remote', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(box).toBeChecked();
+    expect(screen.getByRole('link', { name: 'Security center' })).toHaveAttribute(
+      'href',
+      '/admin/security?tab=ai-connections',
+    );
+  });
+});
+
+describe('AccessSwitch network failure', () => {
+  it('keeps the switch as it was, unlocks it, and says the state is unknown', async () => {
+    apiFetch.mockRejectedValue(new TypeError('Failed to fetch'));
+    render(
+      <ToastProvider>
+        <McpRemoteSwitch enabled={false} />
+      </ToastProvider>,
+    );
+    const box = screen.getByRole('checkbox', { name: /Allow remote AI connections/ });
+    await act(async () => {
+      fireEvent.click(box);
+    });
+    expect(box).not.toBeChecked();
+    expect(screen.getByText(/could not be reached; reload to see the current state/)).toBeInTheDocument();
+    // Not stuck: a second attempt sends again.
+    await act(async () => {
+      fireEvent.click(box);
+    });
+    expect(apiFetch).toHaveBeenCalledTimes(2);
   });
 });

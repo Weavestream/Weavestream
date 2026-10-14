@@ -59,6 +59,7 @@ export class AuditController {
       ip: true,
       userAgent: true,
       apiKeyId: true,
+      mcpConnectionId: true,
       createdAt: true,
       before: true,
       after: true,
