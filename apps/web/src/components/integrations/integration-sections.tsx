@@ -151,7 +151,8 @@ function SectionRow({ row, last }: { row: IntegrationSectionRow; last: boolean }
         gap: stacked ? 4 : 8,
         padding: '6px 0',
         borderBottom: last ? 'none' : '1px solid var(--line)',
-        fontSize: 12,
+        // Same type scale as the asset field grid above (asset-detail-view).
+        fontSize: 13,
       }}
     >
       <span
@@ -161,13 +162,13 @@ function SectionRow({ row, last }: { row: IntegrationSectionRow; last: boolean }
           color: 'var(--muted)',
           fontFamily: 'var(--font-mono)',
           textTransform: 'uppercase',
-          letterSpacing: 0.4,
-          fontSize: 10.5,
+          letterSpacing: 0.3,
+          fontSize: 11.5,
         }}
       >
         {row.label}
       </span>
-      <span style={{ color: 'var(--text-2)', minWidth: 0, overflowWrap: 'anywhere', textAlign: stacked ? 'left' : 'right' }}>
+      <span style={{ color: 'var(--text)', minWidth: 0, overflowWrap: 'anywhere', textAlign: stacked ? 'left' : 'right' }}>
         {renderValue(row)}
       </span>
     </div>
