@@ -13,6 +13,8 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.10.1] - 2026-10-14
+
 ### Added
 
 - **Connect ChatGPT and Claude.** A remote MCP endpoint at `https://<your-instance>/mcp` lets ChatGPT on the web and claude.ai use Weavestream's MCP tools without a local process or an API key. A user adds the address in the AI app, signs in with their normal Weavestream login and MFA, and approves the connection with a fresh MFA step-up. A connection acts only as that user, is **read-only** unless they allow changes, can never see passwords, TOTP codes or vault notes, and cannot delete anything. Its token works only on `/mcp`. Only ChatGPT and Claude can connect; no external identity provider is needed. See [MCP Server](/integrations/mcp/).
@@ -923,7 +925,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.10.0...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.10.1...HEAD
+[1.10.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.1
 [1.10.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.0
 [1.9.10]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.10
 [1.9.9]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.9

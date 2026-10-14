@@ -179,6 +179,19 @@ describeIfDb('remote MCP endpoint (DB integration, full app)', () => {
   const json = (r: unknown) => JSON.parse(text(r)) as unknown;
 
   beforeAll(async () => {
+    // The real `EnvService` validates the full env. CI has no `.env` (only
+    // DATABASE_URL / REDIS_URL), so fill what is absent with throwaway
+    // values; a local `.env` keeps priority. Jest gives each spec file its
+    // own `process.env` copy, so nothing leaks into other specs.
+    process.env.APP_URL ??= 'http://localhost:3000';
+    process.env.API_URL ??= 'http://localhost:3000/api';
+    for (const key of [
+      'JWT_SIGNING_KEY', 'MFA_ENCRYPTION_KEY', 'COOKIE_SIGNING_KEY', 'CSRF_SIGNING_KEY',
+      'PASSWORD_ENCRYPTION_KEY', 'INTEGRATION_SECRET_KEY', 'SMTP_SECRET_KEY',
+    ]) {
+      process.env[key] ??= randomBytes(32).toString('base64');
+    }
+
     setDefaultResolveForTests(async () => ['93.184.216.34']);
     setDefaultFetchForTests((async (input: string | URL) => {
       if (String(input) !== CLAUDE) return new Response('not found', { status: 404 });
