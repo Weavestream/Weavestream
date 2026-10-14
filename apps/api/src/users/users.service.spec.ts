@@ -1,5 +1,6 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { UsersService, hasAuthorityChanged } from './users.service.js';
+import { UsersController } from './users.controller.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 const ACTOR: AuthedUser = {
@@ -636,4 +637,90 @@ describe('UsersService.resetMfa', () => {
   // replaced by the unified step-up mechanism (the route now carries
   // `@RequireStepUp()`), so that enforcement is covered by the
   // StepUpGuard tests rather than here.
+});
+
+describe('PATCH/DELETE /users/:id response projection', () => {
+  // Every column, secrets included. The mock honours `select` like Prisma
+  // does, so the response is exactly what the query asks for.
+  const FULL_ROW = {
+    id: 'u-1',
+    email: 'u@x',
+    name: 'X',
+    role: 'OPERATOR',
+    globalAccess: 'READONLY',
+    platformCapabilities: ['AUDIT_READ'],
+    isActive: true,
+    mfaEnabled: true,
+    mfaEnforcementCompletedAt: new Date(),
+    deactivatedAt: null,
+    timezone: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lastLoginAt: null,
+    passwordHash: '$argon2id$not-a-real-hash',
+    mfaSecretEncrypted: 'not-a-real-ciphertext',
+  };
+
+  function makeController() {
+    const prisma = makePrisma();
+    prisma.user.findUnique.mockResolvedValue(FULL_ROW);
+    prisma.user.update.mockImplementation(
+      async (args: { data: Record<string, unknown>; select?: Record<string, boolean> }) => {
+        const row: Record<string, unknown> = { ...FULL_ROW, ...args.data };
+        if (!args.select) return row;
+        return Object.fromEntries(
+          Object.keys(args.select)
+            .filter((k) => args.select![k])
+            .map((k) => [k, row[k]]),
+        );
+      },
+    );
+    prisma.apiKey.updateMany.mockResolvedValue({ count: 2 });
+    const svc = new UsersService(
+      prisma as never,
+      makeAudit() as never,
+      makeCache() as never,
+      makeSetupTokens() as never,
+    );
+    return { prisma, controller: new UsersController(svc) };
+  }
+
+  const req = { headers: {}, ip: '127.0.0.1', socket: {} } as never;
+
+  it('PATCH never returns secret columns', async () => {
+    const { prisma, controller } = makeController();
+    const res = await controller.update(ACTOR, 'u-1', { name: 'Y' }, req);
+
+    expect(res).not.toHaveProperty('passwordHash');
+    expect(res).not.toHaveProperty('mfaSecretEncrypted');
+    const select = prisma.user.update.mock.calls[0][0].select;
+    expect(select).not.toHaveProperty('passwordHash');
+    expect(select).not.toHaveProperty('mfaSecretEncrypted');
+    expect(res).toMatchObject({ id: 'u-1', name: 'Y', role: 'OPERATOR' });
+    // No authority change, nothing revoked, no counts.
+    expect(res).not.toHaveProperty('apiKeysRevoked');
+    expect(res).not.toHaveProperty('mcpConnectionsRevoked');
+  });
+
+  it('PATCH reports revoked counts on an authority change', async () => {
+    const { controller } = makeController();
+    const res = await controller.update(ACTOR, 'u-1', { globalAccess: 'FULL' }, req);
+
+    expect(res).not.toHaveProperty('passwordHash');
+    expect(res).not.toHaveProperty('mfaSecretEncrypted');
+    expect(res).toMatchObject({ apiKeysRevoked: 2, mcpConnectionsRevoked: 1 });
+  });
+
+  it('DELETE never returns secret columns and reports revoked counts', async () => {
+    const { controller } = makeController();
+    const res = await controller.deactivate(ACTOR, 'u-1', req);
+
+    expect(res).not.toHaveProperty('passwordHash');
+    expect(res).not.toHaveProperty('mfaSecretEncrypted');
+    expect(res).toMatchObject({
+      isActive: false,
+      apiKeysRevoked: 2,
+      mcpConnectionsRevoked: 1,
+    });
+  });
 });

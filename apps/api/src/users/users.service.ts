@@ -5,7 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { User } from '@prisma/client';
+import type { Prisma, User } from '@prisma/client';
 import type {
   CreateUserInput,
   UpdateUserInput,
@@ -20,6 +20,28 @@ import {
   lockUserForAuthorityChange,
   revokeDelegatedAccessForUser,
 } from '../auth/revoke-api-keys.js';
+
+/**
+ * The user fields an admin route may return. An explicit allowlist, applied
+ * at the query: `passwordHash` and `mfaSecretEncrypted` are never selected,
+ * so a new secret column cannot leak by default (CLAUDE.md §2).
+ */
+const ADMIN_USER_SELECT = {
+  id: true,
+  email: true,
+  name: true,
+  role: true,
+  globalAccess: true,
+  platformCapabilities: true,
+  isActive: true,
+  mfaEnabled: true,
+  mfaEnforcementCompletedAt: true,
+  deactivatedAt: true,
+  timezone: true,
+  createdAt: true,
+  updatedAt: true,
+  lastLoginAt: true,
+} satisfies Prisma.UserSelect;
 
 export interface UserListOptions {
   q?: string;
@@ -82,20 +104,7 @@ export class UsersService {
     const user = await this.prisma.user.findUnique({
       where: { id },
       select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        globalAccess: true,
-        platformCapabilities: true,
-        isActive: true,
-        mfaEnabled: true,
-        mfaEnforcementCompletedAt: true,
-        deactivatedAt: true,
-        timezone: true,
-        createdAt: true,
-        updatedAt: true,
-        lastLoginAt: true,
+        ...ADMIN_USER_SELECT,
         memberships: {
           where: { revokedAt: null },
           select: {
@@ -378,6 +387,7 @@ export class UsersService {
                   : {}),
               }),
         },
+        select: ADMIN_USER_SELECT,
       });
 
       if (isDeactivation) {
@@ -484,7 +494,17 @@ export class UsersService {
       },
     });
 
-    return updated;
+    // Same counts as the audit row, so the admin UI can say what the edit
+    // revoked. Counts only, never key values.
+    return {
+      ...updated,
+      ...(revoked
+        ? {
+            apiKeysRevoked: revoked.apiKeys,
+            mcpConnectionsRevoked: revoked.mcpConnections,
+          }
+        : {}),
+    };
   }
 
   async deactivate(

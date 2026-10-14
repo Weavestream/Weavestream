@@ -181,9 +181,14 @@ export class MeService {
     input: UpdateMeInput,
     meta: { ip: string; userAgent: string },
   ) {
-    const before = await this.prisma.user.findUnique({ where: { id: actor.id } });
+    const before = await this.prisma.user.findUnique({
+      where: { id: actor.id },
+      select: { name: true, timezone: true, searchDefaults: true },
+    });
     if (!before) throw new NotFoundException();
 
+    // Explicit allowlist: without a `select` Prisma returns the whole row,
+    // `passwordHash` and `mfaSecretEncrypted` included, straight to the client.
     const updated = await this.prisma.user.update({
       where: { id: actor.id },
       data: {
@@ -200,6 +205,13 @@ export class MeService {
                   : input.searchDefaults,
             }
           : {}),
+      },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        timezone: true,
+        searchDefaults: true,
       },
     });
     await this.audit.log({
@@ -220,7 +232,16 @@ export class MeService {
         searchDefaults: updated.searchDefaults,
       },
     });
-    return updated;
+    // Same read-side Zod pass as `profile`, so a malformed JSONB cell never
+    // reaches the client in either response.
+    const searchDefaults = updated.searchDefaults
+      ? userSearchDefaultsSchema.safeParse(updated.searchDefaults)
+      : null;
+    return {
+      ...updated,
+      searchDefaults:
+        searchDefaults && searchDefaults.success ? searchDefaults.data : null,
+    };
   }
 
   async changePassword(

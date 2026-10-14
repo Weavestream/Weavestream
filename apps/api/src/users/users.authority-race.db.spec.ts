@@ -88,7 +88,10 @@ describeIfDb('UsersService.update vs. concurrent authority edits (DB)', () => {
 
   beforeEach(async () => {
     await prisma.apiKey.deleteMany({ where: { userId: USER } });
-    await prisma.user.update({ where: { id: USER }, data: { globalAccess: 'FULL' } });
+    await prisma.user.update({
+      where: { id: USER },
+      data: { globalAccess: 'FULL', isActive: true, deactivatedAt: null },
+    });
   });
 
   afterAll(async () => {
@@ -162,5 +165,30 @@ describeIfDb('UsersService.update vs. concurrent authority edits (DB)', () => {
     await edit;
     await mint;
     expect(minted).toBe(true);
+  });
+
+  // Not a race: rides on this file's real-Postgres setup. Proves the
+  // PATCH/DELETE /users/:id payload is projected by the query itself, with
+  // the secret columns populated in the row.
+  it('PATCH and DELETE responses never carry passwordHash or mfaSecretEncrypted', async () => {
+    await prisma.user.update({
+      where: { id: USER },
+      data: { passwordHash: 'not-a-real-hash', mfaSecretEncrypted: 'not-a-real-ciphertext' },
+    });
+    await apiKeys.create(
+      { ...ACTOR, id: USER, role: 'OPERATOR', globalAccess: 'FULL' },
+      { name: 'k' },
+      META,
+    );
+
+    const patched = await users.update(ACTOR, USER, { globalAccess: 'READONLY' }, META);
+    expect(patched).not.toHaveProperty('passwordHash');
+    expect(patched).not.toHaveProperty('mfaSecretEncrypted');
+    expect(patched).toMatchObject({ globalAccess: 'READONLY', apiKeysRevoked: 1 });
+
+    const deactivated = await users.deactivate(ACTOR, USER, META);
+    expect(deactivated).not.toHaveProperty('passwordHash');
+    expect(deactivated).not.toHaveProperty('mfaSecretEncrypted');
+    expect(deactivated).toMatchObject({ isActive: false, apiKeysRevoked: 0 });
   });
 });

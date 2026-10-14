@@ -7,7 +7,13 @@ import type {
   PlatformCapability,
   UserRole,
 } from '@weavestream/shared';
-import { MANAGER_PRESET, PlatformCapabilityValues, problemMessage } from '@weavestream/shared';
+import {
+  MANAGER_PRESET,
+  PlatformCapabilityValues,
+  apiKeysRevokedNotice,
+  mcpConnectionsRevokedNotice,
+  problemMessage,
+} from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import { FormattedDateTime } from '../../../../../lib/timezone-context';
 import {
@@ -38,6 +44,16 @@ const GLOBAL_ACCESS_OPTIONS: GlobalAccess[] = ['FULL', 'READONLY', 'NONE'];
 
 type InviteResponse = { setupUrl: string; expiresAt: string };
 
+/** `PATCH /users/:id` carries the counts only when the edit revoked access. */
+type UserUpdateResponse = { apiKeysRevoked?: number; mcpConnectionsRevoked?: number };
+
+function revokedNotice(data: UserUpdateResponse | null): string {
+  return (
+    apiKeysRevokedNotice(data?.apiKeysRevoked ?? 0) +
+    mcpConnectionsRevokedNotice(data?.mcpConnectionsRevoked ?? 0)
+  );
+}
+
 export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolean }) {
   const router = useRouter();
   const toast = useToast();
@@ -51,7 +67,7 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
 
   async function toggleActive() {
     setPending(true);
-    const res = await apiFetch(`/users/${user.id}`, {
+    const res = await apiFetch<UserUpdateResponse>(`/users/${user.id}`, {
       method: 'PATCH',
       body: JSON.stringify({ isActive: !user.isActive }),
     });
@@ -60,7 +76,12 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
       toast.push('Operation failed.', 'danger');
       return;
     }
-    toast.push(user.isActive ? 'User deactivated.' : 'User reactivated.', 'ok');
+    toast.push(
+      user.isActive
+        ? `User deactivated.${revokedNotice(res.data)}`
+        : 'User reactivated.',
+      'ok',
+    );
     setDeactivateOpen(false);
     router.refresh();
   }
@@ -350,7 +371,7 @@ function EditDialog({
       // capability list keeps the request body self-explanatory.
       body.platformCapabilities = [];
     }
-    const res = await apiFetch(`/users/${user.id}`, {
+    const res = await apiFetch<UserUpdateResponse>(`/users/${user.id}`, {
       method: 'PATCH',
       body: JSON.stringify(body),
     });
@@ -359,12 +380,7 @@ function EditDialog({
       setError(problemMessage(res.problem) ?? 'Update failed.');
       return;
     }
-    toast.push(
-      authorityChanged
-        ? 'User updated. Their API keys and AI connections were revoked.'
-        : 'User updated.',
-      'ok',
-    );
+    toast.push(`User updated.${revokedNotice(res.data)}`, 'ok');
     onSuccess();
   }
 
