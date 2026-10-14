@@ -67,7 +67,7 @@
     "file-type": "^21.3.4",
     "helmet": "^8.3.0",
     "ioredis": "^5.4.1",
-    "jose": "^5.9.6",
+    "jose": "^6.2.12",
     "nestjs-pino": "^4.1.0",
     "nodemailer": "^10.0.13",
     "otplib": "^12.0.1",
