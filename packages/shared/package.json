@@ -27,7 +27,7 @@
     "test": "NODE_OPTIONS=--experimental-vm-modules jest --passWithNoTests"
   },
   "dependencies": {
-    "zod": "^3.25.0"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/jest": "^30.0.0",
