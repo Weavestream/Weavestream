@@ -47,6 +47,18 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@nestjs/*"
         update-types: ["version-update:semver-major"]
+      # Blocked by tooling, not by us: typescript-eslint supports TS < 6.1
+      # and ts-jest TS < 7. Remove when both support TypeScript 7.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # Blocked by tooling: eslint-plugin-react (via eslint-config-next) and
+      # eslint-plugin-jsx-a11y stop at ESLint 9. Remove when they support 10.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
+      # BullMQ 6 needs a 2-release rollout: legacy repeatables are swept on
+      # v5 first (the release after 1.10.0), then v6. Remove for release 2.
+      - dependency-name: "bullmq"
+        update-types: ["version-update:semver-major"]
     labels:
       - "dependencies"
 
@@ -64,6 +76,11 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
+    # Production runs Node LTS only. Remove once Node 26 is LTS (expected
+    # late October 2026), together with pinning the base images by digest.
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
     labels:
       - "dependencies"
       - "docker"
