@@ -2,6 +2,7 @@ import type { IntegrationSection, IntegrationSectionGroup } from '@weavestream/s
 import {
   badge,
   bool,
+  bytesMeter,
   date,
   datetime,
   facts,
@@ -132,14 +133,6 @@ export interface UserLookups {
   sharedMailboxes: Lookup<ReadonlySet<string>>;
   mailbox: Lookup<UsageReport<MailboxUsage>>;
   oneDrive: Lookup<UsageReport<OneDriveUsage>>;
-}
-
-function bytesMeter(label: string, used: number | undefined, total: number | undefined): Row {
-  if (typeof used !== 'number' || !Number.isFinite(used) || used < 0) return null;
-  if (typeof total === 'number' && Number.isFinite(total) && total > 0) {
-    return { kind: 'meter', label, used, total, unit: 'bytes' };
-  }
-  return { kind: 'bytes', label, value: used };
 }
 
 function usageGroup<T>(

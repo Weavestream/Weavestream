@@ -68,8 +68,83 @@ export function group(
 }
 
 
+/** A byte count, shown as a size. */
+export function bytes(label: string, value: number | null | undefined): Row {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? { kind: 'bytes', label, value } : null;
+}
+
+/** A usage bar in bytes, or the used amount alone when the total is unknown. */
+export function bytesMeter(label: string, used: number | undefined, total: number | undefined): Row {
+  if (typeof used !== 'number' || !Number.isFinite(used) || used < 0) return null;
+  if (typeof total === 'number' && Number.isFinite(total) && total > 0) {
+    return { kind: 'meter', label, used, total, unit: 'bytes' };
+  }
+  return bytes(label, used);
+}
+
+/** A value of unknown type: a boolean, number or text row, whichever it is. */
+export function any(label: string, value: unknown): Row {
+  if (typeof value === 'boolean') return bool(label, value);
+  if (typeof value === 'number') return num(label, value);
+  return text(label, str(value));
+}
+
+/** A label from upstream text: plain, non-empty, within the label cap. */
+export function upstreamLabel(value: string | undefined, fallback: string): string {
+  const cleaned = value ? clean(value, 120).trim() : '';
+  return cleaned || fallback;
+}
+
+/** "end_of_life" as "End of life". */
+export function humanize(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const spaced = value.replace(/_/g, ' ');
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/** An upper-case enum value ("NEEDS_ATTENTION") as "Needs attention". */
+export function enumLabel(value: string | undefined): string | undefined {
+  return humanize(value?.toLowerCase());
+}
+
+/** Binary size: "512 MB", "15.9 GB". */
+export function formatBytes(value: number): string {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  let scaled = value;
+  let unit = 0;
+  while (scaled >= 1024 && unit < units.length - 1) {
+    scaled /= 1024;
+    unit += 1;
+  }
+  return `${scaled >= 10 || unit === 0 ? Math.round(scaled) : scaled.toFixed(1)} ${units[unit]}`;
+}
+
+/** Disk capacity as sold (decimal): "512 GB", "2 TB", "1.9 TB". */
+export function formatDiskSize(value: number): string {
+  if (value >= 1e12) return `${Number((value / 1e12).toFixed(1))} TB`;
+  return `${Math.round(value / 1e9)} GB`;
+}
+
+type Obj = Record<string, unknown>;
+
 /** A trimmed non-empty string, else undefined. */
 export const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+
+/** A plain object, else undefined. */
+export const obj = (v: unknown): Obj | undefined => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : undefined);
+
+/** The plain objects of an array; anything else is dropped. */
+export const arr = (v: unknown): Obj[] => (Array.isArray(v) ? v.map(obj).filter((o): o is Obj => o !== undefined) : []);
+
+/** A finite number, or a numeric string as one; else undefined. */
+export const fin = (v: unknown): number | undefined => {
+  const n = typeof v === 'string' && v.trim() ? Number(v) : v;
+  return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
+};
+
+/** The strings of an array (objects give their `name` or `address`). */
+export const strings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : str(obj(x)?.name) ?? str(obj(x)?.address))).filter((x): x is string => !!x) : [];
 
 /** Present values only, cleaned: a fact the source does not report is omitted, never cleared. */
 export function facts(values: Record<string, string | undefined>): Record<string, string> {

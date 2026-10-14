@@ -991,6 +991,12 @@ export const integrationFieldMappingDtoSchema = z.object({
   resourceId: z.guid(),
   resourceKey: z.string(),
   sourceField: z.string(),
+  /**
+   * Whether the last complete sync received this source field on any
+   * record. False: the source stopped sending it and the layout field keeps
+   * its last value. Null: unknown (not synced yet).
+   */
+  receivedInLastSync: z.boolean().nullable(),
   targetFieldId: z.guid().nullable(),
   targetPath: z.string().nullable(),
   targetFieldSlug: z.string().nullable(),

@@ -55,6 +55,8 @@ type FieldRow = {
   targetFieldId: string;
   syncDirection: IntegrationSyncDirectionValue;
   transform: IntegrationTransform | null;
+  /** From the server for a saved row; null for a new or changed source field. */
+  receivedInLastSync: boolean | null;
 };
 
 /**
@@ -322,6 +324,7 @@ function ResourceEditor({
             targetFieldId: m.targetFieldId,
             syncDirection: m.syncDirection,
             transform: m.transform,
+            receivedInLastSync: m.receivedInLastSync ?? null,
           })),
       );
     })();
@@ -376,6 +379,7 @@ function ResourceEditor({
         targetFieldId: '',
         syncDirection: 'source_wins',
         transform: null,
+        receivedInLastSync: null,
       },
     ]);
   }
@@ -751,11 +755,18 @@ function FieldMappingRow({
         alignItems: 'start',
       }}
     >
-      <Field label="Source field">
+      <Field
+        label="Source field"
+        help={
+          row.receivedInLastSync === false
+            ? 'The last complete sync did not receive this field on any record. The target field keeps its last value.'
+            : undefined
+        }
+      >
         {sourceFields.length > 0 ? (
           <Select
             value={row.sourceField}
-            onChange={(e) => onChange({ sourceField: e.target.value })}
+            onChange={(e) => onChange({ sourceField: e.target.value, receivedInLastSync: null })}
           >
             <option value="">Select…</option>
             {sourceFields.map((f) => (
@@ -767,10 +778,15 @@ function FieldMappingRow({
         ) : (
           <input
             value={row.sourceField}
-            onChange={(e) => onChange({ sourceField: e.target.value })}
+            onChange={(e) => onChange({ sourceField: e.target.value, receivedInLastSync: null })}
             placeholder="upstream key"
             style={inputStyle}
           />
+        )}
+        {row.receivedInLastSync === false && (
+          <Tag tone="warn" style={{ marginTop: 6, alignSelf: 'flex-start' }}>
+            Not sent in the last sync
+          </Tag>
         )}
       </Field>
       <Field label="Target field">

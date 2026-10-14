@@ -596,6 +596,74 @@ describe('replaceFieldMappings standard-field types', () => {
   });
 });
 
+describe('listFieldMappings received flag', () => {
+  const resource = { key: 'records', label: 'Agent devices', targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [] };
+  const row = (sourceField: string) => ({
+    id: `m-${sourceField}`, resourceId: 'r-1', sourceField, targetFieldId: 'f-1', targetPath: null,
+    targetField: { name: 'F', slug: 'f', fieldType: 'TEXT' }, syncDirection: 'source_wins', transform: null,
+    createdAt: new Date(0), updatedAt: new Date(0),
+  });
+  const checkpoint = (mapping: string, day: number, sourceFields: string[]) => ({
+    integrationCompanyMappingId: mapping, lastCompletedAt: new Date(`2026-10-${String(day).padStart(2, '0')}T00:00:00Z`), sourceFields,
+  });
+  function setup(checkpoints: ReturnType<typeof checkpoint>[]) {
+    const prisma = {
+      integration: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'i-1', driver: 'ninjaone',
+          companyMappings: [{ id: 'map-a', companyId: 'company-a' }, { id: 'map-b', companyId: 'company-b' }],
+        }),
+      },
+      integrationResource: {
+        findUnique: jest.fn().mockResolvedValue({ id: 'r-1', assetLayoutId: 'l-1' }),
+        findFirst: jest.fn().mockResolvedValue({ id: 'r-1' }),
+      },
+      integrationFieldMapping: { findMany: jest.fn().mockResolvedValue([row('systemName'), row('warrantyEndDate')]) },
+      integrationSyncCheckpoint: { findMany: jest.fn().mockResolvedValue(checkpoints) },
+    };
+    const drivers = { get: jest.fn().mockReturnValue({ descriptor: { ...baseDescriptor, resources: [resource] } }) };
+    const service = new IntegrationsService(
+      prisma as never, {} as never, {} as never, drivers as never, {} as never, {} as never, {} as never,
+    );
+    return { prisma, service };
+  }
+  const flags = async (service: IntegrationsService) =>
+    (await service.listFieldMappings('i-1', 'records')).map((m) => [m.sourceField, m.receivedInLastSync]);
+
+  it('reads checkpoints scoped to the companies this integration maps', async () => {
+    const { prisma, service } = setup([checkpoint('map-a', 10, ['systemName'])]);
+    expect(await flags(service)).toEqual([['systemName', true], ['warrantyEndDate', false]]);
+    expect(prisma.integrationSyncCheckpoint.findMany).toHaveBeenCalledWith({
+      where: {
+        companyId: { in: ['company-a', 'company-b'] },
+        companyMapping: { integrationId: 'i-1' },
+        resourceId: 'r-1',
+        lastCompletedAt: { not: null },
+      },
+      select: { integrationCompanyMappingId: true, lastCompletedAt: true, sourceFields: true },
+    });
+  });
+
+  it("counts only each mapping's latest traversal, so an older run cannot hide a missing key", async () => {
+    const { service } = setup([
+      checkpoint('map-a', 1, ['systemName', 'warrantyEndDate']), // older full sync
+      checkpoint('map-a', 9, ['systemName']), // latest incremental sync
+      checkpoint('map-b', 5, ['systemName']),
+    ]);
+    expect(await flags(service)).toEqual([['systemName', true], ['warrantyEndDate', false]]);
+  });
+
+  it('counts a key any mapping received in its latest traversal', async () => {
+    const { service } = setup([checkpoint('map-a', 9, ['systemName']), checkpoint('map-b', 9, ['systemName', 'warrantyEndDate'])]);
+    expect(await flags(service)).toEqual([['systemName', true], ['warrantyEndDate', true]]);
+  });
+
+  it('flags nothing while no traversal has recorded keys', async () => {
+    const { service } = setup([checkpoint('map-a', 9, [])]);
+    expect(await flags(service)).toEqual([['systemName', null], ['warrantyEndDate', null]]);
+  });
+});
+
 describe('integration deletion', () => {
   const ids = {
     actor: '00000000-0000-4000-8000-000000000001',

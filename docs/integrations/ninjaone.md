@@ -51,6 +51,33 @@ The NinjaOne driver flattens upstream `/v2/devices-detailed` responses into stru
 | **Maintenance** | Maintenance mode status, scheduled start/end times, maintenance reason |
 | **Lifecycle** | Created timestamp, last contact timestamp, last update timestamp, approval status, offline state |
 
+### The NinjaOne section on the asset page
+
+Each synced device also shows a read-only **NinjaOne** section on its asset page. You do not map it. It shows the live state around the facts you map, and it leaves out hostname, make, model, OS, CPU, RAM and the primary IP and MAC addresses:
+
+| Group | Contents |
+|---|---|
+| **Status** | Health (healthy, needs attention, unhealthy), online or offline, last contact, last boot, pending reboot and its reason, logged-in user, maintenance mode and its end, approval (only when not approved), location, policy, device class |
+| **Storage** | One usage bar per volume (used = capacity minus free space) |
+| **Security** | Antivirus product, state and definitions, active, quarantined and blocked threats, critical and high vulnerabilities, BitLocker state per volume |
+| **Patches** | Pending and failed OS and software patch counts, and the first 20 failed and pending patches by name (rejected patches are not listed) |
+| **Alerts** | Number of active alerts and the first 20 with severity and start time |
+| **Network** | Public IP, all IP and MAC addresses, domain and domain role, DNS and NetBIOS names, and per network interface with an address its MAC, IP, gateway, DNS servers, link speed and status |
+| **Warranty & owner** | Warranty state (flagged 90 days before it ends), start and end dates, manufacturer fulfilment date, and the assigned owner's name |
+| **Hardware detail** | Each processor, each physical disk with a status summary, chassis type, virtual machine flag, BIOS serial (when it differs from the serial) and asset serial |
+| **Virtualization** | VM guests: power state, guest OS, guest tools, CPU cores, snapshots. VM hosts: hypervisor, host CPU, service tag |
+| **Backup** | Only with NinjaOne Backup: last successful and last failed backup, cloud and local backup size |
+| **Tags** | NinjaOne tags |
+| **Notes** | NinjaOne device notes |
+
+The section uses the **Monitoring** scope you already granted. For agent devices, each sync reads 7 NinjaOne reports once per organization (device health, alerts, OS patches, software patches, antivirus, network interfaces, disks). Network and non-agent devices need only device health and alerts. Weavestream spaces its NinjaOne requests at most 5 per second per API client. When NinjaOne answers "too many requests", Weavestream holds all requests of that client for the time NinjaOne asks, and retries the page later.
+
+If NinjaOne refuses a report (your plan or client app does not include it) or fails to return one, the device still syncs and the group says "Not available". A report above 50,000 entries in one organization is not shown, so you never see a partial list.
+
+### When NinjaOne stops sending a mapped field
+
+When a sync does not receive a field, Weavestream does not change or clear the layout field: it keeps its last value. After each complete sync, **Field mappings** marks a mapped source field that no device sent with **Not sent in the last sync**. Map it to another source field, or remove the mapping. A new field that NinjaOne starts to send appears in the source field list on its own.
+
 ## Match Key Recommendations
 
 When configuring resource mappings, choose a **Match Key** that uniquely identifies device records:

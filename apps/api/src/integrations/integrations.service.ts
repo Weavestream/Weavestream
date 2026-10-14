@@ -1271,11 +1271,13 @@ export class IntegrationsService {
         },
       },
     });
+    const received = await this.receivedSourceFields(integrationId, resource.id);
     return rows.map((r) => ({
       id: r.id,
       resourceId: r.resourceId,
       resourceKey,
       sourceField: r.sourceField,
+      receivedInLastSync: received ? received.has(r.sourceField) : null,
       targetFieldId: r.targetFieldId,
       targetPath: r.targetPath,
       targetFieldName: r.targetField?.name ?? null,
@@ -1286,6 +1288,46 @@ export class IntegrationsService {
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
     }));
+  }
+
+  /**
+   * Source field keys this resource's latest complete traversal received,
+   * per company mapping, combined; null when none recorded any (never
+   * synced, or a typed driver), so nothing is flagged.
+   */
+  private async receivedSourceFields(
+    integrationId: string,
+    resourceId: string,
+  ): Promise<ReadonlySet<string> | null> {
+    // Checkpoints are tenant-scoped: read them like completeness does, with
+    // the integration's own mapped companies as the exact company scope.
+    const { companyIds } = await this.requireReconstructionReadScope(integrationId, { resourceId });
+    if (companyIds.length === 0) return null;
+    const checkpoints = await this.withReconstructionCompanyScope(companyIds, () =>
+      this.prisma.integrationSyncCheckpoint.findMany({
+        where: {
+          companyId: { in: companyIds },
+          companyMapping: { integrationId },
+          resourceId,
+          lastCompletedAt: { not: null },
+        },
+        select: { integrationCompanyMappingId: true, lastCompletedAt: true, sourceFields: true },
+      }),
+    );
+    // Only each mapping's latest traversal (either mode) counts: an older
+    // run that still received a key must not hide that the latest did not.
+    // Accepted limit: a resumed traversal advances lastCompletedAt but keeps
+    // the previous keys (it saw only the tail), so a warning can hide for one
+    // sync interval. The next traversal from the first page corrects it; a
+    // separate refresh timestamp was judged not worth a migration.
+    const latest = new Map<string, { at: number; keys: string[] }>();
+    for (const checkpoint of checkpoints) {
+      const at = checkpoint.lastCompletedAt!.getTime();
+      const seen = latest.get(checkpoint.integrationCompanyMappingId);
+      if (!seen || at > seen.at) latest.set(checkpoint.integrationCompanyMappingId, { at, keys: checkpoint.sourceFields });
+    }
+    const keys = new Set([...latest.values()].flatMap((entry) => entry.keys));
+    return keys.size > 0 ? keys : null;
   }
 
   async replaceFieldMappings(

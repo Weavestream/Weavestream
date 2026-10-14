@@ -19,6 +19,56 @@ export interface FetchWithRetryOpts {
   backoffMs: number;
   correlationId: string;
   serviceName: string;
+  /**
+   * Space every attempt (retries included) at least `minIntervalMs` apart
+   * across all callers that share `key`, so a provider that rate-limits
+   * per account is never sent a burst.
+   */
+  pace?: RequestPace;
+}
+
+export interface RequestPace {
+  /** One per upstream account (e.g. the integration id). Never a secret. */
+  key: string;
+  minIntervalMs: number;
+}
+
+/**
+ * Next free request slot per pace key, and the time until which a 429
+ * holds the key. ponytail: single process; a second API or worker process
+ * paces on its own, and the 429 handling below still backs off if the
+ * provider pushes back.
+ */
+const paceSlots = new Map<string, number>();
+const paceHolds = new Map<string, number>();
+
+/** @internal only `*.spec.ts` should call this. */
+export function __resetRequestPaceForTests(): void {
+  paceSlots.clear();
+  paceHolds.clear();
+}
+
+/**
+ * Waits for this key's next slot and reserves the one after it. A caller
+ * that wakes inside a hold (a 429 arrived while it waited) queues again
+ * behind the hold instead of sending.
+ */
+export async function awaitRequestSlot(pace: RequestPace): Promise<void> {
+  for (;;) {
+    const now = Date.now();
+    for (const [key, slot] of paceSlots) if (slot <= now) paceSlots.delete(key);
+    for (const [key, until] of paceHolds) if (until <= now) paceHolds.delete(key);
+    const slot = Math.max(now, paceHolds.get(pace.key) ?? 0, paceSlots.get(pace.key) ?? 0);
+    paceSlots.set(pace.key, slot + pace.minIntervalMs);
+    if (slot > now) await sleep(slot - now);
+    if ((paceHolds.get(pace.key) ?? 0) <= Date.now()) return;
+  }
+}
+
+/** A rate-limit response holds every caller sharing the key until it may retry. */
+function holdRequestSlots(pace: RequestPace, waitMs: number): void {
+  const until = Date.now() + waitMs;
+  if ((paceHolds.get(pace.key) ?? 0) < until) paceHolds.set(pace.key, until);
 }
 
 /**
@@ -33,6 +83,7 @@ export async function fetchWithRetry(
   let lastErr: unknown = null;
   while (attempt <= opts.maxRetries) {
     try {
+      if (opts.pace) await awaitRequestSlot(opts.pace);
       // safeFetch handles its own AbortController + timeout, validates
       // the resolved IPs against the egress blocklist, and caps the
       // response body. Operator-supplied integration baseUrls flow
@@ -50,13 +101,15 @@ export async function fetchWithRetry(
           retryAfterRaw,
           opts.backoffMs * 2 ** attempt,
         );
+        if (opts.pace) holdRequestSlots(opts.pace, retryAfterMs);
         if (attempt === opts.maxRetries) {
           throw new DriverRateLimitError(
             `${opts.serviceName} rate limited after ${opts.maxRetries + 1} attempts`,
             retryAfterMs,
           );
         }
-        await sleep(retryAfterMs);
+        // A paced caller waits for its slot, which the hold above moved past the delay.
+        if (!opts.pace) await sleep(retryAfterMs);
         attempt += 1;
         continue;
       }

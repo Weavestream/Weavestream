@@ -132,4 +132,37 @@ describe('FieldMappingsTab target-aware configuration', () => {
       });
     });
   });
+
+  it('flags a mapped source field the last sync did not receive, until the source field changes', async () => {
+    const assetResource = resourceRow({
+      resourceKey: 'records', resourceLabel: 'Agent devices', targetKind: 'asset', targetConfig: {},
+      assetLayoutId: '00000000-0000-4000-8000-000000000010',
+    });
+    const field = (id: string, name: string) => ({ id, name, fieldType: 'TEXT', archivedAt: null });
+    apiFetch.mockImplementation(async (url: string) => {
+      if (url === '/layouts') return { ok: true, data: { items: [{ id: assetResource.assetLayoutId, name: 'Computers', isActive: true, archivedAt: null }] } };
+      if (url.startsWith('/layouts/')) return { ok: true, data: { layout: { fields: [field('00000000-0000-4000-8000-000000000011', 'Warranty'), field('00000000-0000-4000-8000-000000000012', 'Hostname')] } } };
+      if (url.endsWith('/field-mappings')) return { ok: true, data: [
+        { id: 'stale', sourceField: 'warrantyEndDate', receivedInLastSync: false, targetFieldId: '00000000-0000-4000-8000-000000000011', targetPath: null, syncDirection: 'source_wins', transform: null },
+        { id: 'fresh', sourceField: 'systemName', receivedInLastSync: true, targetFieldId: '00000000-0000-4000-8000-000000000012', targetPath: null, syncDirection: 'source_wins', transform: null },
+      ] };
+      if (url.endsWith('/source-fields')) return { ok: true, data: { fields: [
+        { key: 'warrantyEndDate', label: 'Warranty end' }, { key: 'systemName', label: 'System name' }, { key: 'dnsName', label: 'DNS name' },
+      ] } };
+      return { ok: true, data: assetResource };
+    });
+    render(<FieldMappingsTab
+      integration={{ id: 'integration-1', resources: [assetResource] } as never}
+      mappings={[{}] as never} driver={{} as never}
+      resource={{ key: 'records', label: 'Agent devices', targetKind: 'asset', targetConfig: {}, dependsOnResourceKeys: [] } as never}
+    />);
+    const staleSelect = () => screen.getAllByLabelText(/^Source field/).find((el) => (el as HTMLSelectElement).value === 'warrantyEndDate');
+    await waitFor(() => expect(staleSelect()).toBeDefined());
+    expect(screen.getAllByText('Not sent in the last sync')).toHaveLength(1);
+    // The tag sits with the stale row's source field.
+    expect(staleSelect()!.closest('label')).toHaveTextContent('Not sent in the last sync');
+
+    fireEvent.change(staleSelect()!, { target: { value: 'dnsName' } });
+    expect(screen.queryByText('Not sent in the last sync')).not.toBeInTheDocument();
+  });
 });

@@ -1,5 +1,8 @@
 import {
   IntegrationSyncRunnerService,
+  SOURCE_FIELD_KEYS_CAP,
+  collectSourceFieldKeys,
+  storedSourceFields,
   validateDriverFetchPage,
 } from './integration-sync-runner.service.js';
 import type {
@@ -713,6 +716,28 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       const call = (tx.integrationSyncRecord.upsert.mock.calls as unknown as Array<[{ create: Record<string, unknown>; update: Record<string, unknown> }]>)[0]![0];
       return call;
     }
+
+    function checkpointData(tx: ReturnType<typeof setup>['tx']) {
+      return (tx.integrationSyncCheckpoint.upsert.mock.calls as unknown as Array<[{ create: Record<string, unknown>; update: Record<string, unknown> }]>)[0]![0];
+    }
+
+    it('records the source field keys of a complete traversal on the checkpoint', async () => {
+      const { service, tx } = arrange(undefined);
+      await expect(run(service)).resolves.toMatchObject({ status: 'succeeded' });
+      expect(checkpointData(tx).create.sourceFields).toEqual(['email']);
+      expect(checkpointData(tx).update.sourceFields).toEqual(['email']);
+    });
+
+    it('keeps the stored keys when the traversal resumed mid-way (it saw only the tail)', async () => {
+      const ctx = arrange(undefined);
+      ctx.prisma.integrationSyncCheckpoint.findUnique.mockResolvedValue({
+        cursor: 'page-2', schemaVersion: null, snapshotAt: new Date('2026-07-14T10:00:00.000Z'),
+        highWaterAt: null, authoritative: true,
+      });
+      await expect(run(ctx.service)).resolves.toMatchObject({ status: 'succeeded' });
+      expect(checkpointData(ctx.tx).update).not.toHaveProperty('sourceFields');
+      expect(checkpointData(ctx.tx).create).not.toHaveProperty('sourceFields');
+    });
 
     it('stores a valid section on the binding (create and replace on update)', async () => {
       const { service, tx } = arrange(validSection);
@@ -2169,5 +2194,26 @@ describe('Breeze foundational asset composition', () => {
     });
     expect(assets.size).toBe(countBeforeMigration);
     expect(siteA).toMatchObject({ externalId: `${org}:sites:site-uuid`, externalSource: `breeze:${integrationA}`, name: 'HQ renamed' });
+  });
+});
+
+describe('source field keys', () => {
+  const legacy = (fields: Record<string, unknown>) => ({ externalId: 'x', displayName: null, fields, updatedAt: null });
+
+  it('collects the keys of legacy records only, skipping keys no mapping could name', () => {
+    const keys = new Set<string>();
+    collectSourceFieldKeys(keys, [
+      legacy({ systemName: 'a', osName: null }),
+      legacy({ systemName: 'b', ['bad\u0000key']: 1, ['x'.repeat(257)]: 1 }),
+      { reconstructionInput: { externalId: 'typed' } } as never,
+    ]);
+    expect(storedSourceFields(keys)).toEqual(['osName', 'systemName']);
+  });
+
+  it('stores nothing (unknown) rather than a cut list when there are too many keys', () => {
+    const keys = new Set<string>();
+    const wide = Object.fromEntries(Array.from({ length: SOURCE_FIELD_KEYS_CAP + 1 }, (_, i) => [`k${i}`, i]));
+    collectSourceFieldKeys(keys, [legacy(wide)]);
+    expect(storedSourceFields(keys)).toEqual([]);
   });
 });

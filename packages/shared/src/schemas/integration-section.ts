@@ -22,6 +22,7 @@ export const INTEGRATION_SECTION_ICONS = [
   'android',
   'level',
   'microsoft',
+  'ninjaone',
 ] as const;
 export const integrationSectionIconSchema = z.enum(INTEGRATION_SECTION_ICONS);
 export type IntegrationSectionIcon = z.infer<typeof integrationSectionIconSchema>;

@@ -15,7 +15,8 @@ import { LEVEL_SETUP_GUIDE } from './level.setup-guide.js';
 import { ORGANIZATIONS_UNVERIFIED_NOTE } from './level.diagnose.js';
 import { __resetRunCacheForTests } from '../run-cache.js';
 import { MATCH_KEYS } from '../standard-resources.js';
-import { deviceStandardFields, formatDiskSize, formatRam, privateIpv4 } from './level.sections.js';
+import { deviceStandardFields, formatRam, privateIpv4 } from './level.sections.js';
+import { formatDiskSize } from '../section-rows.js';
 import { setDefaultFetchForTests, setDefaultResolveForTests } from '../../../common/egress/safe-fetch.js';
 
 const API = 'https://api.level.io/v2';

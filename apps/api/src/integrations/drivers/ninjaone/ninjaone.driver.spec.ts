@@ -12,9 +12,13 @@ import {
   type IntegrationContext,
 } from '../integration-driver.js';
 import {
+  NINJAONE_MIN_REQUEST_INTERVAL_MS,
   NinjaOneDriver,
   __resetNinjaOneTokenCacheForTests,
+  __setNinjaOneRequestIntervalForTests,
 } from './ninjaone.driver.js';
+import { __resetRunCacheForTests } from '../run-cache.js';
+import { __resetRequestPaceForTests } from '../driver-utils.js';
 import { NinjaOneRequestError } from './ninjaone.diagnose.js';
 import { NINJAONE_SETUP_GUIDE } from './ninjaone.setup-guide.js';
 import { ORGANIZATIONS_UNVERIFIED_NOTE } from './ninjaone.diagnose.js';
@@ -31,6 +35,10 @@ import {
 // scripted data frame would be returned with no caller).
 beforeEach(() => {
   __resetNinjaOneTokenCacheForTests();
+  __resetRunCacheForTests();
+  __resetRequestPaceForTests();
+  // Pacing is covered on its own below; the scripted flows run unspaced.
+  __setNinjaOneRequestIntervalForTests(0);
 });
 
 /**
@@ -64,8 +72,25 @@ interface RecordedCall {
   headers?: Record<string, string>;
 }
 
-function installFetchScript(script: ScriptedResponse[]) {
+/** Section report endpoints, answered from `lookups` instead of the main script. */
+function isLookupPath(pathname: string): boolean {
+  return pathname.startsWith('/v2/queries/') || pathname === '/v2/alerts';
+}
+
+/**
+ * `script` answers the main calls in order. Report calls (`/v2/queries/*`,
+ * `/v2/alerts`) are recorded in `lookupCalls` and answered from `lookups`
+ * by pathname (a list is consumed in order); an unlisted report is empty.
+ */
+function installFetchScript(
+  script: ScriptedResponse[],
+  lookups: Record<string, ScriptedResponse | ScriptedResponse[]> = {},
+) {
   const calls: RecordedCall[] = [];
+  const lookupCalls: RecordedCall[] = [];
+  const lookupQueues = new Map(
+    Object.entries(lookups).map(([path, r]) => [path, Array.isArray(r) ? [...r] : [r]]),
+  );
   let i = 0;
   const shim = (async (
     input: string | URL | Request,
@@ -77,13 +102,26 @@ function installFetchScript(script: ScriptedResponse[]) {
         : input instanceof URL
           ? input.toString()
           : (input as Request).url;
-    calls.push({
+    const call = {
       url,
       method: init?.method ?? 'GET',
       body: typeof init?.body === 'string' ? init.body : undefined,
       headers: init?.headers as Record<string, string> | undefined,
-    });
-    const next = script[i++];
+    };
+    const pathname = new URL(url).pathname;
+    let next: ScriptedResponse | undefined;
+    if (isLookupPath(pathname)) {
+      lookupCalls.push(call);
+      const queue = lookupQueues.get(pathname);
+      next = queue && queue.length > 1 ? queue.shift() : queue?.[0];
+      next ??= {
+        kind: 'json',
+        body: pathname === '/v2/alerts' ? [] : { cursor: null, results: [] },
+      };
+    } else {
+      calls.push(call);
+      next = script[i++];
+    }
     if (!next) {
       throw new Error(`NinjaOne driver test: unscripted fetch to ${url}`);
     }
@@ -104,6 +142,7 @@ function installFetchScript(script: ScriptedResponse[]) {
   setDefaultResolveForTests(async () => ['1.2.3.4']);
   return {
     calls,
+    lookupCalls,
     restore: () => {
       setDefaultFetchForTests(null);
       setDefaultResolveForTests(null);
@@ -613,6 +652,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
           externalId: '99',
           displayName: 'x.lan',
           fields: { id: 99, systemName: 'x.lan', deviceType: 'AgentDevice' },
+          section: expect.objectContaining({ title: 'NinjaOne' }),
           updatedAt: null,
         },
       ]);
@@ -1632,5 +1672,170 @@ describe('NinjaOneDriver never echoes provider response text', () => {
     } finally {
       fx.restore();
     }
+  });
+});
+
+describe('NinjaOneDriver asset-page section', () => {
+  const TOKEN = { kind: 'json' as const, body: { access_token: 'tok-1' } };
+  const devices = (...ids: number[]) => ({
+    kind: 'json' as const,
+    body: ids.map((id) => agent({ id, organizationId: 7, systemName: `host-${id}` })),
+  });
+  const results = (rows: Record<string, unknown>[], cursor: string | null = null) => ({
+    kind: 'json' as const,
+    body: { cursor: cursor ? { name: cursor, offset: 0, count: rows.length, expires: 0 } : null, results: rows },
+  });
+  const status = (code: number) => ({ kind: 'text' as const, status: code, body: 'provider text' });
+  const pathsOf = (calls: RecordedCall[]) => calls.map((c) => new URL(c.url).pathname);
+  const fetchCtx = (overrides: Partial<FetchRecordsContext> = {}) =>
+    ({ ...makeFetchCtx(), snapshotAt: '2026-10-14T12:00:00.000Z', ...overrides }) as FetchRecordsContext;
+  const rows = (section: unknown, groupKey: string) =>
+    (section as { groups: Array<{ key: string; rows: Array<{ label: string; value: unknown }> }> }).groups
+      .find((g) => g.key === groupKey)?.rows ?? [];
+
+  it('loads each agent report once per run, scoped to the mapped organisation', async () => {
+    const fx = installFetchScript([TOKEN, { ...devices(1, 2), body: [...devices(1, 2).body, ...Array.from({ length: 198 }, (_, i) => agent({ id: 10 + i }))] }, devices(300)], {
+      '/v2/queries/device-health': results([{ deviceId: 1, healthStatus: 'HEALTHY' }]),
+      '/v2/alerts': { kind: 'json', body: [{ deviceId: 2, severity: 'CRITICAL', subject: 'CPU' }] },
+    });
+    try {
+      const driver = new NinjaOneDriver();
+      const page1 = await driver.fetchRecords(fetchCtx(), null);
+      expect(page1.snapshotAt).toBe('2026-10-14T12:00:00.000Z');
+      expect(pathsOf(fx.lookupCalls)).toEqual([
+        '/v2/queries/device-health',
+        '/v2/alerts',
+        '/v2/queries/os-patches',
+        '/v2/queries/software-patches',
+        '/v2/queries/antivirus-status',
+        '/v2/queries/network-interfaces',
+        '/v2/queries/disks',
+      ]);
+      for (const call of fx.lookupCalls) expect(new URL(call.url).searchParams.get('df')).toBe('org=7');
+      expect(new URL(fx.lookupCalls[0]!.url).searchParams.get('pageSize')).toBe('1000');
+
+      const byId = new Map(page1.records.map((r) => [r.externalId, r]));
+      expect(rows(byId.get('1')!.section, 'status')).toContainEqual(expect.objectContaining({ label: 'Health', value: 'Healthy' }));
+      expect(rows(byId.get('2')!.section, 'alerts')).toContainEqual(expect.objectContaining({ label: 'Active alerts', value: '1' }));
+
+      // The next page of the same run reuses the reports.
+      await driver.fetchRecords(fetchCtx(), page1.cursor);
+      expect(fx.lookupCalls).toHaveLength(7);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('loads only health and alerts for non-agent devices', async () => {
+    const fx = installFetchScript([TOKEN, { kind: 'json', body: [{ id: 5, organizationId: 7, deviceType: 'NMSTarget', nodeClass: 'NMS_SWITCH' }] }]);
+    try {
+      await new NinjaOneDriver().fetchRecords(fetchCtx({ resourceKey: 'nms' }), null);
+      expect(pathsOf(fx.lookupCalls)).toEqual(['/v2/queries/device-health', '/v2/alerts']);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('loads no report when the page has no devices', async () => {
+    const fx = installFetchScript([TOKEN, { kind: 'json', body: [] }]);
+    try {
+      const page = await new NinjaOneDriver().fetchRecords(fetchCtx(), null);
+      expect(page.records).toEqual([]);
+      expect(fx.lookupCalls).toEqual([]);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('follows the report cursor until an empty page', async () => {
+    const fx = installFetchScript([TOKEN, devices(1)], {
+      '/v2/queries/os-patches': [
+        results([{ deviceId: 1, name: 'First', status: 'PENDING' }], 'cur-1'),
+        results([{ deviceId: 1, name: 'Second', status: 'PENDING' }], 'cur-1'),
+        results([], 'cur-1'),
+      ],
+    });
+    try {
+      const page = await new NinjaOneDriver().fetchRecords(fetchCtx(), null);
+      const patchCalls = fx.lookupCalls.filter((c) => c.url.includes('/os-patches'));
+      expect(patchCalls.map((c) => new URL(c.url).searchParams.get('cursor'))).toEqual([null, 'cur-1', 'cur-1']);
+      expect(rows(page.records[0]!.section, 'patches')).toContainEqual(
+        expect.objectContaining({ label: 'Pending OS patches', value: ['First', 'Second'] }),
+      );
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('never shows report rows of a device outside this organisation page', async () => {
+    const fx = installFetchScript([TOKEN, devices(1)], {
+      // As if NinjaOne ignored df=org=7: another tenant's device is in the report.
+      '/v2/queries/device-health': results([{ deviceId: 999, healthStatus: 'UNHEALTHY' }]),
+      '/v2/alerts': { kind: 'json', body: [{ deviceId: 999, subject: 'Other tenant secret project' }] },
+    });
+    try {
+      const page = await new NinjaOneDriver().fetchRecords(fetchCtx(), null);
+      expect(page.records.map((r) => r.externalId)).toEqual(['1']);
+      expect(JSON.stringify(page.records)).not.toContain('Other tenant');
+      expect(JSON.stringify(page.records)).not.toContain('Unhealthy');
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('turns a refused or failed report into a note and still syncs the device', async () => {
+    const fx = installFetchScript([TOKEN, devices(1), TOKEN, TOKEN], {
+      '/v2/queries/device-health': status(403),
+      '/v2/alerts': status(404),
+      '/v2/queries/antivirus-status': status(500),
+    });
+    try {
+      const page = await new NinjaOneDriver().fetchRecords(fetchCtx(), null);
+      expect(page.records).toHaveLength(1);
+      const section = page.records[0]!.section;
+      expect(rows(section, 'status')).toContainEqual(expect.objectContaining({
+        label: 'Health',
+        value: 'Not available: your NinjaOne API client or plan does not include this data.',
+      }));
+      expect(rows(section, 'alerts')).toContainEqual(expect.objectContaining({
+        label: 'Alerts',
+        value: 'Not available: your NinjaOne API client or plan does not include this data.',
+      }));
+      expect(rows(section, 'security')).toContainEqual(expect.objectContaining({
+        label: 'Antivirus',
+        value: 'Not available: NinjaOne did not return this data. It is retried on the next sync.',
+      }));
+      expect(JSON.stringify(section)).not.toContain('provider text');
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('lets a rate limit on a report stop the page so the runner retries it', async () => {
+    const limited = { kind: 'text' as const, status: 429, body: '', headers: { 'Retry-After': '0' } };
+    const fx = installFetchScript([TOKEN, devices(1)], {
+      '/v2/queries/device-health': [limited, limited, limited, limited],
+    });
+    try {
+      await expect(new NinjaOneDriver().fetchRecords(fetchCtx(), null)).rejects.toBeInstanceOf(DriverRateLimitError);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('spaces its requests at the NinjaOne pace', async () => {
+    __setNinjaOneRequestIntervalForTests(40);
+    const fx = installFetchScript([TOKEN, { kind: 'json', body: [{ id: 5, organizationId: 7, deviceType: 'NMSTarget' }] }]);
+    try {
+      const started = Date.now();
+      await new NinjaOneDriver().fetchRecords(fetchCtx({ resourceKey: 'nms' }), null);
+      const elapsed = Date.now() - started;
+      // Token, devices, health, alerts: three gaps of at least 40 ms.
+      expect(fx.calls.length + fx.lookupCalls.length).toBe(4);
+      expect(elapsed).toBeGreaterThanOrEqual(3 * 40 - 5);
+    } finally {
+      fx.restore();
+    }
+    expect(NINJAONE_MIN_REQUEST_INTERVAL_MS).toBeGreaterThanOrEqual(200);
   });
 });

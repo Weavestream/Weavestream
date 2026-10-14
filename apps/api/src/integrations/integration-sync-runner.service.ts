@@ -370,6 +370,12 @@ export class IntegrationSyncRunnerService {
       : true;
     const seenCursors = new Set<string>();
     if (cursor !== null) seenCursors.add(cursor);
+    // Source field keys the legacy records of this traversal carried, kept on
+    // the checkpoint so Field mappings can flag a mapped key the source
+    // stopped sending. Only a traversal this call saw from its first page
+    // has the whole set; a resumed one leaves the stored keys as they are.
+    const sourceFieldKeys = new Set<string>();
+    const traversalStartedFresh = cursor === null;
     let pages = 0;
     // Per-field legacy projection drops accumulate across the traversal and
     // surface as ONE authority-neutral gap observation per page flush
@@ -429,6 +435,8 @@ export class IntegrationSyncRunnerService {
         if (pages > RECONSTRUCTION_RUNTIME_LIMITS.pagesPerTraversal) {
           throw new BadRequestException('Driver traversal exceeded 1000 pages.');
         }
+
+        collectSourceFieldKeys(sourceFieldKeys, page.records);
 
         const pageTotals = emptyTotals();
         const pageConflicts: SyncRunConflict[] = [];
@@ -779,6 +787,9 @@ export class IntegrationSyncRunnerService {
             const highWater = page.terminal
               ? traversalHighWater ?? deriveLegacyHighWater(page.records)
               : checkpoint?.highWaterAt?.toISOString() ?? null;
+            const sourceFields = page.terminal && authoritativeThroughPage && traversalStartedFresh
+              ? { sourceFields: storedSourceFields(sourceFieldKeys) }
+              : {};
             await tx.integrationSyncCheckpoint.upsert({
               where: {
                 integrationCompanyMappingId_resourceId_mode: {
@@ -798,6 +809,7 @@ export class IntegrationSyncRunnerService {
                 lastCompletedAt: page.terminal && authoritativeThroughPage ? new Date() : null,
                 lastFullCompletedAt: page.terminal && authoritativeThroughPage && mode === 'full'
                   ? new Date() : null,
+                ...sourceFields,
               },
               update: {
                 cursor: page.terminal ? null : page.cursor,
@@ -809,6 +821,7 @@ export class IntegrationSyncRunnerService {
                   lastCompletedAt: new Date(),
                   ...(mode === 'full' ? { lastFullCompletedAt: new Date() } : {}),
                 } : {}),
+                ...sourceFields,
               },
             });
           }
@@ -1300,6 +1313,27 @@ export function parseRecordSection(raw: unknown): IntegrationSection | 'invalid'
   const parts: unknown[] = [head];
   for (const { rows, ...group } of groups) parts.push(group, ...rows);
   return parts.every((part) => scanSensitiveMaterial(part) === 'safe') ? parsed.data : 'invalid';
+}
+
+/** Most source field keys kept per checkpoint; a larger set is stored as unknown (empty). */
+export const SOURCE_FIELD_KEYS_CAP = 2_000;
+const SOURCE_FIELD_KEY_MAX = 256;
+
+/** Adds the field keys of a page's legacy records (typed inputs have none). */
+export function collectSourceFieldKeys(keys: Set<string>, records: readonly DriverRecord[]): void {
+  for (const record of records) {
+    if (keys.size > SOURCE_FIELD_KEYS_CAP) return;
+    if (record.reconstructionInput !== undefined || !record.fields) continue;
+    for (const key of Object.keys(record.fields)) {
+      // A key no mapping could name (too long, or a NUL Postgres cannot store) is skipped.
+      if (key.length > 0 && key.length <= SOURCE_FIELD_KEY_MAX && !key.includes('\u0000')) keys.add(key);
+    }
+  }
+}
+
+/** The keys to store, sorted; none (unknown) when over the cap, so nothing is flagged. */
+export function storedSourceFields(keys: ReadonlySet<string>): string[] {
+  return keys.size > SOURCE_FIELD_KEYS_CAP ? [] : [...keys].sort();
 }
 
 function deriveLegacyHighWater(records: DriverRecord[]): string | null {

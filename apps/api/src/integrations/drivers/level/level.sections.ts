@@ -1,5 +1,27 @@
 import type { IntegrationSection, IntegrationSectionGroup } from '@weavestream/shared';
-import { badge, bool, clean, datetime, group, list, num, text, toIso, type Lookup, type Row } from '../section-rows.js';
+import {
+  any,
+  arr,
+  badge,
+  bool,
+  clean,
+  datetime,
+  fin,
+  formatBytes,
+  formatDiskSize,
+  group,
+  humanize,
+  list,
+  num,
+  obj,
+  str,
+  strings,
+  text,
+  toIso,
+  upstreamLabel,
+  type Lookup,
+  type Row,
+} from '../section-rows.js';
 
 /**
  * Pure builders for Level device records. Standard facts (hostname, OS,
@@ -37,46 +59,6 @@ export interface LevelUpdate {
   device_id?: string;
   name?: string;
   category?: string;
-}
-
-const obj = (v: unknown): Obj | undefined => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Obj) : undefined);
-const arr = (v: unknown): Obj[] => (Array.isArray(v) ? v.map(obj).filter((o): o is Obj => o !== undefined) : []);
-const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
-const fin = (v: unknown): number | undefined => {
-  const n = typeof v === 'string' && v.trim() ? Number(v) : v;
-  return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
-};
-const strings = (v: unknown): string[] =>
-  Array.isArray(v) ? v.map((x) => (typeof x === 'string' ? x : str(obj(x)?.name) ?? str(obj(x)?.address))).filter((x): x is string => !!x) : [];
-
-/** A label from upstream text: plain, non-empty, within the label cap. */
-function upstreamLabel(value: string | undefined, fallback: string): string {
-  const cleaned = value ? clean(value, 120).trim() : '';
-  return cleaned || fallback;
-}
-
-/** A value of unknown type: a boolean, number or text row, whichever it is. */
-function any(label: string, value: unknown): Row {
-  if (typeof value === 'boolean') return bool(label, value);
-  if (typeof value === 'number') return num(label, value);
-  return text(label, str(value));
-}
-
-export function formatBytes(bytes: number): string {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
-}
-
-function humanize(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const spaced = value.replace(/_/g, ' ');
-  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 function riskTone(risk: string): 'neutral' | 'success' | 'warning' | 'danger' {
@@ -252,12 +234,6 @@ export function privateIpv4(value: string): string | undefined {
 export function formatRam(bytes: number): string {
   const gb = Math.round(bytes / 2 ** 30);
   return gb >= 1 ? `${gb} GB` : formatBytes(bytes);
-}
-
-/** Disk capacity as sold (decimal): "512 GB", "2 TB", "1.9 TB". */
-export function formatDiskSize(bytes: number): string {
-  if (bytes >= 1e12) return `${Number((bytes / 1e12).toFixed(1))} TB`;
-  return `${Math.round(bytes / 1e9)} GB`;
 }
 
 function cpuSummary(d: LevelDevice): string | undefined {

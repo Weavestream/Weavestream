@@ -1808,6 +1808,10 @@ model IntegrationSyncCheckpoint {
   highWaterAt                 DateTime?           @map("high_water_at")
   lastCompletedAt             DateTime?           @map("last_completed_at")
   lastFullCompletedAt         DateTime?           @map("last_full_completed_at")
+  /// Source field keys the records of the last complete traversal (this
+  /// mode) carried. Empty = unknown (never synced, no legacy records, or
+  /// too many keys); Field mappings then flags nothing.
+  sourceFields                String[]            @default([]) @map("source_fields")
   createdAt                   DateTime            @default(now()) @map("created_at")
   updatedAt                   DateTime            @updatedAt @map("updated_at")
 

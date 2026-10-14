@@ -47,3 +47,13 @@ Describe each asset resource as a `StandardResourceSpec` in one `RESOURCES` reco
 ## Drivers outside the standard
 
 Breeze (typed reconstruction) and the earlier Action1, NinjaOne and UniFi drivers predate this pattern. They write their own fields and do not take part in shared assets. Do not copy them for a new driver.
+
+A driver outside the standard can still return a `section` on its records; the runner stores it the same way. NinjaOne does this (`ninjaone/ninjaone.sections.ts`): operators keep their field mappings, and the section shows the live state around them.
+
+## Request pacing
+
+A provider that rate-limits per account gets a `pace` on every `fetchWithRetry` call (`{ key, minIntervalMs }`, one key per upstream account). Calls that share a key are spaced at least that far apart, retries included, and a 429 holds every caller of the key for its `Retry-After`. NinjaOne uses it.
+
+## Source fields that stop arriving
+
+For records with `fields`, the runner keeps the keys that a complete traversal received on its checkpoint (`sourceFields`). **Field mappings** then marks a mapped source field that the last complete sync did not receive. A resumed traversal leaves the stored keys unchanged, and an empty list means unknown, so nothing is marked. A missing key never clears a layout field.
