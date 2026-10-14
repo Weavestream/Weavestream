@@ -8,25 +8,25 @@ import type { Request } from 'express';
 import { Observable } from 'rxjs';
 import { runWithTenantContext, type TenantContext } from '@weavestream/shared/server';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { RedisService } from '../../redis/redis.service.js';
 import { MembershipCacheService } from '../../cache/membership-cache.service.js';
-import type { AuthedUser } from '../../common/current-user.decorator.js';
+import { isProgrammatic, type AuthedUser } from '../../common/current-user.decorator.js';
 import { ipOf, userAgentOf } from '../../common/request-meta.js';
-
-const MEMBERSHIP_CACHE_SEC = 60;
 
 @Injectable()
 export class TenantContextInterceptor implements NestInterceptor {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
+    private readonly cache: MembershipCacheService,
   ) {}
 
   async intercept(ctx: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
     const req = ctx.switchToHttp().getRequest<Request & { user?: AuthedUser; id?: string }>();
     if (!req.user) return next.handle();
 
-    const allowedCompanyIds = await this.loadAllowedCompanyIds(req.user.id);
+    const allowedCompanyIds = await this.loadAllowedCompanyIds(
+      req.user.id,
+      isProgrammatic(req.user),
+    );
 
     const tenant: TenantContext = {
       userId: req.user.id,
@@ -53,27 +53,28 @@ export class TenantContextInterceptor implements NestInterceptor {
     });
   }
 
-  private async loadAllowedCompanyIds(userId: string): Promise<string[]> {
-    const key = MembershipCacheService.key(userId);
-    const cached = await this.redis.client.get(key);
-    if (cached) {
-      try {
-        return JSON.parse(cached) as string[];
-      } catch {
-        // fall through and refetch
-      }
-    }
-    const now = new Date();
-    const rows = await this.prisma.membership.findMany({
-      where: {
-        userId,
-        revokedAt: null,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+  /**
+   * `fresh` (programmatic principals) skips the cache entirely, so an API
+   * key or MCP connection sees a membership revocation on its very next
+   * request. Interactive sessions use the generation-checked cache, which
+   * never serves rows loaded before the last `invalidate`.
+   */
+  private async loadAllowedCompanyIds(userId: string, fresh: boolean): Promise<string[]> {
+    return this.cache.readThrough(
+      userId,
+      MembershipCacheService.key(userId),
+      async () => {
+        const rows = await this.prisma.membership.findMany({
+          where: {
+            userId,
+            revokedAt: null,
+            OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+          },
+          select: { companyId: true },
+        });
+        return rows.map((r) => r.companyId);
       },
-      select: { companyId: true },
-    });
-    const ids = rows.map((r) => r.companyId);
-    await this.redis.client.set(key, JSON.stringify(ids), 'EX', MEMBERSHIP_CACHE_SEC);
-    return ids;
+      { fresh },
+    );
   }
 }

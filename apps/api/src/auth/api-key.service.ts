@@ -12,7 +12,11 @@ import type { ApiKey, Prisma } from '@prisma/client';
 import type { CreateApiKeyInput } from '@weavestream/shared';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { RequestMeta } from '../common/request-meta.js';
-import { revokeDelegatedAccessForUser, type RevokedDelegatedAccess } from './revoke-api-keys.js';
+import {
+  lockUserForDelegatedMint,
+  revokeDelegatedAccessForUser,
+  type RevokedDelegatedAccess,
+} from './revoke-api-keys.js';
 
 /**
  * Presented-token format: `ws_<keyId>_<secret>`.
@@ -247,6 +251,9 @@ export class ApiKeyService {
     // never exists: no unaudited credential (CLAUDE.md §2) and no live key the
     // caller never received.
     const { record, token } = await this.prisma.$transaction(async (tx) => {
+      // Serialize with a concurrent role/access edit on this user, so the
+      // edit's revocation either sees this key or runs before it exists.
+      await lockUserForDelegatedMint(tx, actor.id);
       const minted = await this.mint(
         {
           userId: actor.id,

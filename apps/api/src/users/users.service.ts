@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import type { User } from '@prisma/client';
 import type {
   CreateUserInput,
   UpdateUserInput,
@@ -15,7 +16,10 @@ import { AuditLogService } from '../audit/audit.service.js';
 import { MembershipCacheService } from '../cache/membership-cache.service.js';
 import { SetupTokenService } from './setup-token.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
-import { revokeDelegatedAccessForUser } from '../auth/revoke-api-keys.js';
+import {
+  lockUserForAuthorityChange,
+  revokeDelegatedAccessForUser,
+} from '../auth/revoke-api-keys.js';
 
 export interface UserListOptions {
   q?: string;
@@ -274,67 +278,83 @@ export class UsersService {
     input: UpdateUserInput,
     meta: { ip: string; userAgent: string },
   ) {
-    const before = await this.prisma.user.findUnique({ where: { id } });
-    if (!before) throw new NotFoundException();
+    // Everything from the read of `before` to the revocations is one unit,
+    // with the user row locked. Two concurrent edits must serialize: if
+    // `before` were read outside, request A could compare its write against
+    // a snapshot that request B has since changed — e.g. A reads FULL, B
+    // downgrades to READONLY, the user mints a key, A writes FULL and sees
+    // "no change" — leaving a key minted at lower authority live after a
+    // promotion. The same applies to the SUPER_ADMIN gate below, which must
+    // judge the role the write actually replaces.
+    //
+    // A failure part-way would otherwise leave the account flagged inactive
+    // (or re-roled) with its sessions or keys still live, or revoked against
+    // a profile write that rolled back.
+    const {
+      before,
+      row: updated,
+      isRoleChange,
+      isDeactivation,
+      isActivation,
+      authorityChanged,
+      revoked,
+    } = await this.prisma.$transaction(async (tx) => {
+      if (!(await lockUserForAuthorityChange(tx, id))) throw new NotFoundException();
+      const before = await tx.user.findUnique({ where: { id } });
+      if (!before) throw new NotFoundException();
 
-    if (input.isActive === false && before.id === actor.id) {
-      throw new BadRequestException('Cannot deactivate yourself');
-    }
-
-    const isRoleChange = input.role !== undefined && input.role !== before.role;
-
-    // SUPER_ADMIN promotion/demotion is a strict SUPER_ADMIN-only
-    // operation regardless of `USER_MANAGE`. Promotion: role becomes
-    // SUPER_ADMIN. Demotion: was SUPER_ADMIN, role is changing.
-    if (
-      isRoleChange &&
-      actor.role !== 'SUPER_ADMIN' &&
-      (input.role === 'SUPER_ADMIN' || before.role === 'SUPER_ADMIN')
-    ) {
-      throw new ForbiddenException(
-        'Only SUPER_ADMIN can promote to or demote from SUPER_ADMIN',
-      );
-    }
-
-    // Resolve the effective post-update role so we can validate the
-    // OPERATOR axes against the right baseline.
-    const nextRole = input.role ?? before.role;
-    const operatorAxesTouched =
-      input.globalAccess !== undefined ||
-      input.platformCapabilities !== undefined;
-
-    if (nextRole === 'OPERATOR') {
-      // Non-OPERATOR -> OPERATOR transition needs an explicit
-      // globalAccess; otherwise we fall back to the existing value.
-      if (input.role === 'OPERATOR' && before.role !== 'OPERATOR') {
-        if (!input.globalAccess) {
-          throw new BadRequestException(
-            'globalAccess is required when promoting a user to OPERATOR',
-          );
-        }
+      if (input.isActive === false && before.id === actor.id) {
+        throw new BadRequestException('Cannot deactivate yourself');
       }
-    } else if (operatorAxesTouched) {
-      throw new BadRequestException(
-        'globalAccess and platformCapabilities are only valid for OPERATOR users',
-      );
-    }
 
-    const isDeactivation =
-      input.isActive === false && before.isActive === true;
-    const isActivation = input.isActive === true && before.isActive === false;
+      const isRoleChange = input.role !== undefined && input.role !== before.role;
 
-    // When demoting away from OPERATOR, clear the OPERATOR axes so a
-    // re-promoted user doesn't inherit a stale globalAccess/capabilities
-    // set from a prior life.
-    const clearOperatorAxes =
-      isRoleChange && before.role === 'OPERATOR' && nextRole !== 'OPERATOR';
+      // SUPER_ADMIN promotion/demotion is a strict SUPER_ADMIN-only
+      // operation regardless of `USER_MANAGE`. Promotion: role becomes
+      // SUPER_ADMIN. Demotion: was SUPER_ADMIN, role is changing.
+      if (
+        isRoleChange &&
+        actor.role !== 'SUPER_ADMIN' &&
+        (input.role === 'SUPER_ADMIN' || before.role === 'SUPER_ADMIN')
+      ) {
+        throw new ForbiddenException(
+          'Only SUPER_ADMIN can promote to or demote from SUPER_ADMIN',
+        );
+      }
 
-    // When deactivating, the profile write and both revocations are one unit:
-    // a failure between them would leave the account flagged inactive with its
-    // sessions or keys still live, or revoked against a profile write that
-    // rolled back. Every edit runs in the transaction for simplicity; for a
-    // non-deactivating edit it wraps a single statement.
-    const updated = await this.prisma.$transaction(async (tx) => {
+      // Resolve the effective post-update role so we can validate the
+      // OPERATOR axes against the right baseline.
+      const nextRole = input.role ?? before.role;
+      const operatorAxesTouched =
+        input.globalAccess !== undefined ||
+        input.platformCapabilities !== undefined;
+
+      if (nextRole === 'OPERATOR') {
+        // Non-OPERATOR -> OPERATOR transition needs an explicit
+        // globalAccess; otherwise we fall back to the existing value.
+        if (input.role === 'OPERATOR' && before.role !== 'OPERATOR') {
+          if (!input.globalAccess) {
+            throw new BadRequestException(
+              'globalAccess is required when promoting a user to OPERATOR',
+            );
+          }
+        }
+      } else if (operatorAxesTouched) {
+        throw new BadRequestException(
+          'globalAccess and platformCapabilities are only valid for OPERATOR users',
+        );
+      }
+
+      const isDeactivation =
+        input.isActive === false && before.isActive === true;
+      const isActivation = input.isActive === true && before.isActive === false;
+
+      // When demoting away from OPERATOR, clear the OPERATOR axes so a
+      // re-promoted user doesn't inherit a stale globalAccess/capabilities
+      // set from a prior life.
+      const clearOperatorAxes =
+        isRoleChange && before.role === 'OPERATOR' && nextRole !== 'OPERATOR';
+
       const row = await tx.user.update({
         where: { id },
         data: {
@@ -366,26 +386,48 @@ export class UsersService {
           where: { userId: id, revokedAt: null },
           data: { revokedAt: new Date() },
         });
-        // Revoke keys rather than leaving them merely inert: AuthGuard rejects
-        // on `!isActive`, so without this a reactivation a week later silently
-        // resurrects every key an attacker minted beforehand, and none of them
-        // appear in the sessions UI to warn anyone.
-        await revokeDelegatedAccessForUser(tx, id);
       }
 
-      return row;
+      // Compared on the written row against the locked read, not the input:
+      // a no-op edit (same role, same capability set) must not cost the user
+      // their keys.
+      const authorityChanged = hasAuthorityChanged(before, row);
+
+      // Deactivation: revoke keys rather than leaving them merely inert.
+      // AuthGuard rejects on `!isActive`, so without this a reactivation a
+      // week later silently resurrects every key an attacker minted
+      // beforehand, and none of them appear in the sessions UI to warn anyone.
+      //
+      // Authority change (role, globalAccess, platformCapabilities), in
+      // either direction: AuthGuard re-reads these per request, so a
+      // demotion already bites. Revoking is about the key, not the user. The
+      // holder scoped and placed that key against the authority they had
+      // when they minted it; a promotion would silently turn a low-value
+      // credential sitting in some script into an admin one, and a demotion
+      // leaves a key whose reach no longer matches what anyone reviewed.
+      // Revoking makes the user mint a fresh key against their new authority.
+      const revoked =
+        isDeactivation || authorityChanged
+          ? await revokeDelegatedAccessForUser(tx, id)
+          : null;
+
+      return {
+        before,
+        row,
+        isRoleChange,
+        isDeactivation,
+        isActivation,
+        authorityChanged,
+        revoked,
+      };
     });
 
-    if (isDeactivation) {
-      // Outside the transaction: cache invalidation is not part of the atomic
-      // unit and must not be able to roll it back.
-      await this.cache.invalidate(id);
-    }
-    if (isActivation) {
+    // Outside the transaction: cache invalidation is not part of the atomic
+    // unit and must not be able to roll it back.
+    if (isDeactivation || isActivation || authorityChanged) {
       await this.cache.invalidate(id);
     }
     if (isRoleChange) {
-      await this.cache.invalidate(id);
       await this.audit.log({
         actorId: actor.id,
         action: 'user.role.change',
@@ -432,6 +474,13 @@ export class UsersService {
         timezone: updated.timezone,
         globalAccess: updated.globalAccess,
         platformCapabilities: updated.platformCapabilities,
+        // By reference: counts only (CLAUDE.md §2).
+        ...(revoked
+          ? {
+              apiKeysRevoked: revoked.apiKeys,
+              mcpConnectionsRevoked: revoked.mcpConnections,
+            }
+          : {}),
       },
     });
 
@@ -533,4 +582,19 @@ export class UsersService {
 
     return { ok: true };
   }
+}
+
+type AuthorityFields = Pick<User, 'role' | 'globalAccess' | 'platformCapabilities'>;
+
+/**
+ * True when the user-level authority that API keys and remote MCP
+ * connections inherit has changed: role, OPERATOR global access, or the
+ * platform-capability set (order-insensitive).
+ */
+export function hasAuthorityChanged(before: AuthorityFields, after: AuthorityFields): boolean {
+  if (before.role !== after.role) return true;
+  if (before.globalAccess !== after.globalAccess) return true;
+  const a = new Set(before.platformCapabilities);
+  const b = new Set(after.platformCapabilities);
+  return a.size !== b.size || [...a].some((c) => !b.has(c));
 }

@@ -50,7 +50,9 @@ export interface AuthedUser {
  * connection. Containment checks key off this, never off `apiKeyId` alone,
  * so a new programmatic principal cannot slip past them.
  */
-export function isProgrammatic(user: AuthedUser | undefined): boolean {
+export function isProgrammatic(
+  user: Pick<AuthedUser, 'apiKeyId' | 'mcpConnectionId'> | undefined,
+): boolean {
   return !!(user?.apiKeyId || user?.mcpConnectionId);
 }
 

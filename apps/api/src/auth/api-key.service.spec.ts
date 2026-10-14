@@ -77,6 +77,8 @@ function makeService({ enabled = true }: { enabled?: boolean } = {}) {
       }),
     },
     // Interactive transaction: run the callback against the same stub.
+    // The user-row share lock taken before minting.
+    $queryRaw: jest.fn().mockResolvedValue([{ id: 'u-1' }]),
     $transaction: jest.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
   } as Record<string, unknown>;
   const audit = {
@@ -270,6 +272,20 @@ describe('ApiKeyService', () => {
       const rw = await svc.create(ACTOR, { name: 'sync', allowWrite: true }, META);
       expect(rw.allowWrite).toBe(true);
       expect(audit.logWithClient.mock.calls[1][1].after).toMatchObject({ allowWrite: true });
+    });
+
+    it('share-locks the owner row before inserting, inside the transaction', async () => {
+      const { svc, prisma } = makeService();
+      await svc.create(ACTOR, { name: 'mcp' }, META);
+      const queryRaw = prisma.$queryRaw as jest.Mock;
+      const create = (prisma.apiKey as { create: jest.Mock }).create;
+      expect(queryRaw).toHaveBeenCalledTimes(1);
+      const sql = queryRaw.mock.calls[0][0] as { strings: string[]; values: unknown[] };
+      expect(sql.strings.join('?')).toMatch(/FROM users WHERE id = \?::uuid FOR SHARE/);
+      expect(sql.values).toEqual(['u-1']);
+      const [lockedAt] = queryRaw.mock.invocationCallOrder;
+      const [createdAt] = create.mock.invocationCallOrder;
+      expect(lockedAt).toBeLessThan(createdAt!);
     });
 
     it('refuses to mint while API keys are turned off', async () => {

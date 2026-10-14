@@ -9,6 +9,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { lockUserForDelegatedMint } from '../auth/revoke-api-keys.js';
 
 type Meta = { ip: string; userAgent: string };
 
@@ -87,6 +88,9 @@ export class McpConnectionsService {
     meta: Meta,
   ): Promise<McpConnectionSummary> {
     return this.prisma.$transaction(async (tx) => {
+      // Serialize with a concurrent role/access edit on this user, so the
+      // edit's revocation either sees this connection or runs before it exists.
+      await lockUserForDelegatedMint(tx, actor.id);
       const row = await tx.mcpConnection.create({
         data: { userId: actor.id, ...input },
         select: SUMMARY_SELECT,

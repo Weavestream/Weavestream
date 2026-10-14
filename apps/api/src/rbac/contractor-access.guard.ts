@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import type { Request } from 'express';
-import type { AuthedUser } from '../common/current-user.decorator.js';
+import { isProgrammatic, type AuthedUser } from '../common/current-user.decorator.js';
 import {
   REQUIRE_PERMISSION_KEY,
   type CompanyIdSource,
@@ -43,7 +43,9 @@ export class ContractorAccessGuard implements CanActivate {
     const companyId = await this.resolveCompanyId(req, meta.companyIdFrom);
     if (!companyId) return true;
 
-    const memberships = await this.permissions.loadMemberships(user.id);
+    const memberships = await this.permissions.loadMemberships(user.id, {
+      fresh: isProgrammatic(user),
+    });
     const now = new Date();
     const match = memberships.find(
       (m) =>

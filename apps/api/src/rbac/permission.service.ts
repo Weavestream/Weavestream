@@ -6,7 +6,8 @@ import type {
   UserRole,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
-import { RedisService } from '../redis/redis.service.js';
+import { MembershipCacheService } from '../cache/membership-cache.service.js';
+import { isProgrammatic } from '../common/current-user.decorator.js';
 import { PERMISSIONS, type Action } from './permissions.js';
 
 export interface MembershipSnapshot {
@@ -27,6 +28,12 @@ export interface PermissionInput {
    * resolver will still allow capability-gated actions.
    */
   platformCapabilities: PlatformCapability[];
+  /**
+   * Programmatic-principal markers, carried through from `AuthedUser`. When
+   * either is set the membership cache is bypassed (see `loadMemberships`).
+   */
+  apiKeyId?: string;
+  mcpConnectionId?: string;
 }
 
 export interface PermissionTarget {
@@ -38,62 +45,43 @@ export interface PermissionDecision {
   reason?: string;
 }
 
-const CACHE_KEY_PREFIX = 'user:';
-// v2: bumped when the membership-role enum collapsed to FULL/READONLY
-// so any leftover v1 entries with `OPERATOR_FULL` etc. are ignored.
-const CACHE_KEY_SUFFIX = ':memberships:full:v2';
-const CACHE_TTL_SEC = 60;
-
 @Injectable()
 export class PermissionService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly redis: RedisService,
+    private readonly cache: MembershipCacheService,
   ) {}
 
   /**
    * Load every membership for a user (active + revoked are both fetched
    * so callers can make context-aware decisions; the scope-eval code
    * filters revoked rows itself).
+   *
+   * `fresh` skips Redis entirely. Programmatic principals pass it: a key or
+   * MCP connection runs unattended, so a membership revoked or downgraded a
+   * moment ago must bite on its next request. Interactive sessions use the
+   * generation-checked cache (`MembershipCacheService.readThrough`), which
+   * never serves rows loaded before the last `invalidate`.
    */
-  async loadMemberships(userId: string): Promise<MembershipSnapshot[]> {
-    const cacheKey = `${CACHE_KEY_PREFIX}${userId}${CACHE_KEY_SUFFIX}`;
-    const cached = await this.redis.client.get(cacheKey);
-    if (cached) {
-      try {
-        const parsed = JSON.parse(cached) as Array<{
-          companyId: string;
-          role: MembershipRole;
-          expiresAt: string | null;
-          revokedAt: string | null;
-        }>;
-        return parsed.map((r) => ({
-          companyId: r.companyId,
-          role: r.role,
-          expiresAt: r.expiresAt ? new Date(r.expiresAt) : null,
-          revokedAt: r.revokedAt ? new Date(r.revokedAt) : null,
-        }));
-      } catch {
-        // fall through and refetch
-      }
-    }
-
-    const rows = await this.prisma.membership.findMany({
-      where: { userId },
-      select: {
-        companyId: true,
-        role: true,
-        expiresAt: true,
-        revokedAt: true,
-      },
-    });
-    await this.redis.client.set(
-      cacheKey,
-      JSON.stringify(rows),
-      'EX',
-      CACHE_TTL_SEC,
+  async loadMemberships(
+    userId: string,
+    { fresh = false }: { fresh?: boolean } = {},
+  ): Promise<MembershipSnapshot[]> {
+    return this.cache.readThrough(
+      userId,
+      MembershipCacheService.snapshotKey(userId),
+      () =>
+        this.prisma.membership.findMany({
+          where: { userId },
+          select: {
+            companyId: true,
+            role: true,
+            expiresAt: true,
+            revokedAt: true,
+          },
+        }),
+      { fresh, revive: reviveSnapshots },
     );
-    return rows;
   }
 
   async can(
@@ -151,7 +139,9 @@ export class PermissionService {
       };
     }
 
-    const memberships = await this.loadMemberships(user.id);
+    const memberships = await this.loadMemberships(user.id, {
+      fresh: isProgrammatic(user),
+    });
     const effective = resolveEffectiveAccess(user, memberships, companyId);
     return decideFromEffective(action, rule, user.role, effective);
   }
@@ -284,7 +274,8 @@ function decideFromEffective(
  * Deliberately queries Prisma directly rather than the Redis-cached
  * `loadMemberships` above: list scoping reacts to a revocation
  * immediately, while the per-action resolver tolerates the 60s
- * membership cache. A free function (like `resolveEffectiveAccess`)
+ * membership cache for interactive sessions (programmatic principals
+ * bypass it). A free function (like `resolveEffectiveAccess`)
  * rather than a service method so consumers pass the PrismaService
  * they already hold and their constructors stay unchanged.
  */
@@ -309,4 +300,19 @@ export async function allowedCompanyIds(
     select: { companyId: true },
   });
   return new Set(memberships.map((m) => m.companyId));
+}
+
+/** Rebuild snapshot Dates from their cached JSON form. */
+function reviveSnapshots(raw: unknown): MembershipSnapshot[] {
+  return (raw as Array<{
+    companyId: string;
+    role: MembershipRole;
+    expiresAt: string | null;
+    revokedAt: string | null;
+  }>).map((r) => ({
+    companyId: r.companyId,
+    role: r.role,
+    expiresAt: r.expiresAt ? new Date(r.expiresAt) : null,
+    revokedAt: r.revokedAt ? new Date(r.revokedAt) : null,
+  }));
 }

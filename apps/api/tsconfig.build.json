@@ -9,6 +9,8 @@
     "node_modules",
     "**/*.spec.ts",
     // Creates and drops throwaway Postgres databases for integration specs.
-    "src/integrations/reconstruction/reconstruction-test-database.ts"
+    "src/integrations/reconstruction/reconstruction-test-database.ts",
+    // In-memory ioredis stand-in for the membership cache specs.
+    "src/cache/in-memory-redis.testing.ts"
   ]
 }
