@@ -17,7 +17,7 @@
     "@nestjs/core": "^11.2.7",
     "@weavestream/api": "workspace:*",
     "@weavestream/shared": "workspace:*",
-    "bullmq": "^5.76.2",
+    "bullmq": "^6.3.12",
     "fontkit": "^2.0.4",
     "nestjs-pino": "^4.1.0",
     "pdfkit": "^0.20.2",
