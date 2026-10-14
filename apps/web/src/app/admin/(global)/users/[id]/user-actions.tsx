@@ -44,6 +44,7 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
   const [editOpen, setEditOpen] = useState(false);
   const [deactivateOpen, setDeactivateOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
+  const [inviteConfirmOpen, setInviteConfirmOpen] = useState(false);
   const [inviteOpen, setInviteOpen] = useState(false);
   const [invite, setInvite] = useState<InviteResponse | null>(null);
   const [pending, setPending] = useState(false);
@@ -90,6 +91,7 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
       toast.push('Could not generate setup link.', 'danger');
       return;
     }
+    setInviteConfirmOpen(false);
     setInvite(res.data);
     setInviteOpen(true);
   }
@@ -103,8 +105,7 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
         kind="outline"
         size="md"
         icon={Icon.key}
-        onClick={reissueInvite}
-        loading={pending && !inviteOpen}
+        onClick={() => setInviteConfirmOpen(true)}
         disabled={!user.isActive}
       >
         Generate password reset link
@@ -149,9 +150,30 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
         }
       >
         <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
-          Every active session for {user.name} will be revoked. They'll enrol a new
-          authenticator on their next sign-in. You must have signed in within the last
-          five minutes to do this.
+          Every active session for {user.name} will be revoked, along with their API
+          keys and AI connections. They'll enrol a new authenticator on their next
+          sign-in. You must have signed in within the last five minutes to do this.
+        </p>
+      </Dialog>
+
+      <Dialog
+        open={inviteConfirmOpen}
+        onClose={() => !pending && setInviteConfirmOpen(false)}
+        title="Generate password reset link?"
+        footer={
+          <>
+            <Btn kind="ghost" onClick={() => setInviteConfirmOpen(false)} disabled={pending}>
+              Cancel
+            </Btn>
+            <Btn kind="primary" loading={pending} onClick={reissueInvite}>
+              Generate link
+            </Btn>
+          </>
+        }
+      >
+        <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+          {user.name}'s API keys and AI connections will be revoked now, before the
+          link is used. Their browser sessions stay signed in.
         </p>
       </Dialog>
 
@@ -176,7 +198,7 @@ export function UserActions({ user, isSelf }: { user: UserDetail; isSelf: boolea
       >
         <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
           {user.isActive
-            ? `${user.name} will be signed out of every device. Memberships are preserved and access is restored if you reactivate them later.`
+            ? `${user.name} will be signed out of every device, and their API keys and AI connections will be revoked. Memberships are preserved and access is restored if you reactivate them later; revoked keys and AI connections are not.`
             : `${user.name} will regain the ability to sign in. Any existing memberships stay intact.`}
         </p>
       </Dialog>
@@ -296,6 +318,18 @@ function EditDialog({
     [capabilities],
   );
 
+  // Mirrors the API's authority comparison (role, global access, the
+  // capability set ignoring order): any change revokes the user's API keys
+  // and AI connections. Demoting away from OPERATOR is already a role change.
+  const authorityChanged = useMemo(() => {
+    if (role !== user.role) return true;
+    if (role !== 'OPERATOR') return false;
+    if (globalAccess !== user.globalAccess) return true;
+    const before = new Set(user.platformCapabilities);
+    const after = new Set(capabilities);
+    return before.size !== after.size || [...after].some((c) => !before.has(c));
+  }, [role, globalAccess, capabilities, user.role, user.globalAccess, user.platformCapabilities]);
+
   function toggleCapability(c: PlatformCapability) {
     setCapabilities((prev) =>
       prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c],
@@ -325,7 +359,12 @@ function EditDialog({
       setError(problemMessage(res.problem) ?? 'Update failed.');
       return;
     }
-    toast.push('User updated.', 'ok');
+    toast.push(
+      authorityChanged
+        ? 'User updated. Their API keys and AI connections were revoked.'
+        : 'User updated.',
+      'ok',
+    );
     onSuccess();
   }
 
@@ -443,6 +482,22 @@ function EditDialog({
               </div>
             </Field>
           </>
+        )}
+        {authorityChanged && (
+          <div
+            style={{
+              fontSize: 12.5,
+              lineHeight: 1.5,
+              color: 'var(--warn)',
+              background: 'var(--warn-soft)',
+              border: '1px solid var(--warn)',
+              borderRadius: 6,
+              padding: '8px 12px',
+            }}
+          >
+            Saving revokes {user.name}'s API keys and AI connections, so they create new
+            ones under the new access. Their browser sessions stay signed in.
+          </div>
         )}
       </div>
     </Dialog>
