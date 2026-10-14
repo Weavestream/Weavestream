@@ -26,8 +26,26 @@ The Action1 driver maps third-party endpoint telemetry onto fields in your chose
 | **Hostname** | Machine computer name | Text / String |
 | **OS Version** | Windows edition and build version (e.g., Windows 11 Pro 23H2) | Text |
 | **Last Seen** | Last successful check-in timestamp with Action1 | Date / Timestamp |
-| **Agent Status** | Current agent state (`Online`, `Offline`, or `Pending`) | Single Select / Text |
+| **Agent Status** | Current agent state (`Connected`, `Disconnected`, or `Pending Uninstall`) | Single Select / Text |
 | **Hardware Details** | Hardware specifications including CPU model, installed RAM capacity, and disk volumes | Text / Markdown |
+
+### The Action1 section on the asset page
+
+Each synced endpoint also shows a read-only **Action1** section on its asset page. You do not map it. It shows the live state around the facts you map, and it leaves out name, OS, platform, manufacturer, CPU, RAM, disk, serial number, IP address and MAC address:
+
+| Group | Contents |
+|---|---|
+| **Status** | Agent status (connected, disconnected, pending uninstall), check-in (within 7 days, 8 to 30 days ago, over 30 days ago), last seen, last boot, reboot pending, logged-in user (account name only), agent version, agent install date, subscription (only when not active), device name (only when it differs from the endpoint name) |
+| **Security** | Number of critical and other vulnerabilities. Without counts, Action1's vulnerability status |
+| **Updates** | Number of critical and other missing updates. Without counts, Action1's update status |
+| **Hardware detail** | Architecture, video card, network adapter, Wi-Fi adapter |
+| **Active Directory** | Organizational unit and security groups |
+
+A group with no data is not shown. The section comes from the endpoint record that each sync already reads, so it adds no request to Action1. It does not show custom attributes, the endpoint comment, installed software, or the names of missing updates and vulnerabilities.
+
+Action1 recommends fewer than 30 API requests per minute per Action1 enterprise, and it counts all API use of the enterprise ([How Action1 API Works](https://www.action1.com/api-documentation/how-action1-api-works/)). Weavestream sends at most 24 requests per minute per API client, so a large sync takes longer: each organization needs one request for a token plus one request per 200 endpoints. Use one Action1 integration (one API client) per Action1 enterprise. A second integration, or your own scripts on the same enterprise, use the same budget. When Action1 answers "too many requests", Weavestream holds all requests of that client for the time Action1 asks, and retries the page later.
+
+Weavestream uses one access token for all pages of one organization in one sync. A token is never used again after you save new credentials or change the API base URL.
 
 ## Setup Instructions
 

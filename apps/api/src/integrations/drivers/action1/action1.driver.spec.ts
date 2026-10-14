@@ -1,7 +1,9 @@
 import {
   driverDescriptorSchema,
+  integrationSectionSchema,
   integrationSetupCheckSchema,
   setupGuideSchema,
+  type IntegrationSection,
   type IntegrationSetupCheck,
 } from '@weavestream/shared';
 import {
@@ -10,13 +12,26 @@ import {
   type FetchRecordsContext,
   type IntegrationContext,
 } from '../integration-driver.js';
-import { Action1Driver } from './action1.driver.js';
+import {
+  ACTION1_MIN_REQUEST_INTERVAL_MS,
+  Action1Driver,
+  __setAction1RequestIntervalForTests,
+} from './action1.driver.js';
 import { ORGANIZATIONS_UNVERIFIED_NOTE } from './action1.diagnose.js';
 import { ACTION1_SETUP_GUIDE } from './action1.setup-guide.js';
 import {
   setDefaultFetchForTests,
   setDefaultResolveForTests,
 } from '../../../common/egress/safe-fetch.js';
+import { __resetRunCacheForTests, __runCacheSizeForTests } from '../run-cache.js';
+import { __resetRequestPaceForTests } from '../driver-utils.js';
+
+beforeEach(() => {
+  __resetRunCacheForTests();
+  __resetRequestPaceForTests();
+  // Pacing is covered on its own below; the scripted flows run unspaced.
+  __setAction1RequestIntervalForTests(0);
+});
 
 /**
  * Phase 11 — Action1 driver behavioural tests.
@@ -111,6 +126,7 @@ function makeCtx(): IntegrationContext {
     integrationId: 'int-1',
     config: { baseUrl: 'https://app.action1.com/api/3.0' },
     secret: { apiKey: 'k', apiSecret: 's' },
+    credentialVersion: 'sec-1@2026-10-14T00:00:00.000Z|no-app',
     correlationId: 'test-corr',
     http: HTTP,
   } as IntegrationContext;
@@ -390,7 +406,7 @@ describe('Action1Driver.fetchRecords', () => {
         kind: 'json',
         body: { items: firstPage, total_items: '220' },
       },
-      { kind: 'json', body: { access_token: 'tok-1' } },
+      // No second token: the pages of one run share it.
       {
         kind: 'json',
         body: {
@@ -417,15 +433,28 @@ describe('Action1Driver.fetchRecords', () => {
       });
       expect(page1.hasMore).toBe(true);
       expect(page1.cursor).toBe('200');
+      expect(page1.snapshotAt).toEqual(expect.any(String));
 
-      const page2 = await driver.fetchRecords(makeFetchCtx(), page1.cursor);
+      // The runner hands the page's snapshot back on the next page.
+      const page2 = await driver.fetchRecords(
+        { ...makeFetchCtx(), snapshotAt: page1.snapshotAt } as FetchRecordsContext,
+        page1.cursor,
+      );
       expect(page2.records).toHaveLength(20);
       expect(page2.hasMore).toBe(false);
       expect(page2.cursor).toBeNull();
+      expect(page2.snapshotAt).toBe(page1.snapshotAt);
 
+      expect(fx.calls.map((c) => new URL(c.url).pathname)).toEqual([
+        '/api/3.0/oauth2/token',
+        '/api/3.0/endpoints/managed/o-1',
+        '/api/3.0/endpoints/managed/o-1',
+      ]);
       expect(fx.calls[1]!.url).toContain('from=0');
       expect(fx.calls[1]!.url).toContain('limit=200');
-      expect(fx.calls[3]!.url).toContain('from=200');
+      expect(fx.calls[2]!.url).toContain('from=200');
+      // The last page drops the run's cached token.
+      expect(__runCacheSizeForTests()).toBe(0);
     } finally {
       fx.restore();
     }
@@ -459,13 +488,12 @@ describe('Action1Driver.fetchRecords', () => {
   });
 
   it('rejects an invalid cursor before issuing any HTTP call', async () => {
-    const fx = installFetchScript([
-      { kind: 'json', body: { access_token: 'tok-1' } },
-    ]);
+    const fx = installFetchScript([]);
     try {
       await expect(
         new Action1Driver().fetchRecords(makeFetchCtx(), 'banana'),
       ).rejects.toThrow(/Invalid Action1 fetch cursor/);
+      expect(fx.calls).toEqual([]);
     } finally {
       fx.restore();
     }
@@ -492,6 +520,8 @@ describe('Action1Driver.fetchRecords', () => {
           externalId: 'x',
           displayName: 'x.lan',
           fields: { id: 'x', name: 'x.lan' },
+          // Nothing the section shows: no section, so a stale one is cleared.
+          section: undefined,
           updatedAt: null,
         },
       ]);
@@ -529,6 +559,209 @@ describe('Action1Driver.fetchRecords', () => {
     } finally {
       fx.restore();
     }
+  });
+});
+
+describe('Action1Driver section', () => {
+  const TOKEN: ScriptedResponse = { kind: 'json', body: { access_token: 'tok-1' } };
+  const page = (items: unknown[], total = items.length): ScriptedResponse => ({
+    kind: 'json',
+    body: { items, total_items: String(total) },
+  });
+  /** A full page with more to come, so the run (and its cached token) stays open. */
+  const fullPage = (prefix: string): ScriptedResponse =>
+    page(Array.from({ length: 200 }, (_, i) => ({ id: `${prefix}-${i}`, name: `${prefix}-${i}` })), 1_000);
+
+  it('builds the section from the endpoint record, with Action1 dates read as UTC', async () => {
+    const fx = installFetchScript([
+      TOKEN,
+      page([
+        {
+          id: 'e-1',
+          name: 'WS-1',
+          OS: 'Windows 11 (24H2)',
+          serial: 'SER-1',
+          status: 'Connected',
+          online_status: 'WARNING',
+          last_seen: '2026-10-01_08-30-00',
+          last_boot_time: '2026-09-30_07-00-00',
+          reboot_required: 'No',
+          missing_updates: { critical: 1, other: 0 },
+          vulnerabilities: { critical: 0, other: 0 },
+          AD_security_groups: ['Domain Computers'],
+        },
+      ]),
+    ]);
+    try {
+      const out = await new Action1Driver().fetchRecords(makeFetchCtx(), null);
+      const section = out.records[0]!.section as IntegrationSection;
+      expect(integrationSectionSchema.parse(section)).toEqual(section);
+      expect(section.groups.map((g) => g.key)).toEqual(['status', 'security', 'updates', 'directory']);
+      expect(section.groups[0]!.rows).toEqual(
+        expect.arrayContaining([
+          { kind: 'badge', label: 'Check-in', value: '8 to 30 days ago', tone: 'warning' },
+          { kind: 'datetime', label: 'Last seen', value: '2026-10-01T08:30:00.000Z' },
+          { kind: 'datetime', label: 'Last boot', value: '2026-09-30T07:00:00.000Z' },
+        ]),
+      );
+      // Mapped facts stay in the field mapping only.
+      expect(JSON.stringify(section)).not.toMatch(/SER-1|Windows 11/);
+      expect(out.records[0]!.fields).toMatchObject({ serial: 'SER-1', OS: 'Windows 11 (24H2)' });
+      // The section costs no request beyond the token and the endpoint page.
+      expect(fx.calls).toHaveLength(2);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('never shares a cached token between integrations', async () => {
+    const fx = installFetchScript([
+      TOKEN,
+      fullPage('a'),
+      { kind: 'json', body: { access_token: 'tok-2' } },
+      fullPage('b'),
+    ]);
+    try {
+      const snapshotAt = '2026-10-14T12:00:00.000Z';
+      const driver = new Action1Driver();
+      const first = await driver.fetchRecords({ ...makeFetchCtx(), snapshotAt } as FetchRecordsContext, null);
+      // The first integration's token is still cached when the second one runs.
+      expect(first.hasMore).toBe(true);
+      expect(__runCacheSizeForTests()).toBe(1);
+      await driver.fetchRecords(
+        { ...makeFetchCtx(), integrationId: 'int-2', snapshotAt } as FetchRecordsContext,
+        null,
+      );
+      expect(__runCacheSizeForTests()).toBe(2);
+      expect(fx.calls.map((c) => new URL(c.url).pathname)).toEqual([
+        '/api/3.0/oauth2/token',
+        '/api/3.0/endpoints/managed/o-1',
+        '/api/3.0/oauth2/token',
+        '/api/3.0/endpoints/managed/o-1',
+      ]);
+      expect(fx.calls[3]!.headers?.Authorization).toBe('Bearer tok-2');
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('never reuses a token after new credentials or a new API base URL', async () => {
+    const fx = installFetchScript([
+      TOKEN,
+      fullPage('a'),
+      { kind: 'json', body: { access_token: 'tok-2' } },
+      fullPage('b'),
+      { kind: 'json', body: { access_token: 'tok-3' } },
+      fullPage('c'),
+    ]);
+    try {
+      // One interrupted run resumed twice under the same snapshot.
+      const snapshotAt = '2026-10-14T12:00:00.000Z';
+      const base = { ...makeFetchCtx(), snapshotAt } as FetchRecordsContext;
+      const driver = new Action1Driver();
+      const first = await driver.fetchRecords(base, null);
+      // tok-1 is still cached when the credentials change.
+      expect(first.hasMore).toBe(true);
+      expect(__runCacheSizeForTests()).toBe(1);
+      await driver.fetchRecords({ ...base, credentialVersion: 'sec-1@2026-10-14T12:05:00.000Z|no-app' } as FetchRecordsContext, '200');
+      expect(__runCacheSizeForTests()).toBe(2);
+      await driver.fetchRecords(
+        {
+          ...base,
+          credentialVersion: 'sec-1@2026-10-14T12:05:00.000Z|no-app',
+          config: { baseUrl: 'https://app.eu.action1.com/api/3.0' },
+        } as FetchRecordsContext,
+        '400',
+      );
+      expect(__runCacheSizeForTests()).toBe(3);
+      expect(fx.calls.map((c) => [new URL(c.url).host, new URL(c.url).pathname, c.headers?.Authorization])).toEqual([
+        ['app.action1.com', '/api/3.0/oauth2/token', undefined],
+        ['app.action1.com', '/api/3.0/endpoints/managed/o-1', 'Bearer tok-1'],
+        ['app.action1.com', '/api/3.0/oauth2/token', undefined],
+        ['app.action1.com', '/api/3.0/endpoints/managed/o-1', 'Bearer tok-2'],
+        // The new host gets its own token; the old one is never sent there.
+        ['app.eu.action1.com', '/api/3.0/oauth2/token', undefined],
+        ['app.eu.action1.com', '/api/3.0/endpoints/managed/o-1', 'Bearer tok-3'],
+      ]);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('does not cache a token without a credential version', async () => {
+    const fx = installFetchScript([
+      TOKEN,
+      fullPage('a'),
+      { kind: 'json', body: { access_token: 'tok-2' } },
+      fullPage('b'),
+    ]);
+    try {
+      const ctx = { ...makeFetchCtx(), credentialVersion: undefined, snapshotAt: '2026-10-14T12:00:00.000Z' } as FetchRecordsContext;
+      const driver = new Action1Driver();
+      const first = await driver.fetchRecords(ctx, null);
+      // The run is still open, yet nothing was cached.
+      expect(first.hasMore).toBe(true);
+      expect(__runCacheSizeForTests()).toBe(0);
+      await driver.fetchRecords(ctx, '200');
+      expect(fx.calls.filter((c) => c.url.endsWith('/oauth2/token'))).toHaveLength(2);
+      expect(fx.calls[3]!.headers?.Authorization).toBe('Bearer tok-2');
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('does not cache a failed token exchange', async () => {
+    const fx = installFetchScript([
+      { kind: 'text', status: 500, body: 'x' },
+      { kind: 'text', status: 500, body: 'x' },
+      { kind: 'text', status: 500, body: 'x' },
+      TOKEN,
+      page([{ id: 'a', name: 'a' }]),
+    ]);
+    try {
+      const ctx = { ...makeFetchCtx(), snapshotAt: '2026-10-14T12:00:00.000Z' } as FetchRecordsContext;
+      const driver = new Action1Driver();
+      await expect(driver.fetchRecords(ctx, null)).rejects.toThrow(/HTTP 500/);
+      const out = await driver.fetchRecords(ctx, null);
+      expect(out.records.map((r) => r.externalId)).toEqual(['a']);
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('drops a token Action1 rejects, so a retried page gets a new one', async () => {
+    const fx = installFetchScript([
+      TOKEN,
+      { kind: 'text', status: 401, body: 'no' },
+      { kind: 'json', body: { access_token: 'tok-2' } },
+      page([{ id: 'a', name: 'a' }]),
+    ]);
+    try {
+      const ctx = { ...makeFetchCtx(), snapshotAt: '2026-10-14T12:00:00.000Z' } as FetchRecordsContext;
+      const driver = new Action1Driver();
+      await expect(driver.fetchRecords(ctx, null)).rejects.toBeInstanceOf(DriverAuthError);
+      await driver.fetchRecords(ctx, null);
+      expect(fx.calls[3]!.headers?.Authorization).toBe('Bearer tok-2');
+    } finally {
+      fx.restore();
+    }
+  });
+
+  it('spaces its requests at the Action1 pace', async () => {
+    __setAction1RequestIntervalForTests(40);
+    const fx = installFetchScript([TOKEN, page([{ id: 'a', name: 'a' }])]);
+    try {
+      const started = Date.now();
+      await new Action1Driver().fetchRecords(makeFetchCtx(), null);
+      const elapsed = Date.now() - started;
+      // Token, then the endpoint page: one gap of at least 40 ms.
+      expect(fx.calls).toHaveLength(2);
+      expect(elapsed).toBeGreaterThanOrEqual(40 - 5);
+    } finally {
+      fx.restore();
+    }
+    // Action1 recommends fewer than 30 requests per minute per enterprise.
+    expect(60_000 / ACTION1_MIN_REQUEST_INTERVAL_MS).toBeLessThan(30);
   });
 });
 
