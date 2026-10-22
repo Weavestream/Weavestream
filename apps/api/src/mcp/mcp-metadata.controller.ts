@@ -17,7 +17,7 @@ export class McpMetadataController {
   @Public()
   metadata() {
     return {
-      // Must equal the URL the user typed into Claude or ChatGPT.
+      // Must equal the URL the user typed into their AI app.
       resource: this.oauth.resource,
       authorization_servers: [this.oauth.issuer],
       scopes_supported: [MCP_SCOPE],

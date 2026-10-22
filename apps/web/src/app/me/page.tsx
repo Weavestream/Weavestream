@@ -40,7 +40,7 @@ export default async function MePage({
   const connectionsRes = await serverApiFetch<McpConnectionSummary[]>('/me/mcp-connections');
   const connections = connectionsRes.ok ? (connectionsRes.data ?? []) : [];
   // Request-scoped cache: the root layout already loaded settings.
-  const { apiKeysEnabled, mcpRemoteEnabled } = await getSettings();
+  const { apiKeysEnabled, mcpRemoteEnabled, mcpClientPolicy } = await getSettings();
 
   const initialTab: TabId = VALID_TABS.includes(sp.tab as TabId)
     ? (sp.tab as TabId)
@@ -65,6 +65,7 @@ export default async function MePage({
             connections={connections}
             connectionsLoadFailed={!connectionsRes.ok}
             mcpRemoteEnabled={mcpRemoteEnabled}
+            mcpClientPolicy={mcpClientPolicy}
           />
         </Panel>
       </PageBody>

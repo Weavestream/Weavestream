@@ -62,7 +62,7 @@ By default a key can list vault entries but **cannot** reveal passwords, TOTP co
 
 ## Remote AI connections
 
-ChatGPT and Claude do not use API keys. They connect to `/mcp` with OAuth after you sign in and approve, and their token works only on `/mcp`. See [MCP Server](../integrations/mcp.md) and [Authentication](authentication.md#remote-ai-connections-oauth).
+Remote AI apps such as ChatGPT and Claude do not use API keys. They connect to `/mcp` with OAuth after you sign in and approve, and their token works only on `/mcp`. Which apps can connect this way is an administrator's choice. See [MCP Server](../integrations/mcp.md) and [Authentication](authentication.md#remote-ai-connections-oauth).
 
 ## Revocation
 

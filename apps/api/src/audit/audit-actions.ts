@@ -18,10 +18,11 @@ export const AUDIT_ACTIONS = {
     mfaBackupUsed: 'auth.mfa.backup.used',
     mfaBackupRegenerate: 'auth.mfa.backup.regenerate',
     sessionsRevokeOthers: 'auth.sessions.revoke_others',
-    // A user approved a remote MCP connection (ChatGPT, Claude) on the
-    // consent page. `entityId` is the connection id; `after` carries the
-    // client id and host, the redirect host, `allowWrite` and the approving
-    // `sessionId` — never a code or token.
+    // A user approved a remote MCP connection (an AI app) on the consent
+    // page. `entityId` is the connection id; `after` carries the client id,
+    // its host (null for an app that registered itself), `clientVerified`,
+    // the redirect host, `allowWrite` and the approving `sessionId` — never a
+    // code or token.
     mcpConnectionCreate: 'auth.mcp_connection.create',
     // A remote MCP connection was revoked. `after.reason` is `user`, `admin`,
     // `token_reuse` (a code or refresh token was replayed) or
@@ -63,6 +64,9 @@ export const AUDIT_ACTIONS = {
     // Instance-wide remote MCP switch (`PUT /settings/mcp-remote`). `before`
     // and `after` carry `{ mcpRemoteEnabled }`.
     mcpRemoteToggle: 'settings.mcp_remote.toggle',
+    // Which AI apps may connect (`PUT /settings/mcp-client-policy`).
+    // `before` and `after` carry `{ mcpClientPolicy }`.
+    mcpClientPolicyChange: 'settings.mcp_client_policy.change',
     // Pre-connections instance OAuth app (`PUT /settings/integration-oauth-apps/:provider`,
     // removed). Kept so older audit rows still resolve; new rows use
     // `integration.oauthAppUpdate`.

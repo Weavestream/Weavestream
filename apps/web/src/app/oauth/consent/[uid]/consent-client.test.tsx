@@ -10,10 +10,22 @@ const UID = 'dxD8Ueeeemh4NVcpbl6FiTFOv5P09h5lCSWwz3p2l1M';
 const DETAILS = {
   uid: UID,
   clientId: 'https://claude.ai/oauth/mcp-client-metadata',
+  clientVerified: true,
   clientHost: 'claude.ai',
   clientName: 'Claude',
   redirectHost: 'claude.ai',
+  redirectLoopback: false,
   user: { email: 'pat@example.com' },
+};
+// An app that registered itself and returns to a loopback port.
+const UNVERIFIED_LOOPBACK = {
+  ...DETAILS,
+  clientId: 'Xk3_registered',
+  clientVerified: false,
+  clientHost: null,
+  clientName: 'Local agent',
+  redirectHost: '127.0.0.1',
+  redirectLoopback: true,
 };
 const ORIGIN = window.location.origin;
 
@@ -44,8 +56,8 @@ describe('ConsentClient', () => {
     assign.mockReset();
   });
 
-  async function renderLoaded() {
-    apiFetch.mockResolvedValueOnce({ ok: true, status: 200, data: DETAILS });
+  async function renderLoaded(data: unknown = DETAILS) {
+    apiFetch.mockResolvedValueOnce({ ok: true, status: 200, data });
     await act(async () => {
       render(<ConsentClient uid={UID} navigate={assign} />);
     });
@@ -58,6 +70,33 @@ describe('ConsentClient', () => {
     expect(screen.getAllByText('claude.ai')).toHaveLength(2);
     expect(screen.getByRole('radio', { name: /Read only/ })).toBeChecked();
     expect(screen.getByRole('radio', { name: /Read and change/ })).not.toBeChecked();
+  });
+
+  it('a verified app keeps the app row and the checked-addresses text, with no mark', async () => {
+    await renderLoaded();
+    expect(screen.getByText('App')).toBeInTheDocument();
+    expect(screen.getByText(/Weavestream checked the app and return addresses/)).toBeInTheDocument();
+    expect(screen.queryByText('Not verified')).not.toBeInTheDocument();
+  });
+
+  it('marks an app that registered itself, with no app row and its own warning', async () => {
+    await renderLoaded({ ...UNVERIFIED_LOOPBACK, redirectHost: 'assistant.example', redirectLoopback: false });
+    expect(screen.getByText('Local agent')).toBeInTheDocument();
+    expect(screen.getByText('Not verified')).toBeInTheDocument();
+    expect(screen.queryByText('App')).not.toBeInTheDocument();
+    expect(screen.getByText('assistant.example')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /This app registered itself. Weavestream cannot check its name. Only approve a connection you started yourself./,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Weavestream checked the app/)).not.toBeInTheDocument();
+  });
+
+  it('names a loopback return address as this computer', async () => {
+    await renderLoaded(UNVERIFIED_LOOPBACK);
+    expect(screen.getByText('This computer (localhost)')).toBeInTheDocument();
+    expect(screen.queryByText('127.0.0.1')).not.toBeInTheDocument();
   });
 
   it('approves read only by default and follows the resume URL', async () => {

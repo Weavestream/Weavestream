@@ -142,7 +142,7 @@ export async function proxyToApi(
     // with credentials included, a 401 to a request with a streamed body
     // becomes a network error ("expected non-null body source"), so every
     // 401 to a POST came back from this proxy as a 500 — fatal for `/mcp`,
-    // where the 401 challenge is how ChatGPT and Claude start sign-in.
+    // where the 401 challenge is how AI apps start sign-in.
     // Nothing is lost: server-side fetch has no cookie jar, and the inbound
     // Cookie and Authorization headers are forwarded explicitly above.
     credentials: 'omit',

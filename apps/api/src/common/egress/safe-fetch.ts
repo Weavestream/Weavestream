@@ -90,8 +90,19 @@ export type EgressBlockedInfo = {
 export type EgressBlockedCallback = (info: EgressBlockedInfo) => void;
 
 export interface SafeFetchOptions extends Omit<RequestInit, 'signal'> {
-  /** Hard upper bound on the request duration (start-to-headers + body). */
+  /**
+   * Upper bound on the time to response headers. With
+   * `timeoutCoversBody`, the same deadline also covers reading the body.
+   */
   timeoutMs: number;
+  /**
+   * Keep the `timeoutMs` deadline (and the caller's `signal`) running until
+   * the body is fully read, not only until the headers arrive. Use it for
+   * fetches to hosts an untrusted party chooses, so a server that sends
+   * headers at once and then stalls or trickles the body cannot hold the
+   * connection open. Off by default.
+   */
+  timeoutCoversBody?: boolean;
   /** Refuse to read more than this many bytes from the response body. */
   maxResponseBytes?: number;
   /**
@@ -448,6 +459,7 @@ async function safeFetchInternal(
     delete (init as { extraAllowedPrivateCidrs?: unknown }).extraAllowedPrivateCidrs;
     delete (init as { maxResponseBytes?: unknown }).maxResponseBytes;
     delete (init as { timeoutMs?: unknown }).timeoutMs;
+    delete (init as { timeoutCoversBody?: unknown }).timeoutCoversBody;
     // The `dispatcher` knob comes from the bundled undici inside Node's
     // global `fetch`. Node's RequestInit type uses `undici-types` for
     // the slot, but the actual implementation accepts any
@@ -490,6 +502,7 @@ async function safeFetchInternal(
       options.maxResponseBytes ?? config.defaultMaxResponseBytes,
       timer,
       ownedAgent,
+      options.timeoutCoversBody ? controller.signal : null,
     );
   } catch (err) {
     clearTimeout(timer);
@@ -612,22 +625,36 @@ function pickPinnableIp(ips: readonly string[]): string | null {
   return v4 ?? ips[0] ?? null;
 }
 
+/**
+ * `bodyDeadline`: when set (`timeoutCoversBody`), the request's abort signal
+ * keeps running through the body read, and its abort fails the body. When
+ * null, the timeout ends once headers are in and the caller is responsible
+ * for reading promptly.
+ */
 function wrapResponse(
   res: Response,
   maxBytes: number,
   timer: NodeJS.Timeout,
   ownedAgent: Agent | null,
+  bodyDeadline: AbortSignal | null,
 ): Response {
-  // Clear the timeout once headers are in — body reads handle their own
-  // limit. The caller is still responsible for reading promptly.
-  clearTimeout(timer);
+  // Without a body deadline, clear the timeout once headers are in — body
+  // reads handle their own size limit.
+  if (!bodyDeadline) clearTimeout(timer);
 
-  const closeAgent = async (): Promise<void> => {
+  let finished = false;
+  let onDeadline: (() => void) | null = null;
+  const finish = async (): Promise<void> => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    // A late abort after the body is done must do nothing.
+    if (onDeadline) bodyDeadline?.removeEventListener('abort', onDeadline);
     if (ownedAgent) await ownedAgent.close().catch(() => {});
   };
 
   if (!res.body) {
-    void closeAgent();
+    void finish();
     return res;
   }
 
@@ -635,12 +662,30 @@ function wrapResponse(
   let received = 0;
 
   const limited = new ReadableStream<Uint8Array>({
+    start(controller) {
+      if (!bodyDeadline) return;
+      // Fail the body at the deadline even if the source never answers the
+      // abort (a pending `read()` on a stalled stream would wait forever).
+      const deadline = bodyDeadline;
+      const fire = () => {
+        if (finished) return;
+        controller.error(deadline.reason ?? new Error('safeFetch body deadline exceeded'));
+        reader.cancel(deadline.reason).catch(() => {
+          // The body is already failed; a cancel error adds nothing.
+        });
+        void finish();
+      };
+      onDeadline = fire;
+      if (deadline.aborted) fire();
+      else deadline.addEventListener('abort', fire, { once: true });
+    },
     async pull(controller) {
       try {
         const { value, done } = await reader.read();
+        if (finished) return;
         if (done) {
           controller.close();
-          await closeAgent();
+          await finish();
           return;
         }
         received += value?.byteLength ?? 0;
@@ -651,18 +696,19 @@ function wrapResponse(
             ),
           );
           await reader.cancel();
-          await closeAgent();
+          await finish();
           return;
         }
         controller.enqueue(value);
       } catch (err) {
+        if (finished) return;
         controller.error(err);
-        await closeAgent();
+        await finish();
       }
     },
     async cancel(reason) {
       await reader.cancel(reason);
-      await closeAgent();
+      await finish();
     },
   });
 

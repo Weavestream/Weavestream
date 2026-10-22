@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import type {
   ArticleEditorMode,
+  McpClientPolicy,
   PasswordGeneratorDefaults,
   UpdateSettingsInput,
 } from '@weavestream/shared';
 import {
   DEFAULT_PASSWORD_GENERATOR_DEFAULTS,
   articleEditorModeSchema,
+  mcpClientPolicySchema,
   passwordGeneratorDefaultsSchema,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -30,6 +32,7 @@ export interface SystemSettingsDTO {
   articleDefaultEditorMode: ArticleEditorMode;
   apiKeysEnabled: boolean;
   mcpRemoteEnabled: boolean;
+  mcpClientPolicy: McpClientPolicy;
   updatedAt: string;
 }
 
@@ -151,7 +154,7 @@ export class SettingsService {
   }
 
   /**
-   * Whether remote MCP connections (ChatGPT, Claude over OAuth) are on. Read
+   * Whether remote MCP connections (AI apps over OAuth) are on. Read
    * on every `/mcp` request, every internal tool call, and every token
    * exchange, through the same 5 s cache as `apiKeysEnabled()`.
    */
@@ -172,17 +175,44 @@ export class SettingsService {
   }
 
   /**
-   * Flip one instance-wide access switch. The write and its audit row commit
+   * Which AI apps may connect to `/mcp`. Read on every client lookup, fetch,
+   * consent, token exchange and `/mcp` request, through the same 5 s cache as
+   * `mcpRemoteEnabled()`. It applies whether or not connections are on.
+   */
+  async mcpClientPolicy(): Promise<McpClientPolicy> {
+    return (await this.get()).mcpClientPolicy;
+  }
+
+  /**
+   * Change which AI apps may connect. Narrowing it refuses connections from
+   * other apps; it does not revoke them, so widening it again restores them.
+   */
+  async setMcpClientPolicy(
+    actor: AuthedUser,
+    policy: McpClientPolicy,
+    meta: { ip: string; userAgent: string },
+  ): Promise<SystemSettingsDTO> {
+    return this.setAccessSwitch(
+      'mcpClientPolicy',
+      AUDIT_ACTIONS.settings.mcpClientPolicyChange,
+      actor,
+      policy,
+      meta,
+    );
+  }
+
+  /**
+   * Change one instance-wide access setting. The write and its audit row commit
    * in one transaction: a change to who can authenticate must never exist
    * without its record, and a failed audit must leave the policy as it was.
    * The cache is dropped in `finally`, so even an unexpected failure cannot
    * leave this replica's guards serving a value the database no longer holds.
    */
-  private async setAccessSwitch(
-    field: 'apiKeysEnabled' | 'mcpRemoteEnabled',
+  private async setAccessSwitch<K extends AccessField>(
+    field: K,
     action: string,
     actor: AuthedUser,
-    enabled: boolean,
+    value: AccessValues[K],
     meta: { ip: string; userAgent: string },
   ): Promise<SystemSettingsDTO> {
     await this.loadOrSeed();
@@ -192,11 +222,11 @@ export class SettingsService {
         // exactly the transition that committed.
         const before = await tx.systemSetting.findUniqueOrThrow({
           where: { id: SINGLETON_ID },
-          select: { [field]: true } as { apiKeysEnabled: true } | { mcpRemoteEnabled: true },
+          select: { [field]: true } as Record<AccessField, true>,
         });
         const row = await tx.systemSetting.update({
           where: { id: SINGLETON_ID },
-          data: { [field]: enabled, updatedBy: actor.id },
+          data: { [field]: value, updatedBy: actor.id },
         });
         await this.audit.logWithClient(tx, {
           actorId: actor.id,
@@ -205,7 +235,7 @@ export class SettingsService {
           entityId: SINGLETON_ID,
           ip: meta.ip,
           userAgent: meta.userAgent,
-          before: { [field]: (before as Record<string, boolean>)[field] },
+          before: { [field]: (before as Record<string, unknown>)[field] },
           after: { [field]: row[field], sessionId: actor.sessionId },
         });
         return row;
@@ -235,6 +265,14 @@ export class SettingsService {
   }
 }
 
+/** The settings changed only through their own step-up route. */
+type AccessValues = {
+  apiKeysEnabled: boolean;
+  mcpRemoteEnabled: boolean;
+  mcpClientPolicy: McpClientPolicy;
+};
+type AccessField = keyof AccessValues;
+
 type SystemSettingRow = {
   workspaceName: string;
   workspaceSubtitle: string;
@@ -246,6 +284,7 @@ type SystemSettingRow = {
   articleDefaultEditorMode: string;
   apiKeysEnabled: boolean;
   mcpRemoteEnabled: boolean;
+  mcpClientPolicy: string;
   updatedAt: Date;
 };
 
@@ -259,6 +298,15 @@ type SystemSettingRow = {
 function readDefaultEditorMode(value: string): ArticleEditorMode {
   const parsed = articleEditorModeSchema.safeParse(value);
   return parsed.success ? parsed.data : 'tiptap';
+}
+
+/**
+ * Same defence for the client policy (CHECK constraint in migration 0086):
+ * an unknown value reads as the narrow default, never as `any`.
+ */
+function readMcpClientPolicy(value: string): McpClientPolicy {
+  const parsed = mcpClientPolicySchema.safeParse(value);
+  return parsed.success ? parsed.data : 'claude_chatgpt';
 }
 
 /**
@@ -287,6 +335,7 @@ function toDto(row: SystemSettingRow): SystemSettingsDTO {
     articleDefaultEditorMode: readDefaultEditorMode(row.articleDefaultEditorMode),
     apiKeysEnabled: row.apiKeysEnabled,
     mcpRemoteEnabled: row.mcpRemoteEnabled,
+    mcpClientPolicy: readMcpClientPolicy(row.mcpClientPolicy),
     updatedAt: row.updatedAt.toISOString(),
   };
 }
@@ -305,5 +354,6 @@ function stripForAudit(row: SystemSettingRow) {
     articleDefaultEditorMode: readDefaultEditorMode(row.articleDefaultEditorMode),
     apiKeysEnabled: row.apiKeysEnabled,
     mcpRemoteEnabled: row.mcpRemoteEnabled,
+    mcpClientPolicy: readMcpClientPolicy(row.mcpClientPolicy),
   };
 }

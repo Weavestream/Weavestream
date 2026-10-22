@@ -46,6 +46,7 @@ function renderConnectionTab(data: ConnectionDiagnostics) {
       apiKeysEnabled={false}
       connections={null}
       mcpRemoteEnabled={false}
+      mcpClientPolicy="claude_chatgpt"
       canRevoke={false}
       currentUserId="u-1"
     />,
@@ -128,6 +129,7 @@ describe('API keys tab', () => {
           apiKeysEnabled={props.enabled ?? true}
           connections={null}
           mcpRemoteEnabled={false}
+          mcpClientPolicy="claude_chatgpt"
           canRevoke={props.canRevoke ?? true}
           currentUserId="u-1"
         />
@@ -180,6 +182,7 @@ describe('SecurityCenterClient — AI connections tab', () => {
   const CONN = {
     id: 'c-1',
     clientId: 'https://chatgpt.com/oauth/client.json',
+    clientVerified: true,
     clientHost: 'chatgpt.com',
     clientName: 'ChatGPT',
     redirectHost: 'chatgpt.com',
@@ -189,8 +192,19 @@ describe('SecurityCenterClient — AI connections tab', () => {
     createdAt: '2026-10-01T00:00:00Z',
     user: { id: 'u-9', name: 'Pat Doe', email: 'pat@example.com' },
   };
+  // An app that registered itself: no checked host.
+  const DCR_CONN = { ...CONN, id: 'c-2', clientId: 'Xk3_registered', clientVerified: false, clientHost: null, clientName: 'Local agent', redirectHost: '127.0.0.1' };
 
-  function renderConnections(props: { enabled?: boolean; canRevoke?: boolean; total?: number; page?: number } = {}) {
+  function renderConnections(
+    props: {
+      enabled?: boolean;
+      canRevoke?: boolean;
+      total?: number;
+      page?: number;
+      items?: (typeof CONN | typeof DCR_CONN)[];
+      policy?: 'claude_chatgpt' | 'any';
+    } = {},
+  ) {
     render(
       <ToastProvider>
         <SecurityCenterClient
@@ -203,8 +217,9 @@ describe('SecurityCenterClient — AI connections tab', () => {
           egress={null}
           apiKeys={null}
           apiKeysEnabled
-          connections={{ items: [CONN], total: props.total ?? 1, page: props.page ?? 1, pageSize: 50 }}
+          connections={{ items: props.items ?? [CONN], total: props.total ?? 1, page: props.page ?? 1, pageSize: 50 }}
           mcpRemoteEnabled={props.enabled ?? true}
+          mcpClientPolicy={props.policy ?? 'claude_chatgpt'}
           canRevoke={props.canRevoke ?? true}
           currentUserId="u-1"
         />
@@ -260,5 +275,19 @@ describe('SecurityCenterClient — AI connections tab', () => {
   it('says when remote connections are switched off instance-wide', () => {
     renderConnections({ enabled: false });
     expect(screen.getByText(/Remote AI connections are turned off/)).toBeInTheDocument();
+  });
+
+  it('shows which apps can connect, read-only', () => {
+    renderConnections({ policy: 'any' });
+    expect(screen.getByText('Any MCP app')).toBeInTheDocument();
+    expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+  });
+
+  it('marks an app that registered itself as Not verified, in place of a host', () => {
+    renderConnections({ items: [CONN, DCR_CONN], total: 2, policy: 'any' });
+    expect(screen.getAllByText('Local agent').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Not verified').length).toBeGreaterThan(0);
+    // The verified one keeps its host and no mark of its own.
+    expect(screen.getAllByText('chatgpt.com').length).toBeGreaterThan(0);
   });
 });

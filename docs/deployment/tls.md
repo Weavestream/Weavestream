@@ -46,7 +46,7 @@ API_URL=https://your-domain.com/api
 
 Browsers stream every uploaded file (thumbnails, attachments, logos, export PDFs) through the API on the same origin as the web app, so there is no second virtual host to configure.
 
-`APP_URL` is also the public identity of the [remote MCP endpoint](/integrations/mcp/): ChatGPT and Claude connect to `APP_URL` followed by `/mcp`, and OAuth tokens are bound to that exact address. It must be the `https://` address users type, with no path.
+`APP_URL` is also the public identity of the [remote MCP endpoint](/integrations/mcp/): AI apps connect to `APP_URL` followed by `/mcp`, and OAuth tokens are bound to that exact address. It must be the `https://` address users type, with no path.
 
 Restart the stack after changing these: `docker compose up -d`
 
@@ -190,18 +190,18 @@ your-domain.com {
 
 **`cloudflared` straight to `web`.** Point the tunnel's public hostname at `http://web:3000` when `cloudflared` joins the compose network, or at `http://localhost:3000` when it runs on the host. Keep `TRUST_PROXY_HOPS=1`. A request that reaches `web` without the tunnel can choose its own `X-Forwarded-For`, so remove the published `web` port or bind it to loopback (see the next section).
 
-## Remote MCP (ChatGPT, Claude)
+## Remote MCP (AI apps)
 
-Nothing extra to route: `/mcp`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server` and `/api/v1/oauth/*` all go through the same catch-all to `web` as the rest of the app. Check these when you put a proxy or firewall in front:
+Nothing extra to route: `/mcp`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-authorization-server` and `/api/v1/oauth/*` (including `/api/v1/oauth/reg` for apps that register themselves, when **Any MCP app** is chosen) all go through the same catch-all to `web` as the rest of the app. Check these when you put a proxy or firewall in front:
 
-- **Do not block `/.well-known/`.** A rule that blocks dot-paths must exempt `/.well-known/`, or ChatGPT and Claude cannot discover how to sign in. Make the exemption a *starts with* match on `/.well-known/`.
+- **Do not block `/.well-known/`.** A rule that blocks dot-paths must exempt `/.well-known/`, or AI apps cannot discover how to sign in. Make the exemption a *starts with* match on `/.well-known/`.
 - **Allow JSON `POST` bodies to `/mcp`.** A web application firewall that inspects bodies may flag JSON-RPC requests; exempt `/mcp` if it does.
 - **Pass `WWW-Authenticate` through.** The first request from an AI app gets a `401` whose `WWW-Authenticate` header points to the sign-in metadata. A proxy that drops or rewrites 401 responses breaks the connection.
 - **IP rules.** If you use IP allow rules, allow the AI app's address ranges (Claude: `160.79.104.0/21`; ChatGPT: `https://openai.com/chatgpt-connectors.json`).
 
 ### Bot protection, challenges and WAF rules
 
-ChatGPT and Claude call some of these addresses from their own servers, with no browser and no person present. They cannot run a JavaScript challenge, solve a CAPTCHA or keep a challenge cookie. Any feature that answers with a challenge page instead of the real response breaks the connection, even though the same address works when you open it in your browser. Look for:
+AI apps such as ChatGPT and Claude call some of these addresses from their own servers, with no browser and no person present. They cannot run a JavaScript challenge, solve a CAPTCHA or keep a challenge cookie. Any feature that answers with a challenge page instead of the real response breaks the connection, even though the same address works when you open it in your browser. Look for:
 
 - **Bot protection or bot management** (in a WAF such as SafeLine, ModSecurity-based products or a hosting provider's firewall, and in a CDN such as Cloudflare's Bot Fight Mode).
 - **JavaScript challenges, "under attack" modes, CAPTCHA and human verification**.
@@ -325,7 +325,7 @@ For internal deployments where Let's Encrypt isn't available:
 | 502 Bad Gateway | `web` container not running or proxy pointing at wrong port |
 | Audit log shows the proxy IP for every request | `TRUST_PROXY_HOPS` is too low for your edge tier, or the proxy is not setting `X-Forwarded-For` correctly |
 | **Resolved client IP** on the Connection tab is a Docker address (for example `172.18.0.4`) | Check the **Inbound chain** row. If your public IP is in it, `TRUST_PROXY_HOPS` is too low: follow [Find the correct `TRUST_PROXY_HOPS`](#find-the-correct-trust_proxy_hops). If it is not, the client entry was lost before `web`. A proxy replaced `X-Forwarded-For` with the address of the hop in front of it (Caddy with `header_up X-Forwarded-For {remote_host}`, or Caddy behind `cloudflared` without `trusted_proxies`), or nothing set the header and `web` recorded the proxy's own address (for example with Cloudflare's **Remove visitor IP headers** Managed Transform). Fix the proxy: no `TRUST_PROXY_HOPS` value can recover a lost entry. |
-| ChatGPT or Claude says the server is unreachable or sign-in fails at once | Run the three checks under [Remote MCP](#remote-mcp-chatgpt-claude). A wrong `issuer` or `resource` means `APP_URL` is not the public address; a `403`/`404` on `/.well-known/` or `/mcp` means a proxy, WAF or IP rule blocks it. |
+| An AI app says the server is unreachable or sign-in fails at once | Run the three checks under [Remote MCP](#remote-mcp-ai-apps). A wrong `issuer` or `resource` means `APP_URL` is not the public address; a `403`/`404` on `/.well-known/` or `/mcp` means a proxy, WAF or IP rule blocks it. |
 | One of those checks returns an HTML page (a block page, a challenge, or a status such as `429` or `468`) instead of JSON or a `401` | Bot protection, a challenge or a WAF rule answered instead of Weavestream. Add the narrow exception in [Bot protection, challenges and WAF rules](#bot-protection-challenges-and-waf-rules). |
 | ChatGPT shows `client_id metadata document fetch not allowed` | ChatGPT sent a client identity Weavestream does not accept. This has been seen with a connector added from the ChatGPT desktop app. Make sure the three checks above pass, delete the connector, then add it again from ChatGPT on the web. |
 | The consent page says remote AI connections are turned off | An administrator turns them on in **Admin → Settings → API & MCP**. |

@@ -15,7 +15,7 @@ import { EnvService } from '../config/env.service.js';
 import { ipOf, userAgentOf } from '../common/request-meta.js';
 import { McpConnectionsService } from '../mcp-oauth/mcp-connections.service.js';
 import { OAuthProviderService } from '../mcp-oauth/oauth-provider.service.js';
-import { MCP_SCOPE } from '../mcp-oauth/mcp-oauth.constants.js';
+import { connectionAllowed, MCP_SCOPE } from '../mcp-oauth/mcp-oauth.constants.js';
 import type { McpRequest } from './mcp-principal.js';
 
 const MINUTE_MS = 60_000;
@@ -33,9 +33,10 @@ export function resourceMetadataUrl(issuer: string): string {
  * an API key, not a token for another audience.
  *
  * On every request it re-checks what can change after the token was issued:
- * the connection is live, the user is active and MFA-enrolled, and remote
- * connections are switched on. So a revocation, a deactivation or the switch
- * stops the next request, not the next token.
+ * the connection is live, the user is active and MFA-enrolled, remote
+ * connections are switched on, and the client policy still allows the app.
+ * So a revocation, a deactivation, the switch or a narrowed policy stops the
+ * next request, not the next token.
  *
  * Rate limits are its own, because the global throttler runs before any
  * controller guard and would key `/mcp` on the client IP — one provider
@@ -114,6 +115,8 @@ export class McpAccessTokenGuard implements CanActivate {
 
     const connection = await this.connections.findActiveByGrant(at.grantId);
     if (!connection || connection.userId !== at.accountId) return null;
+    // Refused, not revoked: widening the policy again restores it.
+    if (!connectionAllowed(await this.settings.mcpClientPolicy(), connection)) return null;
 
     const user = await this.prisma.user.findUnique({
       where: { id: connection.userId },

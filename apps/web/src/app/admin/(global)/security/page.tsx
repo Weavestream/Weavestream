@@ -191,6 +191,7 @@ export default async function SecurityCenterPage({
           apiKeysEnabled={settings.apiKeysEnabled}
           connections={connections}
           mcpRemoteEnabled={settings.mcpRemoteEnabled}
+          mcpClientPolicy={settings.mcpClientPolicy}
           canRevoke={canRevoke}
           currentUserId={me.id}
         />

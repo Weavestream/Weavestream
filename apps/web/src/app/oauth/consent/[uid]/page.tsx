@@ -5,7 +5,7 @@ import { CONSENT_UID } from '../../../../lib/safe-next-path';
 import { ConsentClient } from './consent-client';
 
 /**
- * Consent for a remote MCP connection (ChatGPT, Claude). The OAuth
+ * Consent for a remote MCP connection (an AI app). The OAuth
  * authorization server sends the browser here. It needs a normal Weavestream
  * session; without one, the user signs in (with MFA) and comes back.
  */

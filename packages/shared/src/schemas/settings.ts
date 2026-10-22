@@ -23,6 +23,22 @@ const trimmedString = (min: number, max: number, label: string) =>
 const nullableTrimmedString = (min: number, max: number, label: string) =>
   z.union([trimmedString(min, max, label), z.null()]);
 
+/**
+ * Which AI apps may connect to the remote MCP endpoint. `claude_chatgpt`
+ * accepts only claude.ai and ChatGPT; `any` accepts any app that supports
+ * MCP sign-in (client metadata documents from any host, dynamic client
+ * registration, loopback redirects). Every other gate is the same in both.
+ */
+export const mcpClientPolicyValues = ['claude_chatgpt', 'any'] as const;
+export const mcpClientPolicySchema = z.enum(mcpClientPolicyValues);
+export type McpClientPolicy = z.infer<typeof mcpClientPolicySchema>;
+
+/** UI labels for {@link McpClientPolicy}. */
+export const MCP_CLIENT_POLICY_LABELS: Record<McpClientPolicy, string> = {
+  claude_chatgpt: 'Claude and ChatGPT only',
+  any: 'Any MCP app',
+};
+
 export const systemSettingsSchema = z.object({
   workspaceName: z.string().min(1).max(60),
   workspaceSubtitle: z.string().min(1).max(60),
@@ -34,6 +50,7 @@ export const systemSettingsSchema = z.object({
   articleDefaultEditorMode: articleEditorModeSchema,
   apiKeysEnabled: z.boolean(),
   mcpRemoteEnabled: z.boolean(),
+  mcpClientPolicy: mcpClientPolicySchema,
   updatedAt: z.string(),
 });
 
@@ -64,10 +81,17 @@ export type UpdateApiKeysSettingInput = z.infer<typeof updateApiKeysSettingSchem
 
 /**
  * Same shape for the remote MCP switch (`PUT /settings/mcp-remote`): turning
- * on ChatGPT/Claude connections is a security decision with the same rules.
+ * on remote AI connections is a security decision with the same rules.
  */
 export const updateMcpRemoteSettingSchema = updateApiKeysSettingSchema;
 export type UpdateMcpRemoteSettingInput = UpdateApiKeysSettingInput;
+
+/**
+ * Which AI apps may connect (`PUT /settings/mcp-client-policy`). Same rules
+ * as the switches above: step-up, and never reachable by a key or connection.
+ */
+export const updateMcpClientPolicySchema = z.object({ policy: mcpClientPolicySchema }).strict();
+export type UpdateMcpClientPolicyInput = z.infer<typeof updateMcpClientPolicySchema>;
 
 export type SystemSettings = z.infer<typeof systemSettingsSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;

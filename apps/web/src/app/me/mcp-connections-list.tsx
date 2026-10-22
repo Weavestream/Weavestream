@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
-import type { McpConnectionSummary } from '@weavestream/shared';
+import { MCP_CLIENT_POLICY_LABELS, type McpClientPolicy, type McpConnectionSummary } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
 import { FormattedRelative } from '../../lib/timezone-context';
 import {
@@ -15,9 +15,10 @@ import {
   type DataColumn,
 } from '../../components/ui';
 import { ApiKeyAccessTags } from './api-keys-list';
+import { NotVerifiedTag } from './not-verified-tag';
 
 /**
- * Remote AI connections (ChatGPT, Claude) the user approved. Each one acts as
+ * Remote AI connections (AI apps such as Claude or ChatGPT) the user approved. Each one acts as
  * the user, read-only unless they allowed changes, until it is revoked here,
  * by an administrator, or by a password change or "sign out everywhere".
  * New connections start in the AI app, not here.
@@ -26,12 +27,15 @@ export function McpConnectionsList({
   connections,
   loadFailed = false,
   enabled = true,
+  policy,
 }: {
   connections: McpConnectionSummary[];
   /** The server-side list fetch failed; say so rather than show an empty list. */
   loadFailed?: boolean;
   /** The instance-wide switch; off refuses every connection until it is back on. */
   enabled?: boolean;
+  /** Which AI apps may connect; shown read-only. */
+  policy?: McpClientPolicy;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -112,11 +116,12 @@ export function McpConnectionsList({
     <div>
       <div style={{ padding: 10, borderBottom: '1px solid var(--line)' }}>
         <span style={{ fontSize: 12.5, color: 'var(--muted)', display: 'block', maxWidth: 620 }}>
-          AI apps you connected to Weavestream, such as ChatGPT or Claude. A connection acts as
+          AI apps you connected to Weavestream, such as Claude, ChatGPT or Claude Code. A connection acts as
           you, with your permissions, and is read-only unless you allowed changes. It can never
           see passwords or delete anything. To connect an app, add Weavestream in the app itself.
           Changing your password or signing out other sessions revokes every connection.
         </span>
+        {policy && <McpClientPolicyLine policy={policy} style={{ marginTop: 6 }} />}
       </div>
 
       {!enabled && (
@@ -190,14 +195,40 @@ export function McpConnectionsList({
   );
 }
 
-/** Name as stated by the app, with the verified host under it. */
-export function AppCell({ c }: { c: Pick<McpConnectionSummary, 'clientName' | 'clientHost'> }) {
+/**
+ * Name as stated by the app, with the verified host under it. An app that
+ * registered itself has no checked host: it is marked Not verified instead.
+ */
+export function AppCell({
+  c,
+}: {
+  c: Pick<McpConnectionSummary, 'clientName' | 'clientHost' | 'clientVerified'>;
+}) {
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}>
       <span style={{ color: 'var(--text)', fontWeight: 500 }}>{c.clientName}</span>
-      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--dim)' }}>
-        {c.clientHost}
-      </span>
+      {c.clientVerified && c.clientHost ? (
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--dim)' }}>
+          {c.clientHost}
+        </span>
+      ) : (
+        <NotVerifiedTag />
+      )}
     </div>
+  );
+}
+
+/** The instance's client policy, read-only. Admins change it in Settings → API & MCP. */
+export function McpClientPolicyLine({
+  policy,
+  style,
+}: {
+  policy: McpClientPolicy;
+  style?: CSSProperties;
+}) {
+  return (
+    <span style={{ display: 'block', fontSize: 12, color: 'var(--muted)', ...style }}>
+      Apps that can connect: <strong style={{ color: 'var(--text-2)', fontWeight: 500 }}>{MCP_CLIENT_POLICY_LABELS[policy]}</strong>
+    </span>
   );
 }

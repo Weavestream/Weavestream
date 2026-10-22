@@ -10,6 +10,7 @@ import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { lockUserForDelegatedMint } from '../auth/revoke-api-keys.js';
+import { clientHostOf, isVerifiedClientId } from './mcp-oauth.constants.js';
 
 type Meta = { ip: string; userAgent: string };
 
@@ -33,7 +34,8 @@ function toSummary(row: SummaryRow): McpConnectionSummary {
   return {
     id: row.id,
     clientId: row.clientId,
-    clientHost: hostOf(row.clientId),
+    clientVerified: isVerifiedClientId(row.clientId),
+    clientHost: clientHostOf(row.clientId),
     clientName: row.clientName,
     redirectHost: row.redirectHost,
     allowWrite: row.allowWrite,
@@ -43,20 +45,13 @@ function toSummary(row: SummaryRow): McpConnectionSummary {
   };
 }
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return url;
-  }
-}
-
 /** `lastUsedAt` is advisory: written at most this often per connection. */
 const TOUCH_INTERVAL_MS = 5 * 60_000;
 
 /**
  * Remote MCP connections: the server-side record of an OAuth grant a user
- * approved. `revokedAt` is the authority — every `/mcp` request, internal
+ * approved. The lists show every live connection whatever the client policy,
+ * so a connection the policy refuses can still be seen and revoked. `revokedAt` is the authority — every `/mcp` request, internal
  * tool call and token exchange checks it — so revoking here ends the
  * connection at once. The OAuth artifacts are deleted with it so nothing
  * usable-looking is left behind.
@@ -105,7 +100,8 @@ export class McpConnectionsService {
         before: null,
         after: {
           clientId: input.clientId,
-          clientHost: hostOf(input.clientId),
+          clientHost: clientHostOf(input.clientId),
+          clientVerified: isVerifiedClientId(input.clientId),
           redirectHost: input.redirectHost,
           allowWrite: input.allowWrite,
           sessionId: actor.sessionId,
@@ -119,7 +115,16 @@ export class McpConnectionsService {
   async findActiveByGrant(grantId: string) {
     const row = await this.prisma.mcpConnection.findUnique({
       where: { grantId },
-      select: { id: true, userId: true, allowWrite: true, revokedAt: true, expiresAt: true, lastUsedAt: true },
+      select: {
+        id: true,
+        userId: true,
+        clientId: true,
+        redirectHost: true,
+        allowWrite: true,
+        revokedAt: true,
+        expiresAt: true,
+        lastUsedAt: true,
+      },
     });
     if (!row || row.revokedAt || row.expiresAt.getTime() <= Date.now()) return null;
     return row;
@@ -129,7 +134,15 @@ export class McpConnectionsService {
   async findActiveById(id: string) {
     const row = await this.prisma.mcpConnection.findUnique({
       where: { id },
-      select: { id: true, userId: true, allowWrite: true, revokedAt: true, expiresAt: true },
+      select: {
+        id: true,
+        userId: true,
+        clientId: true,
+        redirectHost: true,
+        allowWrite: true,
+        revokedAt: true,
+        expiresAt: true,
+      },
     });
     if (!row || row.revokedAt || row.expiresAt.getTime() <= Date.now()) return null;
     return row;
@@ -248,7 +261,8 @@ export class McpConnectionsService {
         before: null,
         after: {
           targetUserId: row.userId,
-          clientHost: hostOf(row.clientId),
+          clientHost: clientHostOf(row.clientId),
+          clientVerified: isVerifiedClientId(row.clientId),
           reason,
           sessionId: actor.sessionId,
         },

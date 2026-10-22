@@ -28,6 +28,7 @@ import type {
   EgressBlocksResponse,
   LockoutsResponse,
   LoginActivity,
+  McpClientPolicy,
   SecuritySessionRow,
   ThrottleBlockEntry,
 } from '@weavestream/shared';
@@ -73,6 +74,7 @@ export function SecurityCenterClient({
   apiKeysEnabled,
   connections,
   mcpRemoteEnabled,
+  mcpClientPolicy,
   canRevoke,
   currentUserId,
 }: {
@@ -87,6 +89,7 @@ export function SecurityCenterClient({
   apiKeysEnabled: boolean;
   connections: AdminMcpConnectionPage | null;
   mcpRemoteEnabled: boolean;
+  mcpClientPolicy: McpClientPolicy;
   canRevoke: boolean;
   currentUserId: string;
 }) {
@@ -216,6 +219,7 @@ export function SecurityCenterClient({
           <AiConnectionsPane
             connections={connections}
             enabled={mcpRemoteEnabled}
+            policy={mcpClientPolicy}
             canRevoke={canRevoke}
             onRefresh={refresh}
           />

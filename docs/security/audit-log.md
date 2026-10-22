@@ -29,7 +29,7 @@ Every create, update, delete, archive, restore, and sensitive access operation w
 - **Security** session revocation, IP rule CRUD, egress blocks
 - **Login** events (success, failure, MFA success/failure, logout, refresh)
 - **Auth** MFA enroll/complete, sessions revoke others, remote AI connection approved (`auth.mcp_connection.create`) and revoked (`auth.mcp_connection.revoke`)
-- **Settings** the API key and remote AI connection switches (`settings.api_keys.toggle`, `settings.mcp_remote.toggle`)
+- **Settings** the API key and remote AI connection switches (`settings.api_keys.toggle`, `settings.mcp_remote.toggle`), and which AI apps can connect (`settings.mcp_client_policy.change`)
 
 ## Audit Entry Fields
 
@@ -48,7 +48,7 @@ Every create, update, delete, archive, restore, and sensitive access operation w
 | `before` | JSON snapshot of the record before the change |
 | `after` | JSON snapshot of the record after the change |
 | `apiKeyId` | The [API key](/security/api-keys/) that performed the action, when it was not an interactive session |
-| `mcpConnectionId` | The remote AI connection (ChatGPT, Claude) that performed the action, when it came through [`/mcp`](/integrations/mcp/) |
+| `mcpConnectionId` | The remote AI connection (an AI app such as Claude or ChatGPT) that performed the action, when it came through [`/mcp`](/integrations/mcp/) |
 
 For password operations, the `before`/`after` blobs contain metadata only (name, username, URL, tag). Ciphertext is never written to the audit log. Reveal entries log the password ID and actor only — the plaintext is never recorded.
 

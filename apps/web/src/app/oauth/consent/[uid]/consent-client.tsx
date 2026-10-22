@@ -3,7 +3,8 @@
 import { useEffect, useState } from 'react';
 import { problemMessage, type McpConsentDetails, type McpConsentResult } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
-import { Btn, ErrorBanner } from '../../../../components/ui';
+import { Btn, ErrorBanner, RadioOption } from '../../../../components/ui';
+import { NotVerifiedTag } from '../../../me/not-verified-tag';
 
 /**
  * Only the authorization server's resume URL on this origin is followed.
@@ -96,8 +97,14 @@ export function ConsentClient({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
-        <strong>{details.clientName}</strong> wants to use Weavestream as{' '}
-        <strong>{details.user.email}</strong>, with your permissions.
+        <strong>{details.clientName}</strong>
+        {!details.clientVerified && (
+          <>
+            {' '}
+            <NotVerifiedTag />
+          </>
+        )}{' '}
+        wants to use Weavestream as <strong>{details.user.email}</strong>, with your permissions.
       </p>
 
       <dl
@@ -113,31 +120,50 @@ export function ConsentClient({
           background: 'var(--panel-2)',
         }}
       >
-        <dt style={{ color: 'var(--muted)' }}>App</dt>
-        <dd style={{ margin: 0, fontFamily: 'var(--font-mono)', overflowWrap: 'anywhere' }}>
-          {details.clientHost}
-        </dd>
+        {details.clientVerified && details.clientHost && (
+          <>
+            <dt style={{ color: 'var(--muted)' }}>App</dt>
+            <dd style={{ margin: 0, fontFamily: 'var(--font-mono)', overflowWrap: 'anywhere' }}>
+              {details.clientHost}
+            </dd>
+          </>
+        )}
         <dt style={{ color: 'var(--muted)' }}>Returns to</dt>
-        <dd style={{ margin: 0, fontFamily: 'var(--font-mono)', overflowWrap: 'anywhere' }}>
-          {details.redirectHost}
-        </dd>
+        {details.redirectLoopback ? (
+          <dd style={{ margin: 0, overflowWrap: 'anywhere' }}>This computer (localhost)</dd>
+        ) : (
+          <dd style={{ margin: 0, fontFamily: 'var(--font-mono)', overflowWrap: 'anywhere' }}>
+            {details.redirectHost}
+          </dd>
+        )}
       </dl>
       <p style={{ margin: 0, fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.5 }}>
-        Weavestream checked the app and return addresses. The name “{details.clientName}” is
-        stated by the app. Only continue if you started this connection yourself.
+        {details.clientVerified ? (
+          <>
+            Weavestream checked the app and return addresses. The name “{details.clientName}” is
+            stated by the app. Only continue if you started this connection yourself.
+          </>
+        ) : (
+          <>
+            This app registered itself. Weavestream cannot check its name. Only approve a
+            connection you started yourself.
+          </>
+        )}
       </p>
 
       <fieldset style={{ margin: 0, padding: 0, border: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <legend style={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text)', marginBottom: 6 }}>
           Access
         </legend>
-        <AccessOption
+        <RadioOption
+          name="mcp-consent-access"
           checked={!allowWrite}
           onChange={() => setAllowWrite(false)}
           label="Read only"
           hint="Find and read companies, assets, articles, domains and password names."
         />
-        <AccessOption
+        <RadioOption
+          name="mcp-consent-access"
           checked={allowWrite}
           onChange={() => setAllowWrite(true)}
           label="Read and change"
@@ -161,45 +187,5 @@ export function ConsentClient({
         </Btn>
       </div>
     </div>
-  );
-}
-
-function AccessOption({
-  checked,
-  onChange,
-  label,
-  hint,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-  hint: string;
-}) {
-  return (
-    <label
-      style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 8,
-        padding: '10px 12px',
-        minHeight: 44,
-        border: `1px solid ${checked ? 'var(--accent-line)' : 'var(--line)'}`,
-        background: checked ? 'var(--panel-2)' : 'transparent',
-        borderRadius: 5,
-        cursor: 'pointer',
-      }}
-    >
-      <input
-        type="radio"
-        name="mcp-consent-access"
-        checked={checked}
-        onChange={onChange}
-        style={{ accentColor: 'var(--accent)', marginTop: 2 }}
-      />
-      <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontSize: 12.5, color: 'var(--text)' }}>{label}</span>
-        <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>{hint}</span>
-      </span>
-    </label>
   );
 }

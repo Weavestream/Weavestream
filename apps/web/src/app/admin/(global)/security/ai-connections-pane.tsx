@@ -6,12 +6,13 @@ import {
   ADMIN_MCP_CONNECTION_PAGE_SIZES,
   type AdminMcpConnectionPage,
   type AdminMcpConnectionRow,
+  type McpClientPolicy,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { FormattedDateTime } from '../../../../lib/timezone-context';
 import { Btn, DataTable, Pagination, useToast, type DataColumn } from '../../../../components/ui';
 import { ApiKeyAccessTags } from '../../../me/api-keys-list';
-import { AppCell } from '../../../me/mcp-connections-list';
+import { AppCell, McpClientPolicyLine } from '../../../me/mcp-connections-list';
 
 /**
  * Every live remote AI connection on the instance, with its owner. An admin
@@ -22,11 +23,14 @@ import { AppCell } from '../../../me/mcp-connections-list';
 export function AiConnectionsPane({
   connections,
   enabled,
+  policy,
   canRevoke,
   onRefresh,
 }: {
   connections: AdminMcpConnectionPage | null;
   enabled: boolean;
+  /** Which AI apps may connect; shown read-only. */
+  policy: McpClientPolicy;
   canRevoke: boolean;
   onRefresh: () => void;
 }) {
@@ -153,6 +157,7 @@ export function AiConnectionsPane({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <McpClientPolicyLine policy={policy} />
       {!enabled && (
         <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
           Remote AI connections are turned off in Settings → API &amp; MCP, so every connection

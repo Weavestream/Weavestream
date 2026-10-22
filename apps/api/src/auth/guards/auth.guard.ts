@@ -19,6 +19,7 @@ import type { AuthedUser } from '../../common/current-user.decorator.js';
 import { isInternalListenerRequest } from '../../common/internal-listener.js';
 import { DELEGATION_PREFIX, McpDelegationService } from '../../mcp/mcp-delegation.service.js';
 import { McpConnectionsService } from '../../mcp-oauth/mcp-connections.service.js';
+import { connectionAllowed } from '../../mcp-oauth/mcp-oauth.constants.js';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -140,6 +141,9 @@ export class AuthGuard implements CanActivate {
 
     const connection = await this.mcpConnections.findActiveById(delegation.connectionId);
     if (!connection || connection.userId !== delegation.userId) throw new UnauthorizedException();
+    if (!connectionAllowed(await this.settings.mcpClientPolicy(), connection)) {
+      throw new UnauthorizedException();
+    }
     const user = await this.prisma.user.findUnique({ where: { id: connection.userId } });
     if (!user || !user.isActive) throw new UnauthorizedException();
 

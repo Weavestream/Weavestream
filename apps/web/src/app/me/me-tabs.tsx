@@ -10,7 +10,7 @@ import { ProfileForm } from './profile-form';
 import { PasswordForm } from './password-form';
 import { SessionsList } from './sessions-list';
 import { ApiKeysList } from './api-keys-list';
-import type { ApiKeySummary, McpConnectionSummary } from '@weavestream/shared';
+import type { ApiKeySummary, McpClientPolicy, McpConnectionSummary } from '@weavestream/shared';
 import { McpConnectionsList } from './mcp-connections-list';
 import { AppearanceForm } from './appearance-form';
 import { MfaBackupCodes } from './mfa-backup-codes';
@@ -67,7 +67,7 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
   {
     id: 'ai-connections',
     label: 'AI connections',
-    help: 'ChatGPT, Claude and other AI apps you connected.',
+    help: 'Claude, ChatGPT and other AI apps you connected.',
   },
 ];
 
@@ -81,6 +81,7 @@ export function MeTabs({
   connections,
   connectionsLoadFailed,
   mcpRemoteEnabled,
+  mcpClientPolicy,
 }: {
   initialTab: TabId;
   me: Me;
@@ -90,6 +91,7 @@ export function MeTabs({
   connections: McpConnectionSummary[];
   connectionsLoadFailed: boolean;
   mcpRemoteEnabled: boolean;
+  mcpClientPolicy: McpClientPolicy;
   sessions: Session[];
 }) {
   const connectionCount = connectionsLoadFailed ? null : connections.length;
@@ -346,6 +348,7 @@ export function MeTabs({
               connections={connections}
               loadFailed={connectionsLoadFailed}
               enabled={mcpRemoteEnabled}
+              policy={mcpClientPolicy}
             />
           </Panel>
         )}

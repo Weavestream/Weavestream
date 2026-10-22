@@ -22,6 +22,7 @@ export {
 export { Tag, type TagTone } from './tag';
 export { Toggle } from './toggle';
 export { Checkbox } from './checkbox';
+export { RadioOption } from './radio-option';
 export { Kbd } from './kbd';
 export { Panel } from './panel';
 export { ShowMore } from './show-more';

@@ -109,7 +109,7 @@ JWTs are short-lived (15 minutes), so even if a token is used after revocation, 
 
 ## Remote AI Connections (OAuth)
 
-ChatGPT and Claude connect to the [MCP endpoint](/integrations/mcp/) at `/mcp` with OAuth. Two separate parts are involved, and only one of them signs anyone in:
+AI apps such as Claude and ChatGPT connect to the [MCP endpoint](/integrations/mcp/) at `/mcp` with OAuth. Two separate parts are involved, and only one of them signs anyone in:
 
 | Part | Job | What it checks |
 |---|---|---|
@@ -118,11 +118,14 @@ ChatGPT and Claude connect to the [MCP endpoint](/integrations/mcp/) at `/mcp` w
 
 The authorization server has no login form and never sees a password or an MFA code. When it needs a person, it sends the browser to the consent page at `/oauth/consent/…`. That page requires a normal Weavestream session; without one, the person signs in at `/login` (with MFA) and comes back. Approving requires a fresh MFA step-up, the same as creating an [API key](/security/api-keys/).
 
-- **Clients.** Only ChatGPT and Claude, identified by client metadata documents on `chatgpt.com` and `claude.ai`, with return addresses on `chatgpt.com`, `claude.ai` or `claude.com`. There is no open client registration.
+- **Clients.** An administrator chooses which apps can connect, in **Admin → Settings → API & MCP → Which AI apps can connect** (step-up required, audited as `settings.mcp_client_policy.change`).
+  - **Claude and ChatGPT only** (the default): client metadata documents on `chatgpt.com` and `claude.ai`, with return addresses on `chatgpt.com`, `claude.ai` or `claude.com`. No client registration.
+  - **Any MCP app**: client metadata documents from any `https` address (verified: the app is shown with that address), and public clients that register themselves through dynamic client registration (unverified: shown as **Not verified**, with no initial access token and no registration management). Registered clients must be public (`token_endpoint_auth_method: none`), use only the authorization code and refresh token grants, and use return addresses that are `https`, or `http` on `127.0.0.1`, `[::1]` or `localhost` (any port, RFC 8252). PKCE is required for every client.
+  - Narrowing the choice refuses other apps' connections on their next request without revoking them.
 - **Tokens.** Authorization codes, access tokens and refresh tokens are random values stored only as SHA-256 hashes. Access tokens last one hour and are valid only for `https://<instance>/mcp`; the REST API refuses them. Refresh tokens rotate on every use, and a reused one, or a reused code, ends the connection. A connection lasts at most one year.
 - **Browser binding.** A consent link works only in the browser that started the authorization, so a link sent to someone else cannot be approved by them for another person's AI app.
 - **No second session.** The authorization server's own browser session is never used to skip consent: every authorization needs the person's live Weavestream session.
-- **Revocation.** The person revokes a connection under **Account → AI connections**; an administrator under **Security center → AI connections**. Every event that revokes API keys (password change, signing out other sessions, MFA reset, re-invite, deactivation, the recovery CLI commands) revokes AI connections too. Every `/mcp` request and every token refresh checks the connection, the person's account and the **Allow remote AI connections** switch, so a revocation takes effect on the next request.
+- **Revocation.** The person revokes a connection under **Account → AI connections**; an administrator under **Security center → AI connections**. Every event that revokes API keys (password change, signing out other sessions, MFA reset, re-invite, deactivation, the recovery CLI commands) revokes AI connections too. Every `/mcp` request and every token refresh checks the connection, the person's account, the **Allow remote AI connections** switch and the client choice above, so a revocation takes effect on the next request.
 - **Containment.** A connection has the same limits as an API key on the REST API it reaches internally: no account, user, session or key management, no step-up actions, no password reveal, and read-only unless the person allowed changes.
 
 ## Rate Limiting and Lockout

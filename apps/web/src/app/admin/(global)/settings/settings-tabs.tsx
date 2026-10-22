@@ -11,7 +11,7 @@ import {
 } from './settings-form';
 import { EmailSettingsForm } from './email-settings-form';
 import { AiSettingsForm } from './ai-settings-form';
-import { ApiKeysSwitch, McpRemoteSwitch } from './api-keys-switch';
+import { ApiKeysSwitch, McpClientPolicyChoice, McpRemoteSwitch } from './api-keys-switch';
 import { IntegrationPriorityList } from './integration-priority-list';
 import type { TabId } from './tab-ids';
 
@@ -49,7 +49,7 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
   {
     id: 'api',
     label: 'API & MCP',
-    help: 'Programmatic access: API keys, and remote AI connections from ChatGPT and Claude.',
+    help: 'Programmatic access: API keys, and remote AI connections from AI apps.',
   },
 ];
 
@@ -144,6 +144,7 @@ export function SettingsTabs({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
             <ApiKeysSwitch enabled={settings.apiKeysEnabled} />
             <McpRemoteSwitch enabled={settings.mcpRemoteEnabled} />
+            <McpClientPolicyChoice policy={settings.mcpClientPolicy} />
           </div>
         )}
       </div>

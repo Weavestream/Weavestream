@@ -1,16 +1,25 @@
 import { z } from 'zod';
 
 /**
- * A remote MCP connection (ChatGPT, Claude) as its owner sees it. Never a
- * token, a code or the grant id.
+ * A remote MCP connection (an AI app such as Claude or ChatGPT) as its owner
+ * sees it. Never a token, a code or the grant id.
  */
 export interface McpConnectionSummary {
   id: string;
-  /** Client ID Metadata Document URL. */
+  /**
+   * Client ID Metadata Document URL for a verified client, or the opaque id
+   * the server issued to an app that registered itself.
+   */
   clientId: string;
-  /** Host of `clientId` — the verified identity of the client. */
-  clientHost: string;
-  /** `client_name` from the document. Stated by the client, display only. */
+  /**
+   * True when `clientId` is an https URL (a client metadata document fetched
+   * from that host). False for an app that registered itself: its name and
+   * identity are not checked.
+   */
+  clientVerified: boolean;
+  /** Host of `clientId` for a verified client; null for one that registered itself. */
+  clientHost: string | null;
+  /** `client_name` stated by the client, display only. */
   clientName: string;
   /** Host the approved redirect URI points at. */
   redirectHost: string;
@@ -39,16 +48,21 @@ export const ADMIN_MCP_CONNECTION_PAGE_SIZES = [25, 50, 100] as const;
 export const ADMIN_MCP_CONNECTION_DEFAULT_PAGE_SIZE = 50;
 
 /**
- * What the consent page shows. The client and redirect hosts are verified
- * (the client metadata document was fetched from `clientHost`, and the
- * redirect URI was checked against it); `clientName` is not.
+ * What the consent page shows. For a verified client the host is checked
+ * (the client metadata document was fetched from `clientHost`); an app that
+ * registered itself has no checked host (`clientHost` null). The redirect URI
+ * is always checked against the client's registered ones. `clientName` is
+ * never checked.
  */
 export interface McpConsentDetails {
   uid: string;
   clientId: string;
-  clientHost: string;
+  clientVerified: boolean;
+  clientHost: string | null;
   clientName: string;
   redirectHost: string;
+  /** The app returns to a loopback address on the user's own computer. */
+  redirectLoopback: boolean;
   user: { email: string };
 }
 

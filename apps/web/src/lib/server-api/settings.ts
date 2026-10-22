@@ -5,6 +5,7 @@ import type {
   ArticleEditorMode,
   EmailSettings,
   IntegrationPriorityDto,
+  McpClientPolicy,
   PasswordGeneratorDefaults,
 } from '@weavestream/shared';
 import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
@@ -34,6 +35,8 @@ export type Settings = {
   apiKeysEnabled: boolean;
   /** Instance-wide remote MCP switch. Changed only via `PUT /settings/mcp-remote`. */
   mcpRemoteEnabled: boolean;
+  /** Which AI apps may connect to `/mcp`. Changed only via `PUT /settings/mcp-client-policy`. */
+  mcpClientPolicy: McpClientPolicy;
   updatedAt: string;
 };
 
@@ -54,6 +57,7 @@ const DEFAULT_SETTINGS: Settings = {
   articleDefaultEditorMode: 'tiptap',
   apiKeysEnabled: false,
   mcpRemoteEnabled: false,
+  mcpClientPolicy: 'claude_chatgpt',
   updatedAt: new Date(0).toISOString(),
 };
 

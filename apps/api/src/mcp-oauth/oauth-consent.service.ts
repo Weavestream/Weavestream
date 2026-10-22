@@ -5,7 +5,15 @@ import type { AuthedUser } from '../common/current-user.decorator.js';
 import { SettingsService } from '../settings/settings.service.js';
 import { McpConnectionsService } from './mcp-connections.service.js';
 import { OAuthProviderService } from './oauth-provider.service.js';
-import { areAllowedRedirects, isAllowedClientId, MCP_SCOPE, TTL } from './mcp-oauth.constants.js';
+import {
+  areAllowedRedirects,
+  clientHostOf,
+  isAllowedClientId,
+  isLoopbackRedirect,
+  isVerifiedClientId,
+  MCP_SCOPE,
+  TTL,
+} from './mcp-oauth.constants.js';
 
 type Meta = { ip: string; userAgent: string };
 
@@ -41,9 +49,11 @@ export class OAuthConsentService {
     return {
       uid,
       clientId: pending.clientId,
-      clientHost: new URL(pending.clientId).hostname,
+      clientVerified: pending.clientVerified,
+      clientHost: pending.clientHost,
       clientName: pending.clientName,
       redirectHost: pending.redirectHost,
+      redirectLoopback: pending.redirectLoopback,
       user: { email: actor.email },
     };
   }
@@ -105,7 +115,11 @@ export class OAuthConsentService {
     return { redirectTo };
   }
 
-  /** The pending authorization this browser started, re-checked against policy. */
+  /**
+   * The pending authorization this browser started, re-checked against the
+   * client policy in force now. Never parses a client id that is not a URL
+   * (an app that registered itself).
+   */
   private async load(uid: string, req: IncomingMessage, res: ServerResponse) {
     if (!(await this.settings.mcpRemoteEnabled())) {
       throw new ForbiddenException('Remote AI connections are turned off on this instance.');
@@ -125,25 +139,37 @@ export class OAuthConsentService {
     }
 
     // The provider already enforced all of this when the request arrived;
-    // re-checked here because this is where a person is asked to trust it.
+    // re-checked here because this is where a person is asked to trust it,
+    // and the policy may have changed since.
+    const policy = await this.settings.mcpClientPolicy();
     const clientId = String(details.params.client_id ?? '');
     const redirectUri = String(details.params.redirect_uri ?? '');
     const requested = details.params.resource;
+    const clientVerified = isVerifiedClientId(clientId);
+    // A client that registered itself has an opaque id; only mode `any`
+    // accepts one. A verified client must pass the policy's id rule.
+    const clientOk = clientVerified ? isAllowedClientId(clientId, policy) : policy === 'any' && clientId !== '';
     if (
-      !isAllowedClientId(clientId) ||
-      !areAllowedRedirects([redirectUri]) ||
+      !clientOk ||
+      !areAllowedRedirects([redirectUri], policy) ||
       (requested !== undefined && requested !== this.oauth.resource)
     ) {
       throw new BadRequestException(EXPIRED_REQUEST);
     }
     const client = await this.oauth.provider.Client.find(clientId);
-    if (!client || !client.redirectUris?.includes(redirectUri)) {
+    // The library's own match: exact, or any port on a loopback redirect
+    // for a native client (RFC 8252 §7.3).
+    if (!client || !client.redirectUriAllowed(redirectUri)) {
       throw new BadRequestException(EXPIRED_REQUEST);
     }
+    const clientHost = clientHostOf(clientId);
     return {
       clientId,
-      clientName: (client.clientName ?? '').trim().slice(0, 100) || new URL(clientId).hostname,
+      clientVerified,
+      clientHost,
+      clientName: (client.clientName ?? '').trim().slice(0, 100) || clientHost || 'Unnamed app',
       redirectHost: new URL(redirectUri).hostname,
+      redirectLoopback: isLoopbackRedirect(redirectUri),
     };
   }
 }

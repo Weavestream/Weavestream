@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { folderNameSchema, problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
-import { Btn, Dialog, Field, Input, Select, useToast } from '../../../../../components/ui';
+import { Btn, Dialog, Field, Input, RadioOption, Select, useToast } from '../../../../../components/ui';
 import type { FolderNode } from '@weavestream/shared';
 
 type Cascade = 'unassign' | 'archive';
@@ -277,14 +277,18 @@ export function FolderSettingsDialog({
               error={error ?? undefined}
             >
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <CascadeOption
+                <RadioOption
+                  name="folder-archive-cascade"
+                  dense
                   checked={cascade === 'unassign'}
                   onChange={() => setCascade('unassign')}
                   label="Move articles to Unfiled"
                   hint="Articles are kept and moved to the company's Unfiled list."
                   disabled={pending}
                 />
-                <CascadeOption
+                <RadioOption
+                  name="folder-archive-cascade"
+                  dense
                   checked={cascade === 'archive'}
                   onChange={() => setCascade('archive')}
                   label="Archive articles"
@@ -303,48 +307,6 @@ export function FolderSettingsDialog({
         </div>
       )}
     </Dialog>
-  );
-}
-
-function CascadeOption({
-  checked,
-  onChange,
-  label,
-  hint,
-  disabled,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-  hint: string;
-  disabled: boolean;
-}) {
-  return (
-    <label
-      style={{
-        display: 'flex',
-        alignItems: 'flex-start',
-        gap: 8,
-        padding: '8px 10px',
-        border: `1px solid ${checked ? 'var(--accent-line)' : 'var(--line)'}`,
-        background: checked ? 'var(--panel-2)' : 'transparent',
-        borderRadius: 5,
-        cursor: disabled ? 'default' : 'pointer',
-      }}
-    >
-      <input
-        type="radio"
-        name="folder-archive-cascade"
-        checked={checked}
-        onChange={onChange}
-        disabled={disabled}
-        style={{ accentColor: 'var(--accent)', marginTop: 2 }}
-      />
-      <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <span style={{ fontSize: 12.5, color: 'var(--text)' }}>{label}</span>
-        <span style={{ fontSize: 11.5, color: 'var(--muted)' }}>{hint}</span>
-      </span>
-    </label>
   );
 }
 

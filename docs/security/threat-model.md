@@ -85,7 +85,7 @@ An attacker who has obtained valid credentials and TOTP for an `OPERATOR` accoun
 
 ### Compromised AI App or Connection Token
 
-An attacker who controls a ChatGPT or Claude account connected to Weavestream, or who obtains a connection's OAuth tokens, or who plants instructions in documentation an AI app reads.
+An attacker who controls an AI app account connected to Weavestream (such as ChatGPT or Claude), or who obtains a connection's OAuth tokens, or who plants instructions in documentation an AI app reads. When the administrator allows **Any MCP app**, also an attacker who registers a client that pretends to be a known app, and tries to get a user to approve it.
 
 **Mitigations:**
 
@@ -93,7 +93,7 @@ An attacker who controls a ChatGPT or Claude account connected to Weavestream, o
 - The access token is valid **only on `/mcp`** (audience-bound) and refused by the REST API, so the token can reach only the MCP tools: no password reveal, no delete, archive or purge, no user, permission, key or setting changes. New articles are created hidden from client users.
 - Each tool call reaches the REST API through a **single-use internal credential** bound to one method and path, on a loopback-only listener, so the full permission and tenant checks run for every call. The external token is never forwarded.
 - Access tokens last one hour; refresh tokens rotate, and **reusing a code or refresh token ends the connection**. Simultaneous reuse is caught atomically.
-- Only `chatgpt.com` and `claude.ai` client metadata documents are accepted, with return addresses on their own hosts; there is no open client registration, and a consent link works only in the browser that started it.
+- By default only `chatgpt.com` and `claude.ai` client metadata documents are accepted, with return addresses on their own hosts, and there is no client registration. With **Any MCP app**, an app that registered itself is marked **Not verified** on the consent page, with no app address, and the user must still sign in with MFA and approve with a step-up; return addresses are limited to `https` and loopback `http`. Fetched client documents go through the egress guard, with a size limit and a 2.5-second deadline that covers the whole response. A consent link works only in the browser that started it.
 - The user, an administrator, or any credential-revoking event (password change, sign out everywhere, MFA reset, deactivation) **revokes the connection**, effective on its next request. An instance switch refuses every connection at once without revoking it; turning the switch back on restores existing connections.
 - Changes are **audited with the connection's id**, and the Security Center lists every connection.
 - Content returned to the model is labelled as data, not instructions. This reduces, but cannot remove, the risk that planted text steers an AI app; read-only connections limit what such text could cause.

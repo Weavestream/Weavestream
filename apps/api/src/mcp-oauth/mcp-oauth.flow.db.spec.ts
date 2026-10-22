@@ -9,6 +9,7 @@ import { McpConnectionsService } from './mcp-connections.service.js';
 import { OAuthProviderService } from './oauth-provider.service.js';
 import { OAuthConsentService } from './oauth-consent.service.js';
 import { OAuthProviderController } from './oauth-provider.controller.js';
+import { McpAccessTokenGuard } from '../mcp/mcp-access-token.guard.js';
 
 /**
  * The remote MCP authorization server end to end, against Postgres: the real
@@ -30,6 +31,11 @@ const CLAUDE_CB = 'https://claude.ai/api/mcp/auth_callback';
 const GPT = 'https://chatgpt.com/oauth/client.json';
 const GPT_CB = 'https://chatgpt.com/connector_platform_oauth_redirect';
 const GPT_JWKS = 'https://chatgpt.com/oauth/jwks.json';
+// Another app with its own client metadata document, on a custom port.
+const AGENT = 'https://agent.example:8443/oauth/client.json';
+const AGENT_CB = 'https://agent.example:8443/oauth/callback';
+// A document host that sends headers and then never finishes the body.
+const STALL = 'https://stall.example/oauth/client.json';
 
 const USER_A = '3c100000-0000-4000-8000-00000000a001';
 const USER_B = '3c100000-0000-4000-8000-00000000a002';
@@ -51,12 +57,27 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
   const prisma = new PrismaService();
   const audit = { logWithClient: jest.fn().mockResolvedValue(undefined), log: jest.fn() };
   let enabled = true;
-  const settings = { mcpRemoteEnabled: async () => enabled };
-  const env = { values: { APP_URL: ISSUER, COOKIE_SIGNING_KEY: 'k'.repeat(48) } };
+  let policy: 'claude_chatgpt' | 'any' = 'claude_chatgpt';
+  const settings = { mcpRemoteEnabled: async () => enabled, mcpClientPolicy: async () => policy };
+  const env = {
+    values: { APP_URL: ISSUER, COOKIE_SIGNING_KEY: 'k'.repeat(48), GLOBAL_RATE_LIMIT_PER_MIN: 10_000 },
+  };
   const connections = new McpConnectionsService(prisma, audit as never);
   const oauth = new OAuthProviderService(env as never, prisma, settings as never, connections);
   const consent = new OAuthConsentService(oauth, connections, settings as never);
-  const controller = new OAuthProviderController(oauth);
+  const controller = new OAuthProviderController(oauth, settings as never);
+  // The real `/mcp` guard, with a throttle that never limits.
+  const mcpGuard = new McpAccessTokenGuard(
+    oauth,
+    connections,
+    prisma,
+    settings as never,
+    env as never,
+    { increment: async () => ({ totalHits: 1, timeToExpire: 60_000, isBlocked: false, timeToBlockExpire: 0 }) } as never,
+  );
+  /** Client ids registered through `/reg`, removed after the run. */
+  const registered: string[] = [];
+  let stallCancelled = false;
   let server: Server;
   let base = '';
 
@@ -82,6 +103,14 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
       response_types: ['code'],
     },
     [GPT_JWKS]: { keys: [{ ...gptKey.publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256', use: 'sig' }] },
+    [AGENT]: {
+      client_id: AGENT,
+      client_name: 'Agent',
+      redirect_uris: [AGENT_CB],
+      token_endpoint_auth_method: 'none',
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+    },
   };
   const fetched: string[] = [];
 
@@ -96,8 +125,20 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify(body));
     };
+    const readBody = () =>
+      new Promise<string>((ok) => {
+        let s = '';
+        req.on('data', (c) => (s += c));
+        req.on('end', () => ok(s));
+      });
     try {
       if (url.pathname.startsWith('/api/v1/oauth/')) {
+        // Registration is JSON, which Express parses before the controller
+        // in production (main.ts); do the same here.
+        if (url.pathname === '/api/v1/oauth/reg' && req.method === 'POST') {
+          const raw = await readBody();
+          (r as unknown as { body: unknown }).body = raw ? JSON.parse(raw) : undefined;
+        }
         await controller.handle(r as never, res as never);
         return;
       }
@@ -107,11 +148,7 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
       const meta = { ip: '203.0.113.5', userAgent: 'jest' };
       if (m[2] === 'details') return json(200, await consent.details(actor, m[1]!, req, res));
       if (m[2] === 'deny') return json(200, await consent.deny(m[1]!, req, res));
-      const body = await new Promise<string>((ok) => {
-        let s = '';
-        req.on('data', (c) => (s += c));
-        req.on('end', () => ok(s));
-      });
+      const body = await readBody();
       const allowWrite = (JSON.parse(body || '{}') as { allowWrite?: boolean }).allowWrite === true;
       return json(200, await consent.approve(actor, m[1]!, allowWrite, req, res, meta));
     } catch (err) {
@@ -215,11 +252,33 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
   const refresh = (clientId: string, refreshToken: string) =>
     token(clientId, { grant_type: 'refresh_token', refresh_token: refreshToken, resource: RESOURCE });
 
-  /** What `/mcp` will check: a live token for this resource, on a live connection. */
+  /** Whether `/mcp` accepts the token: the real guard, as on a request. */
   async function usable(accessToken: string): Promise<boolean> {
-    const at = await oauth.provider.AccessToken.find(accessToken);
-    if (!at || at.aud !== RESOURCE || !at.grantId) return false;
-    return (await connections.findActiveByGrant(at.grantId)) !== null;
+    const req = { headers: { authorization: `Bearer ${accessToken}` }, ip: '203.0.113.9', socket: {} };
+    const res = { setHeader: () => undefined, removeHeader: () => undefined };
+    const ctx = { switchToHttp: () => ({ getRequest: () => req, getResponse: () => res }) };
+    try {
+      return await mcpGuard.canActivate(ctx as never);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Dynamic client registration, as an MCP app sends it. */
+  async function register(body: unknown) {
+    const res = await fetch(`${base}/api/v1/oauth/reg`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const json = (await res.json()) as Record<string, unknown>;
+    if (typeof json.client_id === 'string') registered.push(json.client_id);
+    return { status: res.status, json };
+  }
+
+  async function consentDetails(browser: Browser, flow: { uid: string }, user = USER_A) {
+    const res = await browser.go(`/api/v1/oauth-consent/${flow.uid}/details`, { headers: { 'x-test-user': user } });
+    return { status: res.status, json: (await res.json()) as Record<string, unknown> };
   }
 
   async function connect(user = USER_A, clientId = CLAUDE, redirectUri = CLAUDE_CB) {
@@ -237,6 +296,21 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
     setDefaultFetchForTests((async (input: string | URL) => {
       const url = String(input);
       fetched.push(url);
+      if (url === STALL) {
+        // Headers at once, then part of a document and nothing more.
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(`{"client_id":"${STALL}",`));
+          },
+          pull() {
+            return new Promise<void>(() => undefined);
+          },
+          cancel() {
+            stallCancelled = true;
+          },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+      }
       const doc = docs[url];
       return doc
         ? new Response(JSON.stringify(doc), { status: 200, headers: { 'content-type': 'application/json' } })
@@ -266,6 +340,7 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
       select: { grantId: true },
     });
     await prisma.oAuthArtifact.deleteMany({ where: { grantId: { in: grants.map((g) => g.grantId) } } });
+    await prisma.oAuthArtifact.deleteMany({ where: { id: { in: registered.map((id) => `Client:${id}`) } } });
     for (const id of [USER_A, USER_B]) {
       await prisma.oAuthArtifact.deleteMany({ where: { kind: 'Session', payload: { path: ['accountId'], equals: id } } });
     }
@@ -275,6 +350,7 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
 
   beforeEach(() => {
     enabled = true;
+    policy = 'claude_chatgpt';
     jest.restoreAllMocks();
   });
 
@@ -582,5 +658,165 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
     } finally {
       await prisma.user.update({ where: { id: USER_A }, data: { isActive: true } });
     }
+  });
+
+  describe('client policy: Claude and ChatGPT only', () => {
+    it('serves no registration: 404, and none advertised', async () => {
+      expect((await register({ redirect_uris: ['http://127.0.0.1:1111/cb'] })).status).toBe(404);
+      const meta = (await (await fetch(`${base}/api/v1/oauth/.well-known/openid-configuration`)).json()) as object;
+      expect(meta).not.toHaveProperty('registration_endpoint');
+    });
+
+    it('refuses a client metadata document from another host, without fetching it', async () => {
+      const flow = await authorize(new Browser(), AGENT, AGENT_CB);
+      expect(flow.res.status).toBe(400);
+      expect(fetched).not.toContain(AGENT);
+    });
+  });
+
+  describe('client policy: any MCP app', () => {
+    beforeEach(() => {
+      policy = 'any';
+    });
+
+    it('advertises the registration endpoint', async () => {
+      const meta = (await (await fetch(`${base}/api/v1/oauth/.well-known/openid-configuration`)).json()) as Record<
+        string,
+        unknown
+      >;
+      expect(meta.registration_endpoint).toBe(`${ISSUER}/api/v1/oauth/reg`);
+      expect(meta.code_challenge_methods_supported).toEqual(['S256']);
+    });
+
+    it('connects a client metadata document from another host, on a custom port', async () => {
+      const browser = new Browser();
+      const flow = await authorize(browser, AGENT, AGENT_CB);
+      expect(fetched).toContain(AGENT);
+      const details = await consentDetails(browser, flow);
+      expect(details.json).toMatchObject({
+        clientVerified: true,
+        clientHost: 'agent.example',
+        clientName: 'Agent',
+        redirectHost: 'agent.example',
+        redirectLoopback: false,
+      });
+      const approved = await approve(browser, flow);
+      const code = approved.callback!.searchParams.get('code')!;
+      expect(approved.callback!.origin + approved.callback!.pathname).toBe(AGENT_CB);
+      const tokens = await exchange(flow, code);
+      expect(tokens.status).toBe(200);
+      expect(await usable(tokens.json.access_token!)).toBe(true);
+    });
+
+    it('registers a public client and connects it end to end, on a new loopback port', async () => {
+      const reg = await register({
+        client_name: 'Test Agent',
+        redirect_uris: ['http://127.0.0.1:1111/callback'],
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        token_endpoint_auth_method: 'none',
+      });
+      expect(reg.status).toBe(201);
+      const clientId = String(reg.json.client_id);
+      expect(clientId).not.toMatch(/^https?:/);
+      expect(reg.json.application_type).toBe('native');
+      // Registration management stays off: nothing to manage the client with.
+      expect(reg.json).not.toHaveProperty('registration_access_token');
+      expect(reg.json).not.toHaveProperty('client_secret');
+
+      // The app listens on a different port than it registered (RFC 8252 §7.3).
+      const redirectUri = 'http://127.0.0.1:2222/callback';
+      const browser = new Browser();
+      const flow = await authorize(browser, clientId, redirectUri);
+      expect(flow.uid).not.toBe('');
+      const details = await consentDetails(browser, flow);
+      expect(details.json).toMatchObject({
+        clientId,
+        clientVerified: false,
+        clientHost: null,
+        clientName: 'Test Agent',
+        redirectHost: '127.0.0.1',
+        redirectLoopback: true,
+      });
+
+      const approved = await approve(browser, flow, USER_A, true);
+      expect(approved.callback!.origin).toBe('http://127.0.0.1:2222');
+      const tokens = await exchange(flow, approved.callback!.searchParams.get('code')!);
+      expect(tokens.status).toBe(200);
+      expect(await usable(tokens.json.access_token!)).toBe(true);
+
+      const connection = await prisma.mcpConnection.findFirstOrThrow({ where: { clientId } });
+      expect(connection).toMatchObject({ clientName: 'Test Agent', redirectHost: '127.0.0.1', allowWrite: true });
+      expect(audit.logWithClient).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'auth.mcp_connection.create',
+          after: expect.objectContaining({ clientId, clientHost: null, clientVerified: false }),
+        }),
+      );
+
+      const r1 = await refresh(clientId, tokens.json.refresh_token!);
+      expect(r1.status).toBe(200);
+      expect(r1.json.refresh_token).not.toBe(tokens.json.refresh_token);
+      expect(await usable(r1.json.access_token!)).toBe(true);
+    });
+
+    it('refuses a confidential client, and a redirect on a LAN host', async () => {
+      for (const body of [
+        { redirect_uris: ['http://127.0.0.1:1111/cb'], token_endpoint_auth_method: 'client_secret_basic' },
+        { redirect_uris: ['http://192.168.1.20/cb'] },
+        { redirect_uris: ['myapp://callback'] },
+        { redirect_uris: ['http://127.0.0.1:1111/cb'], grant_types: ['client_credentials'] },
+      ]) {
+        const reg = await register(body);
+        expect(reg).toMatchObject({ status: 400, json: { error: 'invalid_client_metadata' } });
+      }
+    });
+
+    it('refuses registration while remote connections are off', async () => {
+      enabled = false;
+      expect((await register({ redirect_uris: ['http://127.0.0.1:1111/cb'] })).status).toBe(403);
+    });
+
+    it('gives up on a document whose body stalls, at the fetch deadline', async () => {
+      stallCancelled = false;
+      const before = fetched.filter((u) => u === STALL).length;
+      const started = Date.now();
+      const flow = await authorize(new Browser(), STALL, 'https://stall.example/cb');
+      expect(flow.res.status).toBe(400);
+      expect(stallCancelled).toBe(true);
+      // The library looks the client up again in its error handler, so the
+      // document is fetched twice; each fetch ends at the 2.5 s deadline.
+      const fetches = fetched.filter((u) => u === STALL).length - before;
+      expect(fetches).toBeGreaterThanOrEqual(1);
+      expect(fetches).toBeLessThanOrEqual(2);
+      expect(Date.now() - started).toBeLessThan(fetches * 2_500 + 1_500);
+    }, 15_000);
+
+    it('narrowing the policy refuses other apps\' connections without revoking them', async () => {
+      const reg = await register({ client_name: 'Local app', redirect_uris: ['http://localhost:1111/cb'] });
+      const clientId = String(reg.json.client_id);
+      const local = await connect(USER_A, clientId, 'http://localhost:3333/cb');
+      expect(local.tokens.status).toBe(200);
+      const claude = await connect(USER_A, CLAUDE, CLAUDE_CB);
+
+      policy = 'claude_chatgpt';
+      expect(await usable(local.tokens.json.access_token!)).toBe(false);
+      expect((await refresh(clientId, local.tokens.json.refresh_token!)).status).toBe(400);
+      // It cannot start a new authorization either.
+      expect((await authorize(new Browser(), clientId, 'http://localhost:4444/cb')).res.status).toBe(400);
+      // Claude works in both modes.
+      expect(await usable(claude.tokens.json.access_token!)).toBe(true);
+      const claudeRefreshed = await refresh(CLAUDE, claude.tokens.json.refresh_token!);
+      expect(claudeRefreshed.status).toBe(200);
+      // Still listed, so it can be revoked.
+      expect((await connections.listForUser(USER_A)).some((c) => c.clientId === clientId)).toBe(true);
+
+      policy = 'any';
+      const resumed = await refresh(clientId, local.tokens.json.refresh_token!);
+      expect(resumed.status).toBe(200);
+      expect(await usable(resumed.json.access_token!)).toBe(true);
+      expect(await usable(claudeRefreshed.json.access_token!)).toBe(true);
+    });
   });
 });

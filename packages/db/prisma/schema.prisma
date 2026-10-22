@@ -1072,6 +1072,11 @@ model SystemSetting {
   // instance. While off, /mcp refuses every token and no consent is given;
   // connections are kept, so turning it back on restores them.
   mcpRemoteEnabled          Boolean  @default(false) @map("mcp_remote_enabled")
+  // Which AI apps may connect to /mcp: `claude_chatgpt` (only claude.ai and
+  // ChatGPT, the default) or `any` (any CIMD client, dynamic registration
+  // and loopback redirects). Free-form text guarded by a CHECK constraint
+  // (migration 0086) and read through `mcpClientPolicySchema`.
+  mcpClientPolicy           String   @default("claude_chatgpt") @map("mcp_client_policy")
   // Which integration's values win when several are bound to one asset:
   // driver keys, highest priority first. NULL = the shared default order
   // (DEFAULT_INTEGRATION_PRIORITY); read through resolveIntegrationPriority.

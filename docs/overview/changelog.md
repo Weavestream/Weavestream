@@ -15,6 +15,7 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ### Added
 
+- **Connect any MCP app.** A new choice under **Admin → Settings → API & MCP → Which AI apps can connect**: **Claude and ChatGPT only** (the default, unchanged) or **Any MCP app**. With **Any MCP app**, Claude Code, Gemini CLI, Cursor, self-hosted assistants and other apps connect with only the `/mcp` address: each user signs in with MFA and approves the connection, as before. Apps that register themselves are marked **Not verified** on the consent page and in the connection lists. Changing the choice needs MFA step-up and is audited; changing back refuses other apps' connections without deleting them. See [MCP Server](/integrations/mcp/#which-ai-apps-can-connect).
 - **Open in Level from the asset page.** The Level RMM section on a device now has an **Open in Level** button next to its title that opens the device in Level's web app in a new tab. The link is built from the synced device id when the page loads, so nothing new is stored and no resync is needed.
 
 ## [1.10.2] - 2026-10-14

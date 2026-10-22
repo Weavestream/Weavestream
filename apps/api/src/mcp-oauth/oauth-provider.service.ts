@@ -1,5 +1,6 @@
 import { generateKeyPairSync, hkdfSync } from 'node:crypto';
 import { Injectable, Logger, type OnModuleInit } from '@nestjs/common';
+import type { McpClientPolicy } from '@weavestream/shared';
 import type { Configuration, KoaContextWithOIDC, Provider } from 'oidc-provider';
 import { EnvService } from '../config/env.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -9,6 +10,7 @@ import { McpConnectionsService, type McpRevokeReason } from './mcp-connections.s
 import { oauthAdapterFactory } from './oauth-adapter.js';
 import {
   areAllowedRedirects,
+  connectionAllowed,
   FETCH_HOSTS,
   isAllowedClientId,
   MCP_SCOPE,
@@ -63,8 +65,10 @@ const FETCH_MAX_BYTES = 64 * 1024;
 const FETCH_TIMEOUT_MS = 2_500;
 
 /**
- * The OAuth authorization server for remote MCP clients (ChatGPT, Claude),
- * built on `oidc-provider`. It is NOT a second login system: it never sees a
+ * The OAuth authorization server for remote MCP clients (AI apps such as
+ * Claude and ChatGPT), built on `oidc-provider`. Which apps it accepts is the
+ * admin's client policy, read on every request (see `mcp-oauth.constants.ts`).
+ * It is NOT a second login system: it never sees a
  * password or an MFA code. When it needs a user, it sends the browser to the
  * consent page, which requires a normal Weavestream session (login + MFA)
  * and a step-up to approve.
@@ -156,6 +160,9 @@ export class OAuthProviderService implements OnModuleInit {
         const body = { ...(ctx.body as Record<string, unknown>) };
         body.scopes_supported = [MCP_SCOPE];
         for (const key of OIDC_ONLY_METADATA) delete body[key];
+        // Registration is always on in the library (the provider is built
+        // once); it is served and advertised only while any app may connect.
+        if ((await this.settings.mcpClientPolicy()) !== 'any') delete body.registration_endpoint;
         ctx.body = body;
       }
     });
@@ -207,7 +214,14 @@ export class OAuthProviderService implements OnModuleInit {
       pkce: { required: () => true },
       features: {
         devInteractions: { enabled: false },
-        registration: { enabled: false },
+        // Dynamic client registration of public clients, for apps with no
+        // client metadata document (local apps on a loopback redirect). The
+        // route is served only in mode `any`, with the switch on, and after
+        // `dcr-metadata.ts` checked the request (the controller). No initial
+        // access token; no registration access token, because registration
+        // management (read, update, delete) stays off.
+        registration: { enabled: true, initialAccessToken: false, issueRegistrationAccessToken: false },
+        registrationManagement: { enabled: false },
         introspection: { enabled: false },
         userinfo: { enabled: false },
         rpInitiatedLogout: { enabled: false },
@@ -221,8 +235,15 @@ export class OAuthProviderService implements OnModuleInit {
           enabled: true,
           // Experimental in the library; the pinned version implements draft-02.
           ack: 'draft-02',
-          allowFetch: async (_ctx, clientId) => isAllowedClientId(clientId),
-          allowClient: async (_ctx, client) => areAllowedRedirects(client.redirectUris ?? []),
+          allowFetch: async (_ctx, clientId) => isAllowedClientId(clientId, await this.settings.mcpClientPolicy()),
+          // Runs on every lookup, including one served from the library's
+          // document cache (which skips `allowFetch`), so the client id is
+          // checked again here: a document cached in mode `any` is refused
+          // once the policy is narrowed.
+          allowClient: async (_ctx, client) => {
+            const policy = await this.settings.mcpClientPolicy();
+            return isAllowedClientId(client.clientId, policy) && areAllowedRedirects(client.redirectUris ?? [], policy);
+          },
         },
         resourceIndicators: {
           enabled: true,
@@ -272,8 +293,8 @@ export class OAuthProviderService implements OnModuleInit {
         short: { httpOnly: true, sameSite: 'lax' },
       },
       // Runs on every code and refresh exchange, so revocation, deactivation,
-      // an unfinished MFA enrollment and the instance switch all stop the
-      // next token.
+      // an unfinished MFA enrollment, the instance switch and the client
+      // policy all stop the next token.
       findAccount: async (_ctx, sub, token) => {
         if (!(await this.settings.mcpRemoteEnabled())) return undefined;
         const user = await this.prisma.user.findUnique({
@@ -285,6 +306,7 @@ export class OAuthProviderService implements OnModuleInit {
         if (grantId) {
           const connection = await this.connections.findActiveByGrant(grantId);
           if (!connection || connection.userId !== sub) return undefined;
+          if (!connectionAllowed(await this.settings.mcpClientPolicy(), connection)) return undefined;
         }
         return { accountId: sub, claims: () => ({ sub }) };
       },
@@ -294,24 +316,42 @@ export class OAuthProviderService implements OnModuleInit {
         ctx.type = 'application/json';
         ctx.body = { error: out.error, error_description: out.error_description };
       },
-      // Only allowlisted hosts, and through the project's egress guard.
-      fetch: (input, init) => guardedFetch(input, init),
+      // Only hosts the client policy allows, through the project's egress guard.
+      fetch: async (input, init) => guardedFetch(await this.settings.mcpClientPolicy(), input, init),
     };
   }
 }
 
-/** Only allowlisted https hosts, through `safeFetch` (SSRF guard). */
-async function guardedFetch(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+/**
+ * Client documents and their JWKS, through `safeFetch` (SSRF guard, size cap,
+ * timeout). `claude_chatgpt`: https on `FETCH_HOSTS` only, no port. `any`: any
+ * https URL. The deadline covers the whole body, not only the headers: in
+ * mode `any` the host is chosen by whoever starts an authorization.
+ */
+export async function guardedFetch(
+  policy: McpClientPolicy,
+  input: string | URL | Request,
+  init?: RequestInit,
+): Promise<Response> {
   const url = new URL(input instanceof Request ? input.url : String(input));
-  if (url.protocol !== 'https:' || url.port || !FETCH_HOSTS.has(url.hostname)) {
+  const allowed =
+    url.protocol === 'https:' && (policy === 'any' || (!url.port && FETCH_HOSTS.has(url.hostname)));
+  if (!allowed) {
     throw new Error(`Refusing to fetch ${url.hostname}: not an allowed client host.`);
   }
-  // The library passes its own undici `dispatcher` and `signal`; `safeFetch`
-  // brings its own connection guard and timeout.
-  const { dispatcher: _dispatcher, signal: _signal, ...rest } = (init ?? {}) as RequestInit & {
+  // The library passes its own undici `dispatcher`; `safeFetch` brings its
+  // own connection guard. The library's `signal` (its own 2.5 s timeout) is
+  // kept, next to ours.
+  const { dispatcher: _dispatcher, signal, ...rest } = (init ?? {}) as RequestInit & {
     dispatcher?: unknown;
   };
-  return safeFetch(url.href, { ...rest, timeoutMs: FETCH_TIMEOUT_MS, maxResponseBytes: FETCH_MAX_BYTES });
+  return safeFetch(url.href, {
+    ...rest,
+    signal: signal ?? null,
+    timeoutMs: FETCH_TIMEOUT_MS,
+    timeoutCoversBody: true,
+    maxResponseBytes: FETCH_MAX_BYTES,
+  });
 }
 
 /** A per-process ES256 key that never leaves memory. */

@@ -843,3 +843,124 @@ describe('parseCidr / ipMatchesAny', () => {
     });
   });
 });
+
+describe('safeFetch — timeoutCoversBody', () => {
+  const resolveTo = (ips: readonly string[]) => async () => ips;
+  afterEach(() => resetEgressGuardForTests());
+
+  /** Headers at once; then the body follows `chunks`, each after `gapMs`, and stalls when `stall` is set. */
+  function slowBody(chunks: string[], gapMs: number, stall: boolean) {
+    const timers: NodeJS.Timeout[] = [];
+    let cancelled = false;
+    const fetchImpl = (async () => {
+      let i = 0;
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          return new Promise<void>((resolve) => {
+            if (i >= chunks.length) {
+              if (!stall) controller.close();
+              // A stalled source never resolves this pull.
+              if (!stall) resolve();
+              return;
+            }
+            timers.push(
+              setTimeout(() => {
+                controller.enqueue(new TextEncoder().encode(chunks[i++]!));
+                resolve();
+              }, gapMs),
+            );
+          });
+        },
+        cancel() {
+          cancelled = true;
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    return {
+      fetchImpl,
+      wasCancelled: () => cancelled,
+      cleanup: () => timers.forEach(clearTimeout),
+    };
+  }
+
+  const opts = (fetchImpl: typeof fetch, extra: Record<string, unknown> = {}) => ({
+    timeoutMs: 50,
+    timeoutCoversBody: true,
+    fetchImpl,
+    resolve: resolveTo(['93.184.216.34']),
+    ...extra,
+  });
+
+  it('fails a body that stalls after the headers, at the deadline', async () => {
+    const src = slowBody(['{"a":'], 1, true);
+    try {
+      const started = Date.now();
+      const res = await safeFetch('https://agent.example/client.json', opts(src.fetchImpl));
+      await expect(res.text()).rejects.toThrow(/timeout/);
+      expect(Date.now() - started).toBeLessThan(500);
+      expect(src.wasCancelled()).toBe(true);
+    } finally {
+      src.cleanup();
+    }
+  });
+
+  it('fails a body that trickles past the deadline', async () => {
+    const src = slowBody(Array.from({ length: 40 }, () => 'x'), 20, false);
+    try {
+      const started = Date.now();
+      const res = await safeFetch('https://agent.example/client.json', opts(src.fetchImpl));
+      await expect(res.text()).rejects.toThrow(/timeout/);
+      expect(Date.now() - started).toBeLessThan(500);
+    } finally {
+      src.cleanup();
+    }
+  });
+
+  it('reads a body that finishes in time, with no late abort', async () => {
+    const src = slowBody(['{"a":', '1}'], 5, false);
+    const external = new AbortController();
+    try {
+      const res = await safeFetch(
+        'https://agent.example/client.json',
+        opts(src.fetchImpl, { timeoutMs: 200, signal: external.signal }),
+      );
+      await expect(res.json()).resolves.toEqual({ a: 1 });
+      // Past the deadline, and an abort after the body is done: nothing fails.
+      await new Promise((r) => setTimeout(r, 250));
+      external.abort();
+    } finally {
+      src.cleanup();
+    }
+  });
+
+  it('honours the caller signal during the body read', async () => {
+    const src = slowBody(['{"a":'], 1, true);
+    const external = new AbortController();
+    try {
+      const res = await safeFetch(
+        'https://agent.example/client.json',
+        opts(src.fetchImpl, { timeoutMs: 5_000, signal: external.signal }),
+      );
+      const reading = res.text();
+      setTimeout(() => external.abort(new Error('caller gave up')), 20);
+      await expect(reading).rejects.toThrow(/caller gave up/);
+    } finally {
+      src.cleanup();
+    }
+  });
+
+  it('without the flag, keeps today\'s behaviour: the deadline ends at the headers', async () => {
+    const src = slowBody(['{"a":', '1}'], 80, false);
+    try {
+      const res = await safeFetch('https://agent.example/client.json', {
+        timeoutMs: 50,
+        fetchImpl: src.fetchImpl,
+        resolve: resolveTo(['93.184.216.34']),
+      });
+      await expect(res.json()).resolves.toEqual({ a: 1 });
+    } finally {
+      src.cleanup();
+    }
+  });
+});

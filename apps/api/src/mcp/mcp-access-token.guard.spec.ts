@@ -9,9 +9,17 @@ const GOOD = { aud: RESOURCE, grantId: 'g-1', accountId: 'u-1', scope: 'mcp' };
 
 function makeGuard({
   token = GOOD as Record<string, unknown> | null,
-  connection = { id: 'c-1', userId: 'u-1', allowWrite: false, lastUsedAt: null } as Record<string, unknown> | null,
+  connection = {
+    id: 'c-1',
+    userId: 'u-1',
+    clientId: 'https://claude.ai/oauth/mcp-client-metadata',
+    redirectHost: 'claude.ai',
+    allowWrite: false,
+    lastUsedAt: null,
+  } as Record<string, unknown> | null,
   user = { isActive: true, mfaEnforcementCompletedAt: new Date() } as Record<string, unknown> | null,
   enabled = true,
+  policy = 'claude_chatgpt' as 'claude_chatgpt' | 'any',
   limit = 600,
 } = {}) {
   const hits = new Map<string, number>();
@@ -27,7 +35,10 @@ function makeGuard({
   const oauth = { issuer: ISSUER, resource: RESOURCE, provider: { AccessToken: { find } } };
   const connections = { findActiveByGrant: jest.fn().mockResolvedValue(connection), touch: jest.fn() };
   const prisma = { user: { findUnique: jest.fn().mockResolvedValue(user) } };
-  const settings = { mcpRemoteEnabled: jest.fn().mockResolvedValue(enabled) };
+  const settings = {
+    mcpRemoteEnabled: jest.fn().mockResolvedValue(enabled),
+    mcpClientPolicy: jest.fn().mockResolvedValue(policy),
+  };
   const env = { values: { GLOBAL_RATE_LIMIT_PER_MIN: limit } };
   const guard = new McpAccessTokenGuard(
     oauth as never,
@@ -101,6 +112,36 @@ describe('McpAccessTokenGuard', () => {
   ])('401 when %s', async (_label, opts) => {
     const { guard } = makeGuard(opts as never);
     await expect(guard.canActivate(ctxFor(bearer('tok')).ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  describe('client policy', () => {
+    const dcr = {
+      id: 'c-1',
+      userId: 'u-1',
+      clientId: 'Xk3_registered-id',
+      redirectHost: '127.0.0.1',
+      allowWrite: false,
+      lastUsedAt: null,
+    };
+
+    it('401 for another app\'s connection while only Claude and ChatGPT may connect', async () => {
+      const { guard } = makeGuard({ connection: dcr });
+      const { ctx, res } = ctxFor(bearer('tok'));
+      await expect(guard.canActivate(ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+      expect(res.setHeader).toHaveBeenCalledWith('WWW-Authenticate', expect.stringContaining('error="invalid_token"'));
+    });
+
+    it('accepts the same connection while any app may connect', async () => {
+      const { guard } = makeGuard({ connection: dcr, policy: 'any' });
+      await expect(guard.canActivate(ctxFor(bearer('tok')).ctx)).resolves.toBe(true);
+    });
+
+    it('accepts a Claude connection in both modes', async () => {
+      for (const policy of ['claude_chatgpt', 'any'] as const) {
+        const { guard } = makeGuard({ policy });
+        await expect(guard.canActivate(ctxFor(bearer('tok')).ctx)).resolves.toBe(true);
+      }
+    });
   });
 
   it('403 when remote connections are switched off', async () => {

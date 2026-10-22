@@ -35,6 +35,8 @@ function baseRow(overrides: Partial<Record<string, unknown>> = {}) {
     articleAutosaveEnabled: false,
     articleDefaultEditorMode: 'tiptap',
     apiKeysEnabled: false,
+    mcpRemoteEnabled: false,
+    mcpClientPolicy: 'claude_chatgpt',
     updatedAt: NOW,
     updatedBy: null as string | null,
     ...overrides,
@@ -82,6 +84,8 @@ describe('SettingsService.get', () => {
       articleAutosaveEnabled: false,
       articleDefaultEditorMode: 'tiptap',
       apiKeysEnabled: false,
+      mcpRemoteEnabled: false,
+      mcpClientPolicy: 'claude_chatgpt',
       updatedAt: NOW.toISOString(),
     });
     expect(prisma.systemSetting.findUnique).toHaveBeenCalledTimes(1);
@@ -313,6 +317,72 @@ describe('SettingsService API key switch', () => {
     // that was skipped by the failure.
     const reads = prisma.systemSetting.findUnique.mock.calls.length;
     await svc.apiKeysEnabled();
+    expect(prisma.systemSetting.findUnique.mock.calls.length).toBe(reads + 1);
+  });
+});
+
+describe('SettingsService MCP client policy', () => {
+  it('is claude_chatgpt by default', async () => {
+    const prisma = makePrisma();
+    prisma.systemSetting.findUnique.mockResolvedValue(baseRow({ mcpClientPolicy: 'claude_chatgpt' }));
+    const svc = new SettingsService(prisma as never, makeAudit() as never);
+    await expect(svc.mcpClientPolicy()).resolves.toBe('claude_chatgpt');
+    await expect(svc.get()).resolves.toMatchObject({ mcpClientPolicy: 'claude_chatgpt' });
+  });
+
+  it('reads an unknown stored value as the narrow default, never as any', async () => {
+    const prisma = makePrisma();
+    prisma.systemSetting.findUnique.mockResolvedValue(baseRow({ mcpClientPolicy: 'everyone' }));
+    const svc = new SettingsService(prisma as never, makeAudit() as never);
+    await expect(svc.mcpClientPolicy()).resolves.toBe('claude_chatgpt');
+  });
+
+  it('writes and audits in one transaction, then drops the cache', async () => {
+    const prisma = makePrisma();
+    prisma.systemSetting.findUnique.mockResolvedValue(baseRow({ mcpClientPolicy: 'claude_chatgpt' }));
+    prisma.systemSetting.findUniqueOrThrow.mockResolvedValue({ mcpClientPolicy: 'claude_chatgpt' });
+    prisma.systemSetting.update.mockResolvedValue(baseRow({ mcpClientPolicy: 'any' }));
+    const audit = makeAudit();
+    const svc = new SettingsService(prisma as never, audit as never);
+
+    await expect(svc.mcpClientPolicy()).resolves.toBe('claude_chatgpt'); // warm the cache
+    const out = await svc.setMcpClientPolicy(ACTOR, 'any', META);
+    prisma.systemSetting.findUnique.mockResolvedValue(baseRow({ mcpClientPolicy: 'any' }));
+
+    expect(out.mcpClientPolicy).toBe('any');
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(prisma.systemSetting.findUniqueOrThrow).toHaveBeenCalledWith({
+      where: { id: 'singleton' },
+      select: { mcpClientPolicy: true },
+    });
+    expect(prisma.systemSetting.update).toHaveBeenCalledWith({
+      where: { id: 'singleton' },
+      data: { mcpClientPolicy: 'any', updatedBy: 'actor-1' },
+    });
+    expect(audit.log).not.toHaveBeenCalled();
+    expect(audit.logWithClient.mock.calls[0][0]).toBe(prisma);
+    expect(audit.logWithClient.mock.calls[0][1]).toMatchObject({
+      action: 'settings.mcp_client_policy.change',
+      entityType: 'SystemSetting',
+      before: { mcpClientPolicy: 'claude_chatgpt' },
+      after: { mcpClientPolicy: 'any', sessionId: 's-1' },
+    });
+    await expect(svc.mcpClientPolicy()).resolves.toBe('any');
+  });
+
+  it('fails as a whole when the audit write fails, and drops the cache', async () => {
+    const prisma = makePrisma();
+    prisma.systemSetting.findUnique.mockResolvedValue(baseRow({ mcpClientPolicy: 'any' }));
+    prisma.systemSetting.findUniqueOrThrow.mockResolvedValue({ mcpClientPolicy: 'any' });
+    prisma.systemSetting.update.mockResolvedValue(baseRow({ mcpClientPolicy: 'claude_chatgpt' }));
+    const audit = makeAudit();
+    audit.logWithClient.mockRejectedValueOnce(new Error('audit down'));
+    const svc = new SettingsService(prisma as never, audit as never);
+
+    await expect(svc.mcpClientPolicy()).resolves.toBe('any');
+    await expect(svc.setMcpClientPolicy(ACTOR, 'claude_chatgpt', META)).rejects.toThrow('audit down');
+    const reads = prisma.systemSetting.findUnique.mock.calls.length;
+    await svc.mcpClientPolicy();
     expect(prisma.systemSetting.findUnique.mock.calls.length).toBe(reads + 1);
   });
 });

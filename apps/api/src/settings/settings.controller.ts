@@ -2,9 +2,11 @@ import { Body, Controller, Get, Patch, Put, Req } from '@nestjs/common';
 import type { Request } from 'express';
 import {
   updateApiKeysSettingSchema,
+  updateMcpClientPolicySchema,
   updateMcpRemoteSettingSchema,
   updateSettingsSchema,
   type UpdateApiKeysSettingInput,
+  type UpdateMcpClientPolicyInput,
   type UpdateMcpRemoteSettingInput,
   type UpdateSettingsInput,
 } from '@weavestream/shared';
@@ -67,7 +69,7 @@ export class SettingsController {
   }
 
   /**
-   * Turn remote MCP connections (ChatGPT, Claude over OAuth) on or off for the
+   * Turn remote MCP connections (AI apps over OAuth) on or off for the
    * instance. Same rules as the API key switch above: step-up, and never
    * reachable by an API key or a connection.
    */
@@ -81,5 +83,22 @@ export class SettingsController {
     @Req() req: Request,
   ) {
     return this.settings.setMcpRemoteEnabled(user, dto.enabled, requestMetaOf(req));
+  }
+
+  /**
+   * Choose which AI apps may connect to `/mcp`: Claude and ChatGPT only, or
+   * any MCP app. Same rules as the switch above: step-up, and never reachable
+   * by an API key or a connection.
+   */
+  @Put('mcp-client-policy')
+  @RequirePermission('settings.manage')
+  @RequireStepUp()
+  @InteractiveOnly()
+  async setMcpClientPolicy(
+    @CurrentUser() user: AuthedUser,
+    @Body(new ZodBody(updateMcpClientPolicySchema)) dto: UpdateMcpClientPolicyInput,
+    @Req() req: Request,
+  ) {
+    return this.settings.setMcpClientPolicy(user, dto.policy, requestMetaOf(req));
   }
 }

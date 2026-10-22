@@ -14,18 +14,30 @@ const ENV = {
   },
 } as never;
 
+const CLAUDE_CONNECTION = {
+  id: 'c-1',
+  userId: 'u-1',
+  allowWrite: false,
+  clientId: 'https://claude.ai/oauth/mcp-client-metadata',
+  redirectHost: 'claude.ai',
+};
+/** A connection from an app that registered itself, on a loopback redirect. */
+const DCR_CONNECTION = { ...CLAUDE_CONNECTION, clientId: 'Xk3_registered-id', redirectHost: '127.0.0.1' };
+
 function makeGuard(
   rotateResult: unknown,
   {
     apiKeysEnabled = true,
     key = null,
     mcpRemoteEnabled = true,
-    connection = { id: 'c-1', userId: 'u-1', allowWrite: false },
+    mcpClientPolicy = 'claude_chatgpt',
+    connection = CLAUDE_CONNECTION,
   }: {
     apiKeysEnabled?: boolean;
     key?: unknown;
     mcpRemoteEnabled?: boolean;
-    connection?: { id: string; userId: string; allowWrite: boolean } | null;
+    mcpClientPolicy?: 'claude_chatgpt' | 'any';
+    connection?: { id: string; userId: string; allowWrite: boolean; clientId: string; redirectHost: string } | null;
   } = {},
 ) {
   const reflector = { getAllAndOverride: jest.fn().mockReturnValue(false) } as never;
@@ -63,6 +75,7 @@ function makeGuard(
   const settings = {
     apiKeysEnabled: jest.fn().mockResolvedValue(apiKeysEnabled),
     mcpRemoteEnabled: jest.fn().mockResolvedValue(mcpRemoteEnabled),
+    mcpClientPolicy: jest.fn().mockResolvedValue(mcpClientPolicy),
   };
   const delegations = new McpDelegationService();
   const mcpConnections = { findActiveById: jest.fn().mockResolvedValue(connection) };
@@ -257,7 +270,7 @@ describe('AuthGuard remote MCP delegation handles', () => {
 
   it('carries the connection\'s write grant', async () => {
     const { guard, delegations } = makeGuard(null, {
-      connection: { id: 'c-1', userId: 'u-1', allowWrite: true },
+      connection: { ...CLAUDE_CONNECTION, allowWrite: true },
     });
     const { ctx, req } = makeDelegatedCtx(delegations.mint(grant));
     await expect(guard.canActivate(ctx)).resolves.toBe(true);
@@ -300,14 +313,21 @@ describe('AuthGuard remote MCP delegation handles', () => {
   it('refuses when the connection was revoked, belongs to someone else, or the switch is off', async () => {
     for (const opts of [
       { connection: null },
-      { connection: { id: 'c-1', userId: 'u-2', allowWrite: false } },
+      { connection: { ...CLAUDE_CONNECTION, userId: 'u-2' } },
       { mcpRemoteEnabled: false },
+      // Another app's connection while only Claude and ChatGPT may connect.
+      { connection: DCR_CONNECTION },
     ]) {
       const { guard, delegations } = makeGuard(null, opts);
       await expect(guard.canActivate(makeDelegatedCtx(delegations.mint(grant)).ctx)).rejects.toBeInstanceOf(
         UnauthorizedException,
       );
     }
+  });
+
+  it('accepts another app\'s connection while any app may connect', async () => {
+    const { guard, delegations } = makeGuard(null, { connection: DCR_CONNECTION, mcpClientPolicy: 'any' });
+    await expect(guard.canActivate(makeDelegatedCtx(delegations.mint(grant)).ctx)).resolves.toBe(true);
   });
 
   it('refuses a deactivated user', async () => {
