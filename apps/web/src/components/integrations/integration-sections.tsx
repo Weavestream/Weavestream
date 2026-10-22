@@ -67,6 +67,8 @@ function IconImg({ src, size }: { src: string | null; size: number }) {
 function IntegrationSectionPanel({ entry, differences }: { entry: AssetIntegrationSection; differences: ReactNode }) {
   const { section } = entry;
   const sourceHref = entry.sourceUrl ? safeExternalHref(entry.sourceUrl) : null;
+  const sourceNameChars = Array.from(entry.integrationName);
+  const sourceName = sourceNameChars.length > 40 ? `${sourceNameChars.slice(0, 40).join('')}…` : entry.integrationName;
   const logo = section.icon
     ? `/integrations/icons/${section.icon}.svg`
     : DRIVER_KEY_RE.test(entry.driver)
@@ -103,10 +105,15 @@ function IntegrationSectionPanel({ entry, differences }: { entry: AssetIntegrati
               href={sourceHref}
               target="_blank"
               rel="noreferrer"
+              title={`Open in ${entry.integrationName}`}
+              aria-label={`Open in ${entry.integrationName}`}
               size="sm"
+              style={{ maxWidth: '100%', minWidth: 0 }}
               iconAfter={<Icon.ext size={11} />}
             >
-              Open in {entry.integrationName}
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                Open in {sourceName}
+              </span>
             </LinkBtn>
           )}
           <span style={{ flex: 1 }} />
