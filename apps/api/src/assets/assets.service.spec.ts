@@ -571,7 +571,8 @@ describe('AssetsService.get integration sections', () => {
           'f-gone': { sourceValue: 'x', sourceFingerprint: 's', localFingerprint: 'l', detectedAt: '2026-10-01T00:00:00.000Z' },
         },
         state: 'active',
-        companyMapping: { integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
+        resource: { resourceKey: 'users' },
+        companyMapping: { externalOrgId: 'org1', integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
       },
       {
         // The record left the source: kept as history, flagged inactive.
@@ -579,13 +580,25 @@ describe('AssetsService.get integration sections', () => {
         lastSyncedAt: new Date('2026-09-15T00:00:00.000Z'),
         sectionData: section,
         state: 'stale',
-        companyMapping: { integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
+        resource: { resourceKey: 'users' },
+        companyMapping: { externalOrgId: 'org1', integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
+      },
+      {
+        // A driver with a source page: the link is built from the source id on read.
+        id: 'rec-3',
+        externalId: 'grp1:devices:dev-9',
+        lastSyncedAt: new Date('2026-09-10T00:00:00.000Z'),
+        sectionData: section,
+        state: 'active',
+        resource: { resourceKey: 'devices' },
+        companyMapping: { externalOrgId: 'grp1', integration: { id: integrationId, driver: 'level', name: 'Level' } },
       },
       {
         // Never rendered: fails the schema on read.
         lastSyncedAt: new Date('2026-09-01T00:00:00.000Z'),
         sectionData: { title: '<b>x</b>', groups: [] },
-        companyMapping: { integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
+        resource: { resourceKey: 'users' },
+        companyMapping: { externalOrgId: 'org1', integration: { id: integrationId, driver: 'google-workspace', name: 'Acme Workspace' } },
       },
     ];
     const findMany = jest.fn(({ where }: { where: Record<string, unknown> }) =>
@@ -632,6 +645,11 @@ describe('AssetsService.get integration sections', () => {
       integrationId, driver: 'google-workspace', integrationName: 'Acme Workspace',
       lastSyncedAt: new Date('2026-09-15T00:00:00.000Z'), active: false, section,
       syncRecordId: 'rec-2', differences: [],
+    }, {
+      integrationId, driver: 'level', integrationName: 'Level',
+      lastSyncedAt: new Date('2026-09-10T00:00:00.000Z'), active: true, section,
+      sourceUrl: 'https://app.level.io/device/dev-9/overview',
+      syncRecordId: 'rec-3', differences: [],
     }]);
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ companyId, assetId }),

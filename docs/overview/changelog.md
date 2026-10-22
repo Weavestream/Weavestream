@@ -13,6 +13,10 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Added
+
+- **Open in Level from the asset page.** The Level RMM section on a device now has an **Open in Level** button next to its title that opens the device in Level's web app in a new tab. The link is built from the synced device id when the page loads, so nothing new is stored and no resync is needed.
+
 ## [1.10.2] - 2026-10-14
 
 ### Changed

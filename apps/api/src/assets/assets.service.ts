@@ -44,6 +44,7 @@ import { INTEGRATION_WRITE_ACTOR } from '../common/integration-write-actor.js';
 import { expandMatchValueVariants } from '../integrations/match-resolver.service.js';
 import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
 import { differenceDisplayValue, parseFieldDiffs } from '../integrations/field-diffs.js';
+import { sourceRecordUrl } from '../integrations/drivers/source-urls.js';
 
 export interface AuditMeta {
   ip: string;
@@ -593,12 +594,14 @@ export class AssetsService {
       where: { companyId, assetId, sectionData: { not: Prisma.DbNull } },
       select: {
         id: true,
+        externalId: true,
         lastSyncedAt: true,
         sectionData: true,
         fieldDiffs: true,
         state: true,
+        resource: { select: { resourceKey: true } },
         companyMapping: {
-          select: { integration: { select: { id: true, driver: true, name: true } } },
+          select: { externalOrgId: true, integration: { select: { id: true, driver: true, name: true } } },
         },
       },
       orderBy: { lastSyncedAt: 'desc' },
@@ -626,6 +629,11 @@ export class AssetsService {
       const parsed = integrationSectionSchema.safeParse(row.sectionData);
       if (!parsed.success) continue;
       const { integration } = row.companyMapping;
+      const sourceUrl = sourceRecordUrl(integration.driver, {
+        externalId: row.externalId,
+        externalOrgId: row.companyMapping.externalOrgId,
+        resourceKey: row.resource.resourceKey,
+      });
       out.push({
         integrationId: integration.id,
         driver: integration.driver,
@@ -633,6 +641,7 @@ export class AssetsService {
         lastSyncedAt: row.lastSyncedAt,
         active: row.state === 'active',
         section: parsed.data,
+        ...(sourceUrl ? { sourceUrl } : {}),
         syncRecordId: row.id,
         differences: Object.entries(diffsByRow.get(row.id) ?? {}).flatMap(([assetFieldId, diff]) => {
           const fieldLabel = labelById.get(assetFieldId);
