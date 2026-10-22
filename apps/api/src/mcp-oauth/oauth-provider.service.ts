@@ -65,6 +65,15 @@ const FETCH_MAX_BYTES = 64 * 1024;
 const FETCH_TIMEOUT_MS = 2_500;
 
 /**
+ * Sent in place of the library's empty User-Agent. Cloudflare (Browser
+ * Integrity Check) and other WAFs answer an empty one with a 403 challenge
+ * page, so a client hosted behind them fails with "client_id metadata
+ * document fetch failed". Fixed text: no version and nothing about this
+ * instance.
+ */
+export const CLIENT_FETCH_USER_AGENT = 'weavestream-oauth/1.0 (+https://weavestream.io)';
+
+/**
  * The OAuth authorization server for remote MCP clients (AI apps such as
  * Claude and ChatGPT), built on `oidc-provider`. Which apps it accepts is the
  * admin's client policy, read on every request (see `mcp-oauth.constants.ts`).
@@ -342,11 +351,14 @@ export async function guardedFetch(
   // The library passes its own undici `dispatcher`; `safeFetch` brings its
   // own connection guard. The library's `signal` (its own 2.5 s timeout) is
   // kept, next to ours.
-  const { dispatcher: _dispatcher, signal, ...rest } = (init ?? {}) as RequestInit & {
+  const { dispatcher: _dispatcher, signal, headers, ...rest } = (init ?? {}) as RequestInit & {
     dispatcher?: unknown;
   };
+  const withAgent = new Headers(headers);
+  withAgent.set('user-agent', CLIENT_FETCH_USER_AGENT);
   return safeFetch(url.href, {
     ...rest,
+    headers: withAgent,
     signal: signal ?? null,
     timeoutMs: FETCH_TIMEOUT_MS,
     timeoutCoversBody: true,
