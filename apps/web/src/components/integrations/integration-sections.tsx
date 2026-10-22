@@ -2,10 +2,11 @@ import type { ReactNode } from 'react';
 import {
   formatCalendarDate,
   humanSize,
+  safeExternalHref,
   type AssetIntegrationSection,
   type IntegrationSectionRow,
 } from '@weavestream/shared';
-import { Icon, Panel, Tag, type TagTone } from '../ui';
+import { Icon, LinkBtn, Panel, Tag, type TagTone } from '../ui';
 import { ExternalUrlValue } from '../assets/external-url-value';
 import { FormattedDateTime } from '../../lib/timezone-context';
 import { recentRelative } from '../../lib/relative-time';
@@ -65,6 +66,7 @@ function IconImg({ src, size }: { src: string | null; size: number }) {
 
 function IntegrationSectionPanel({ entry, differences }: { entry: AssetIntegrationSection; differences: ReactNode }) {
   const { section } = entry;
+  const sourceHref = entry.sourceUrl ? safeExternalHref(entry.sourceUrl) : null;
   const logo = section.icon
     ? `/integrations/icons/${section.icon}.svg`
     : DRIVER_KEY_RE.test(entry.driver)
@@ -93,9 +95,21 @@ function IntegrationSectionPanel({ entry, differences }: { entry: AssetIntegrati
         >
           <Icon.chevron size={10} className="integration-section-chevron" />
           <IconImg src={logo} size={16} />
-          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', flex: 1, minWidth: 0 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)', minWidth: 0 }}>
             {section.title}
           </span>
+          {sourceHref && (
+            <LinkBtn
+              href={sourceHref}
+              target="_blank"
+              rel="noreferrer"
+              size="sm"
+              iconAfter={<Icon.ext size={11} />}
+            >
+              Open in {entry.integrationName}
+            </LinkBtn>
+          )}
+          <span style={{ flex: 1 }} />
           {entry.active === false && <Tag tone="warn">No longer in {entry.integrationName}</Tag>}
           <span
             title={`${entry.integrationName} · last synced ${new Date(entry.lastSyncedAt).toISOString()}`}

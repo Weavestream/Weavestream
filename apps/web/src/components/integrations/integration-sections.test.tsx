@@ -23,6 +23,17 @@ describe('IntegrationSections', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('shows an Open in button in the header only when the source has a page', () => {
+    const withUrl = { ...entry([]), integrationName: 'Level', sourceUrl: 'https://app.level.io/device/abc/overview' };
+    const { rerender } = render(<IntegrationSections sections={[withUrl]} />);
+    const button = screen.getByRole('link', { name: /Open in Level/ });
+    expect(button).toHaveAttribute('href', 'https://app.level.io/device/abc/overview');
+    expect(button).toHaveAttribute('target', '_blank');
+    expect(button.closest('summary')).not.toBeNull();
+    rerender(<IntegrationSections sections={[entry([])]} />);
+    expect(screen.queryByRole('link', { name: /Open in/ })).toBeNull();
+  });
+
   it('renders the panel header, group icon and values formatted by kind', () => {
     const { container } = render(
       <IntegrationSections

@@ -35,6 +35,11 @@ export const SECTION_TITLE = 'Level RMM';
 /** Available updates and active alerts listed per device (the count covers all). */
 export const LIST_PREVIEW = 20;
 
+/** The device's page in Level's web app; it takes the API device id as-is. */
+export function levelDeviceUrl(deviceId: string): string {
+  return `https://app.level.io/device/${encodeURIComponent(deviceId)}/overview`;
+}
+
 type Obj = Record<string, unknown>;
 
 export interface LevelDevice {

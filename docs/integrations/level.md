@@ -43,7 +43,7 @@ The asset name is the Level nickname, or the hostname when there is none. These 
 
 A value Level does not report is left alone: the field is never cleared. Fields you own (asset tag, status, location, assigned user, purchase, warranty, notes and the like) are never written.
 
-The **Level RMM** section on each device keeps only what a layout does not have:
+The **Level RMM** section on each device has an **Open in Level** button next to its title, which opens the device in Level's web app. The section keeps only what a layout does not have:
 
 | Group | Contents |
 |---|---|

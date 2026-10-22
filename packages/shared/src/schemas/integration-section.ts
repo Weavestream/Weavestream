@@ -147,6 +147,8 @@ export const assetIntegrationSectionSchema = z.object({
   /** False once the binding is no longer active (the record left the source): history stays visible, tagged. */
   active: z.boolean().optional(),
   section: integrationSectionSchema,
+  /** The record's own page in the source system (built by the API from driver code, never stored). */
+  sourceUrl: z.string().max(2048).refine(isValidHttpUrl, 'Links must be http(s) URLs').optional(),
   /** The binding row, for resolving differences. */
   syncRecordId: z.guid().optional(),
   /** Standard fields a person changed that now differ from the source (named after `section.title`). */
