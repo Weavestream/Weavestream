@@ -51,7 +51,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
-    "react-resizable-panels": "^4.14.1",
+    "react-resizable-panels": "^4.14.4",
     "remark-gfm": "^4.0.1",
     "tippy.js": "^6.3.7",
     "turndown": "^7.2.4",
