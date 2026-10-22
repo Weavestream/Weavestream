@@ -13,6 +13,8 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.10.3] - 2026-10-22
+
 ### Added
 
 - **Connect any MCP app.** A new choice under **Admin → Settings → API & MCP → Which AI apps can connect**: **Claude and ChatGPT only** (the default, unchanged) or **Any MCP app**. With **Any MCP app**, Claude Code, Gemini CLI, Cursor, self-hosted assistants and other apps connect with only the `/mcp` address: each user signs in with MFA and approves the connection, as before. Apps that register themselves are marked **Not verified** on the consent page and in the connection lists. Changing the choice needs MFA step-up and is audited; changing back refuses other apps' connections without deleting them. See [MCP Server](/integrations/mcp/#which-ai-apps-can-connect).
@@ -946,6 +948,7 @@ Initial public release.
 ---
 
 [Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.10.1...HEAD
+[1.10.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.3
 [1.10.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.1
 [1.10.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.0
 [1.9.10]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.10
