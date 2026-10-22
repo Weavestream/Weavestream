@@ -13,6 +13,12 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.10.4] - 2026-10-22
+
+### Fixed
+
+- **MCP apps behind Cloudflare could not sign in.** With **Any MCP app**, signing in from an app whose client metadata document is behind Cloudflare or a similar firewall failed with `invalid_client` and `client_id metadata document fetch failed`. Weavestream sent the request with an empty User-Agent, and the firewall answered with a challenge page. It now sends `weavestream-oauth/1.0 (+https://weavestream.io)` when it fetches a client's metadata document or signing keys. Nothing else about which apps can connect has changed.
+
 ## [1.10.3] - 2026-10-22
 
 ### Added
@@ -947,8 +953,10 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.10.1...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.10.4...HEAD
+[1.10.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.4
 [1.10.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.3
+[1.10.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.2
 [1.10.1]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.1
 [1.10.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.0
 [1.9.10]: https://github.com/Weavestream/Weavestream/releases/tag/v1.9.10
