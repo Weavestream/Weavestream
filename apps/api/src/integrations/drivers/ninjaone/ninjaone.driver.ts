@@ -37,7 +37,7 @@ import {
   NinjaOneRequestError,
   diagnoseNinjaOne,
 } from './ninjaone.diagnose.js';
-import { NINJAONE_SETUP_GUIDE } from './ninjaone.setup-guide.js';
+import { NINJAONE_DEFAULT_BASE_URL, NINJAONE_SETUP_GUIDE } from './ninjaone.setup-guide.js';
 import { evictRun, optional, runCached } from '../run-cache.js';
 import { arr, obj, str, type Lookup } from '../section-rows.js';
 import {
@@ -87,7 +87,6 @@ import {
  *                       filter. Applied post-fetch against
  *                       `device.locationId`.
  */
-const NINJAONE_DEFAULT_BASE_URL = 'https://app.ninjarmm.com';
 const NINJAONE_OAUTH_PATH = '/ws/oauth/token';
 // NinjaOne OAuth2 client_credentials scopes. We always try the full
 // set first (monitoring + ticketing). If the API client wasn't granted
@@ -735,6 +734,8 @@ export class NinjaOneDriver implements IntegrationDriver {
           null,
         fields,
         section: buildDeviceSection({ device: d, lookups, nowMs }),
+        // Picks the device's dashboard page for "Open in NinjaOne".
+        sourceKind: typeof d.nodeClass === 'string' ? d.nodeClass : null,
         updatedAt:
           typeof fields.lastContact === 'string' ? fields.lastContact : null,
       };

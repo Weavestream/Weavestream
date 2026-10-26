@@ -548,6 +548,9 @@ export class IntegrationSyncRunnerService {
             const section = safeRecord.reconstructionInput === undefined
               ? parseRecordSection(safeRecord.section)
               : undefined;
+            const sourceKind = safeRecord.reconstructionInput === undefined
+              ? parseSourceKind(safeRecord.sourceKind)
+              : undefined;
             if (section === 'invalid') {
               pageConflicts.push({
                 kind: 'validation_error',
@@ -709,8 +712,8 @@ export class IntegrationSyncRunnerService {
                   externalId: reconstruction.externalId,
                 },
               },
-              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section, diffs),
-              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section, diffs),
+              create: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section, diffs, sourceKind),
+              update: bindingData(mapping.id, resource.id, mapping.companyId, input.syncRunId, reconstruction, outcome, activeProvenance, observedAt, writeNow, section, diffs, sourceKind),
             });
             for (const gap of outcome.gaps) observeGap({
               externalId: reconstruction.externalId,
@@ -1260,8 +1263,10 @@ function bindingData(
   syncedAt: Date,
   section?: IntegrationSection | 'invalid' | null,
   diffs?: ReturnType<typeof mergeFieldDiffs>,
+  sourceKind?: string | null,
 ) {
   return {
+    ...(sourceKind === undefined ? {} : { sourceKind }),
     ...(diffs
       ? {
           fieldDiffs: diffs.fieldDiffs as unknown as Prisma.InputJsonValue,
@@ -1313,6 +1318,14 @@ export function parseRecordSection(raw: unknown): IntegrationSection | 'invalid'
   const parts: unknown[] = [head];
   for (const { rows, ...group } of groups) parts.push(group, ...rows);
   return parts.every((part) => scanSensitiveMaterial(part) === 'safe') ? parsed.data : 'invalid';
+}
+
+/** A source kind is a short token; the `source_kind` column checks the same pattern. */
+export const SOURCE_KIND_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+
+/** A legacy record's `sourceKind`, or null when absent or not a short token. */
+export function parseSourceKind(raw: unknown): string | null {
+  return typeof raw === 'string' && SOURCE_KIND_PATTERN.test(raw) ? raw : null;
 }
 
 /** Most source field keys kept per checkpoint; a larger set is stored as unknown (empty). */

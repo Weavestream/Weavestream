@@ -599,6 +599,7 @@ export class AssetsService {
         sectionData: true,
         fieldDiffs: true,
         state: true,
+        sourceKind: true,
         resource: { select: { resourceKey: true } },
         companyMapping: {
           select: { externalOrgId: true, integration: { select: { id: true, driver: true, name: true, config: true } } },
@@ -633,6 +634,7 @@ export class AssetsService {
         externalId: row.externalId,
         externalOrgId: row.companyMapping.externalOrgId,
         resourceKey: row.resource.resourceKey,
+        sourceKind: row.sourceKind,
         config: integration.config,
       });
       out.push({

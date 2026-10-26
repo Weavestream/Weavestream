@@ -1814,6 +1814,10 @@ model IntegrationSyncRecord {
   /// rendered on the asset page. Validated plain data, replaced on every
   /// sync; deleted with the binding.
   sectionData                 Json?                 @map("section_data")
+  /// The record's kind in the source (e.g. NinjaOne `nodeClass`), for
+  /// drivers whose "Open in" page depends on it. A short driver-supplied
+  /// token, replaced on every sync; null when the driver sends none.
+  sourceKind                  String?               @map("source_kind")
   /// The binding adopted an operator-created asset (match-first) instead of
   /// creating one, so later syncs keep the operator's asset name. Sticky.
   adopted                     Boolean               @default(false)

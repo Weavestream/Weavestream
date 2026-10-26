@@ -667,7 +667,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       }],
     };
 
-    function arrange(section: unknown, matchSuggestions = false, standardFields = false) {
+    function arrange(section: unknown, matchSuggestions = false, standardFields = false, extra: Record<string, unknown> = {}) {
       const ctx = setup();
       ctx.prisma.integrationResource.findFirst.mockResolvedValueOnce({
         id: 'resource', integrationId: 'integration', resourceKey: 'users', enabled: true,
@@ -690,7 +690,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       ctx.driver.fetchRecords.mockResolvedValueOnce({
         records: [{
           externalId: 'user-1', displayName: 'User One', fields: { email: 'user1@example.com' },
-          updatedAt: null, ...(section === undefined ? {} : { section }),
+          updatedAt: null, ...(section === undefined ? {} : { section }), ...extra,
         }],
         hasMore: false, cursor: null, terminal: true, snapshotAt: '2026-07-14T10:00:00.000Z',
       });
@@ -767,6 +767,26 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       })]);
       expect(writer.write).toHaveBeenCalledTimes(1);
       expect(upsertData(tx).update.sectionData).toBe(Prisma.DbNull);
+    });
+
+    it('stores a short source kind on the binding (create and replace on update)', async () => {
+      const { service, tx } = arrange(validSection, false, false, { sourceKind: 'HYPERV_VMM_GUEST' });
+      await run(service);
+      expect(upsertData(tx).create.sourceKind).toBe('HYPERV_VMM_GUEST');
+      expect(upsertData(tx).update.sourceKind).toBe('HYPERV_VMM_GUEST');
+    });
+
+    it.each([
+      ['absent', {}],
+      ['not a string', { sourceKind: 42 }],
+      ['empty', { sourceKind: '' }],
+      ['not a short token', { sourceKind: 'NMS SWITCH/../x' }],
+      ['too long', { sourceKind: 'A'.repeat(65) }],
+    ])('clears the source kind when it is %s, and still writes the record', async (_label, extra) => {
+      const { service, tx } = arrange(validSection, false, false, extra);
+      await expect(run(service)).resolves.toMatchObject({ status: 'succeeded', conflicts: [] });
+      expect(upsertData(tx).create.sourceKind).toBeNull();
+      expect(upsertData(tx).update.sourceKind).toBeNull();
     });
 
     it('opts resources declaring matchSuggestions into match-first, and only those', async () => {

@@ -653,6 +653,7 @@ describe('NinjaOneDriver.fetchRecords', () => {
           displayName: 'x.lan',
           fields: { id: 99, systemName: 'x.lan', deviceType: 'AgentDevice' },
           section: expect.objectContaining({ title: 'NinjaOne' }),
+          sourceKind: null,
           updatedAt: null,
         },
       ]);
@@ -1729,8 +1730,10 @@ describe('NinjaOneDriver asset-page section', () => {
   it('loads only health and alerts for non-agent devices', async () => {
     const fx = installFetchScript([TOKEN, { kind: 'json', body: [{ id: 5, organizationId: 7, deviceType: 'NMSTarget', nodeClass: 'NMS_SWITCH' }] }]);
     try {
-      await new NinjaOneDriver().fetchRecords(fetchCtx({ resourceKey: 'nms' }), null);
+      const page = await new NinjaOneDriver().fetchRecords(fetchCtx({ resourceKey: 'nms' }), null);
       expect(pathsOf(fx.lookupCalls)).toEqual(['/v2/queries/device-health', '/v2/alerts']);
+      // The node class picks the device's "Open in NinjaOne" page.
+      expect(page.records[0]).toMatchObject({ externalId: '5', sourceKind: 'NMS_SWITCH' });
     } finally {
       fx.restore();
     }

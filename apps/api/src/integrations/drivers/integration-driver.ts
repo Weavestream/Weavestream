@@ -126,6 +126,13 @@ export interface LegacyDriverRecord {
    */
   section?: unknown;
   /**
+   * Optional kind of the record in the source (e.g. NinjaOne `nodeClass`),
+   * for a driver whose "Open in" page depends on it. Stored on the binding
+   * and replaced on every sync; a value that is not a short token
+   * (`SOURCE_KIND_PATTERN`) is stored as null.
+   */
+  sourceKind?: string | null;
+  /**
    * Optional immutable source definition key used to select exactly one
    * configured field mapping. Records without a matching mapping are skipped.
    */

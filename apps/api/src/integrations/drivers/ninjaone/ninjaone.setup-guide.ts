@@ -11,6 +11,9 @@ export const NINJAONE_SETUP_STEP = {
   tickets: 'tickets',
 } as const;
 
+/** The default (US) API base URL. */
+export const NINJAONE_DEFAULT_BASE_URL = 'https://app.ninjarmm.com';
+
 /**
  * Regional API base URLs other than the default (`https://app.ninjarmm.com`),
  * from NinjaOne's own instance list. Each host answers `/ws/oauth/token`.

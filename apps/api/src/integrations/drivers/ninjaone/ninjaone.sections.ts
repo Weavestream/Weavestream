@@ -22,6 +22,7 @@ import {
   type Lookup,
   type Row,
 } from '../section-rows.js';
+import { NINJAONE_DEFAULT_BASE_URL, NINJAONE_REGION_BASE_URLS } from './ninjaone.setup-guide.js';
 
 /**
  * Pure builders for the NinjaOne section on the asset page
@@ -40,6 +41,45 @@ import {
 export const SECTION_TITLE = 'NinjaOne';
 /** Patches and alerts listed per device (the count covers all). */
 export const LIST_PREVIEW = 20;
+
+/** The web app hosts of NinjaOne's instances; a link goes to no other host. */
+const WEB_APP_HOSTS: ReadonlySet<string> = new Set(
+  [NINJAONE_DEFAULT_BASE_URL, ...NINJAONE_REGION_BASE_URLS.map((r) => r.value)].map((u) => new URL(u).host),
+);
+
+/** The dashboard page for each `nodeClass` that is not an agent device; any other class gets no link. */
+function dashboardForNodeClass(nodeClass: string | null): string | undefined {
+  if (!nodeClass) return undefined;
+  if (nodeClass.startsWith('NMS_')) return 'nmsDashboard';
+  if (nodeClass === 'VMWARE_VM_HOST' || nodeClass === 'HYPERV_VMM_HOST') return 'vmDashboard';
+  if (nodeClass === 'VMWARE_VM_GUEST' || nodeClass === 'HYPERV_VMM_GUEST') return 'vmGuestDashboard';
+  if (nodeClass === 'CLOUD_MONITOR_TARGET') return 'cloudMonitorDashboard';
+  return undefined;
+}
+
+/**
+ * The device's dashboard in the NinjaOne web app. The web app lives on the
+ * same host as the integration's API base URL (no `baseUrl` means the
+ * default instance, as in the driver). Agent devices (`records`) all use
+ * `deviceDashboard`; other devices use a page per kind, picked from the
+ * `nodeClass` the sync stores as the binding's source kind. A kind with no
+ * known page, or a binding not yet synced with one, gets no link. A host
+ * outside the known instances gets no link, so a bad config value never
+ * becomes a link to another site.
+ */
+export function ninjaoneDeviceUrl(
+  deviceId: string,
+  { resourceKey, sourceKind, config }: { resourceKey: string; sourceKind: string | null; config: unknown },
+): string | undefined {
+  const dashboard = resourceKey === 'records' ? 'deviceDashboard' : dashboardForNodeClass(sourceKind);
+  if (!dashboard) return undefined;
+  const baseUrl = obj(config)?.baseUrl ?? NINJAONE_DEFAULT_BASE_URL;
+  if (typeof baseUrl !== 'string' || !URL.canParse(baseUrl)) return undefined;
+  const { protocol, host } = new URL(baseUrl);
+  if (protocol !== 'https:' || !WEB_APP_HOSTS.has(host)) return undefined;
+  return `https://${host}/#/${dashboard}/${encodeURIComponent(deviceId)}/overview`;
+}
+
 /** A warranty ending within this many days is flagged. */
 export const WARRANTY_WARN_DAYS = 90;
 const DAY_MS = 86_400_000;

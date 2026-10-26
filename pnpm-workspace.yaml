@@ -92,6 +92,15 @@ overrides:
   # both apps' ranges drift; bump both together.
   "@types/react": 19.3.0
   "@types/react-dom": 19.3.0
+  # Scope limiter, like nanoid above: pino 10.4.0 declares thread-stream
+  # ^4.0.0, so the range admits the fix, but `pnpm update thread-stream -r`
+  # also bumps @babel/*, @codemirror/*, @types/node and acorn. 4.0.0
+  # crashes the worker at boot under `node --watch` on Node >=26.12.1
+  # ("this should not happen: undefined"): watch mode posts its own
+  # messages from the pino-pretty worker thread. 4.1.0 ignores them
+  # (pinojs/thread-stream#213). Drop once pino's lockfile entry resolves
+  # >=4.1.0 on its own. Pinned exactly, for the same reason as postcss.
+  thread-stream: 4.2.0
 
 supportedArchitectures:
   os:
