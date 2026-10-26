@@ -19,7 +19,7 @@
     "@tanstack/react-router": "^1.170.41",
     "@weavestream/shared": "workspace:*",
     "css-tree": "3.2.1",
-    "dompurify": "3.4.16",
+    "dompurify": "3.4.17",
     "mermaid": "11.17.2",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",

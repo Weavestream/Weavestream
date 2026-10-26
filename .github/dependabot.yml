@@ -59,6 +59,11 @@ updates:
       # v5 first (the release after 1.10.0), then v6. Remove for release 2.
       - dependency-name: "bullmq"
         update-types: ["version-update:semver-major"]
+      # Node types must match the runtime major (node:24-alpine, CI Node 24),
+      # or code can use APIs production does not have. Remove together with
+      # the docker "node" ignore below when the runtime moves to Node 26.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     labels:
       - "dependencies"
 

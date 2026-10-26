@@ -50,6 +50,29 @@ overrides:
   # names; mermaid only calls renderToString and renders MathML, so
   # neither reaches us. Drop once mermaid declares a katex range >=0.18.2.
   katex: 0.18.2
+  # 2026-10-26 transitive advisories. body-parser, ip-address, and
+  # fast-uri are scope limiters: each parent's range admits the fix.
+  # GHSA-27r3-jxmh-p828 (high): DoS via trailing bytes after a compressed
+  # body. Via express 5.2.1 (^2.2.1) under Nest and the MCP SDK.
+  body-parser: 2.4.0
+  # GHSA-rxp7-6hxx-x8q5 (moderate): quadratic-time zone identifier match.
+  # Via express-rate-limit (^10.2.0) under the MCP SDK.
+  ip-address: 10.7.5
+  # GHSA-w74x-v6f9-j3xg, GHSA-wjr9-j795-jxcr (moderate) and two lows: URI
+  # scheme and host confusion. Via ajv 8 (^3.0.1) under the MCP SDK.
+  fast-uri: 3.1.9
+  # GHSA-q7qp-rjg7-q26m (high): DoS via a pending async fileFilter after
+  # request teardown. Out-of-range force: @nestjs/platform-express pins
+  # multer 2.4.0 exactly (11.2.8 too). 2.5.0 is a minor with no API
+  # change. Drop once platform-express pins multer >=2.5.0.
+  multer: 2.5.0
+  # GHSA-834v-8h66-3h79 (high): code injection in the ESM compiler.
+  # Out-of-range force: @tiptap/html (3.32.0 too) declares happy-dom
+  # ^20.8.9, and no 20.x carries the fix. Not reachable today, because
+  # @tiptap/html builds its Window with JavaScript evaluation disabled.
+  # The only 21.0 break turns CSS and iframe loading off by default,
+  # which tiptap already disables. Drop once @tiptap/html allows ^21.0.4.
+  happy-dom: 21.0.4
   # next carries its own optional sharp for next/image optimization,
   # which this app does not use — every image is a plain <img> served
   # through the API. sharp <0.35.4 trips the libheif advisories bundled
