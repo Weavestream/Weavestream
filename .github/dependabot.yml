@@ -59,7 +59,7 @@ updates:
       # v5 first (the release after 1.10.0), then v6. Remove for release 2.
       - dependency-name: "bullmq"
         update-types: ["version-update:semver-major"]
-      # Node types must match the runtime major (node:24-alpine, CI Node 24),
+      # Node types must match the runtime major (Node 24 in Docker and CI),
       # or code can use APIs production does not have. Remove together with
       # the docker "node" ignore below when the runtime moves to Node 26.
       - dependency-name: "@types/node"
@@ -81,8 +81,11 @@ updates:
     schedule:
       interval: "weekly"
       day: "monday"
-    # Production runs Node LTS only. Remove once Node 26 is LTS (expected
-    # late October 2026), together with pinning the base images by digest.
+    # Base images are pinned by version tag and digest, so this ecosystem
+    # proposes patch/minor and digest bumps. When it bumps the Node patch,
+    # bump NODE_VERSION in .github/workflows/ci.yml in the same PR.
+    # Majors stay a planned upgrade: Node 26 becomes LTS on 2026-10-28.
+    # Remove this ignore (and the @types/node one above) for that move.
     ignore:
       - dependency-name: "node"
         update-types: ["version-update:semver-major"]

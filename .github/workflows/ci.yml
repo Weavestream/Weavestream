@@ -10,7 +10,9 @@ permissions:
 
 env:
   PNPM_VERSION: 11.9.0
-  NODE_VERSION: 24
+  # Exact patch, matching the digest-pinned base in docker/*.Dockerfile.
+  # A bare major lets setup-node use an older cached 24.x on the runner.
+  NODE_VERSION: "24.22.1"
 
 jobs:
   lint:
