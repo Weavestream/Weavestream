@@ -13,6 +13,7 @@ import {
   text,
   type Row,
 } from '../section-rows.js';
+import { ACTION1_REGION_BASE_URLS } from './action1.setup-guide.js';
 
 /**
  * Pure builders for the Action1 section on the asset page
@@ -29,6 +30,29 @@ import {
  */
 
 export const SECTION_TITLE = 'Action1';
+
+/** The console hosts of Action1's regions; a link goes to no other host. */
+const CONSOLE_HOSTS: ReadonlySet<string> = new Set(ACTION1_REGION_BASE_URLS.map((r) => new URL(r.value).host));
+
+/**
+ * The endpoint's page in the Action1 console. The console lives on the same
+ * host as the integration's API base URL (no `baseUrl` means the default
+ * region, as in the driver). A host outside the known regions gets no link,
+ * so a bad config value never becomes a link to another site.
+ */
+export function action1EndpointUrl(
+  endpointId: string,
+  { externalOrgId, config }: { externalOrgId: string; config: unknown },
+): string | undefined {
+  if (!externalOrgId) return undefined;
+  const baseUrl = obj(config)?.baseUrl ?? ACTION1_REGION_BASE_URLS[0].value;
+  if (typeof baseUrl !== 'string' || !URL.canParse(baseUrl)) return undefined;
+  const { protocol, host } = new URL(baseUrl);
+  if (protocol !== 'https:' || !CONSOLE_HOSTS.has(host)) return undefined;
+  const url = new URL(`https://${host}/console/endpoints/${encodeURIComponent(endpointId)}/general`);
+  url.searchParams.set('org', externalOrgId);
+  return url.href;
+}
 
 type Obj = Record<string, unknown>;
 type Tone = 'neutral' | 'success' | 'warning' | 'danger';
