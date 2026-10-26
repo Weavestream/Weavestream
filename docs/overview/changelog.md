@@ -13,6 +13,21 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.10.5] - 2026-10-26
+
+### Added
+
+- **Open in Action1 or NinjaOne from the asset page.** Synced Action1 endpoints and NinjaOne devices now have an **Open in** button in their integration section. Action1 links use the integration's configured region. NinjaOne links open the matching dashboard for agent devices, network devices, virtual machines, and cloud monitors. Existing non-agent NinjaOne devices need one sync to store their device kind before the link appears; agent devices and Action1 endpoints need no resync.
+
+### Fixed
+
+- **Worker development mode on Node 26.** Updated `thread-stream` so the worker no longer crashes at startup under `node --watch` on Node 26.12.1 or later.
+
+### Security
+
+- **Updated application and transitive dependencies.** Updated Next.js, Nodemailer, Undici, DOMPurify, `body-parser`, `multer`, `happy-dom`, `ip-address`, and `fast-uri` to address published advisories. Dependabot now keeps Node type definitions on the runtime's major version.
+- **Pinned the Node runtime.** API, web, and worker images use Node 24.22.1 Alpine by version and digest, and CI uses the same Node patch release.
+
 ## [1.10.4] - 2026-10-22
 
 ### Fixed
@@ -953,7 +968,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.10.4...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.10.5...HEAD
+[1.10.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.5
 [1.10.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.4
 [1.10.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.3
 [1.10.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.2
