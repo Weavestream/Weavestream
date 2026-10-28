@@ -13,9 +13,20 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-10-28
+
+### Added
+
+- **Choose your AI provider.** **Admin → Settings → AI** now has a **Provider** choice: **OpenAI**, **Anthropic**, or **OpenAI-compatible** (Ollama, LM Studio, vLLM, OpenRouter and similar). OpenAI and Anthropic use their standard endpoints automatically; a custom endpoint for a proxy or gateway is under **Advanced**. Migration `0088_ai_provider_settings` sets the provider for existing installs from the saved URL: `api.openai.com` becomes OpenAI, `api.anthropic.com` becomes Anthropic, and every other URL stays OpenAI-compatible with no change in behavior.
+- **Native Anthropic support.** With the Anthropic provider, "Ask anything" uses Anthropic's Messages API: the system prompt is cached, strict tool schemas are used where the model supports them, and a model keeps its reasoning between tool calls in the same reply. An optional **Anthropic workspace ID** is available for keys that are not limited to one workspace.
+- **Background model and reasoning effort.** A **Background model** handles chat titles, proposal introductions, and article summaries, so a small, fast model can do that work. **Reasoning effort** (under **Advanced**) defaults to **Provider default**; other settings map to the nearest value each model supports.
+- **Reply check on Test connection.** **Test connection** now also sends one short prompt to the selected model and shows whether it replied, with the reason when it did not (for example a timeout or a reply cut off by the output limit).
+
 ### Changed
 
+- **Redesigned AI settings page.** Provider cards, grouped Connection, Models, and Features sections, sliders for the token limits with a **Use default** action, and a fixed Save and Reset bar. The form shows when the server caps the reply budget and blocks an output limit at or above the context window.
 - **Higher default reply budget for "Ask anything".** When **Max output tokens** is blank, Weavestream now requests up to 16,384 output tokens (was 8,192), which leaves reasoning models room to think. With the default 32,768-token context window, the prompt budget falls from 24,576 to 16,384 tokens. Custom values are unchanged. If your model accepts fewer than 16,384 output tokens (for example older GPT-4 Turbo or Claude 3.x models, or some local servers), set **Max output tokens** under **Admin → Settings → AI → Advanced**.
+- **Clearer errors for cut-off or refused replies.** Chat, titles, and summaries now report a reply that hit the output limit or that the model refused as an error, and chat shows a clear message for each case.
 
 ### Security
 
@@ -976,7 +987,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.10.5...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.11.0...HEAD
+[1.11.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.11.0
 [1.10.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.5
 [1.10.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.4
 [1.10.3]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.3
