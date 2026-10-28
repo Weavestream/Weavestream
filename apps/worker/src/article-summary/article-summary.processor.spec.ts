@@ -1,4 +1,9 @@
-import { AiCompletionHttpError, AiNotConfiguredError } from '@weavestream/api/ai';
+import {
+  AiCompletionHttpError,
+  AiCompletionRefusedError,
+  AiCompletionTruncatedError,
+  AiNotConfiguredError,
+} from '@weavestream/api/ai';
 import { articleSummaryJobId } from '@weavestream/shared';
 import { ArticleSummaryWorker } from './article-summary.processor.js';
 
@@ -47,6 +52,8 @@ function makeWorker(opts: {
   rows?: FakeArticle[];
   gateOn?: boolean;
   config?: Partial<{
+    provider: 'openai' | 'anthropic' | 'openai_compatible';
+    backgroundModel: string | null;
     baseUrl: string;
     apiKey: string | null;
     defaultModel: string | null;
@@ -139,9 +146,13 @@ function makeWorker(opts: {
     opts.config === null
       ? null
       : {
+          provider: 'openai_compatible',
           baseUrl: 'http://ollama.lan:11434/v1',
           apiKey: null,
+          anthropicWorkspaceId: null,
           defaultModel: 'llama3',
+          backgroundModel: 'llama3',
+          reasoningEffort: 'off',
           maxOutputTokens: 8192,
           contextWindowTokens: 32768,
           allowPrivateNetwork: true,
@@ -371,6 +382,117 @@ describe('ArticleSummaryWorker.generate', () => {
     const out = await ctx.worker.generate(payloadFor(row));
     expect(out.outcome).toBe('stale');
     expect(row.aiSummary).toBeNull();
+  });
+});
+
+describe('ArticleSummaryWorker.generate — background model and budgets', () => {
+  /** Opus 5.5 thinks even at its lowest setting: 512 visible + 2048 headroom. */
+  const THINKING = {
+    provider: 'anthropic' as const,
+    defaultModel: 'claude-opus-5-5',
+    backgroundModel: 'claude-opus-5-5',
+  };
+  const budgetOf = (complete: jest.Mock, call = 0): number =>
+    complete.mock.calls[call]![1].maxOutputTokens;
+
+  it('uses the background model and stores it as the summary model', async () => {
+    const row = makeRow();
+    const ctx = makeWorker({
+      rows: [row],
+      config: { defaultModel: 'big-model', backgroundModel: 'small-model' },
+    });
+    const out = await ctx.worker.generate(payloadFor(row));
+    expect(out.outcome).toBe('stored');
+    expect(ctx.complete.mock.calls[0]![1].model).toBe('small-model');
+    expect(row.aiSummaryModel).toBe('small-model');
+  });
+
+  it('adds reasoning headroom only for a model that always thinks', async () => {
+    const plain = makeWorker({ rows: [makeRow()] });
+    await plain.worker.generate(payloadFor(plain.rows[0]!));
+    expect(budgetOf(plain.complete)).toBe(512);
+
+    const thinking = makeWorker({ rows: [makeRow()], config: THINKING });
+    await thinking.worker.generate(payloadFor(thinking.rows[0]!));
+    expect(budgetOf(thinking.complete)).toBe(512 + 2_048);
+  });
+
+  it('truncated, then OK: retries once with double the budget and a shorter input', async () => {
+    const row = makeRow({ contentPlaintext: 'z'.repeat(20_000) });
+    const complete = jest
+      .fn()
+      .mockRejectedValueOnce(new AiCompletionTruncatedError())
+      .mockResolvedValueOnce('Replace the switch after photographing the panel.');
+    const ctx = makeWorker({
+      rows: [row],
+      completeImpl: complete,
+      config: { ...THINKING, contextWindowTokens: 16_384 },
+    });
+    const out = await ctx.worker.generate(payloadFor(row));
+    expect(out.outcome).toBe('stored');
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(budgetOf(complete, 1)).toBe(budgetOf(complete, 0) * 2);
+    expect(sentContent(complete, 1).length).toBeLessThan(sentContent(complete, 0).length);
+    // Every attempt fits the window: input + overhead + output.
+    for (const call of [0, 1]) {
+      expect(sentContent(complete, call).length + 256 + budgetOf(complete, call)).toBeLessThanOrEqual(
+        16_384,
+      );
+    }
+  });
+
+  it('truncated twice settles as truncated without a summary', async () => {
+    const row = makeRow();
+    const complete = jest.fn().mockRejectedValue(new AiCompletionTruncatedError());
+    const ctx = makeWorker({ rows: [row], completeImpl: complete, config: THINKING });
+    const out = await ctx.worker.generate(payloadFor(row));
+    expect(out.outcome).toBe('truncated');
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(row.aiSummary).toBeNull();
+    expect(row.aiSummaryAt).toBeInstanceOf(Date);
+  });
+
+  it('a refusal settles at once, with no retry', async () => {
+    const row = makeRow();
+    const complete = jest.fn().mockRejectedValue(new AiCompletionRefusedError());
+    const ctx = makeWorker({ rows: [row], completeImpl: complete });
+    const out = await ctx.worker.generate(payloadFor(row));
+    expect(out.outcome).toBe('refused');
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(row.aiSummaryAt).toBeInstanceOf(Date);
+  });
+
+  it('small window (4096): the first request fits, and the retry is skipped when the cap allows no increase', async () => {
+    const row = makeRow({ contentPlaintext: 'q'.repeat(10_000) });
+    const complete = jest.fn().mockRejectedValue(new AiCompletionTruncatedError());
+    const ctx = makeWorker({
+      rows: [row],
+      completeImpl: complete,
+      config: { ...THINKING, contextWindowTokens: 4_096 },
+    });
+    const out = await ctx.worker.generate(payloadFor(row));
+    expect(out.outcome).toBe('truncated');
+    // Half the window is the cap, so 2048 cannot double: one request only.
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(budgetOf(complete)).toBe(2_048);
+    expect(sentContent(complete).length + 256 + budgetOf(complete)).toBeLessThanOrEqual(4_096);
+  });
+
+  it('window 8192: the retry input is recomputed so the request still fits', async () => {
+    const row = makeRow({ contentPlaintext: 'q'.repeat(10_000) });
+    const complete = jest
+      .fn()
+      .mockRejectedValueOnce(new AiCompletionTruncatedError())
+      .mockResolvedValueOnce('A summary.');
+    const ctx = makeWorker({
+      rows: [row],
+      completeImpl: complete,
+      config: { ...THINKING, contextWindowTokens: 8_192 },
+    });
+    const out = await ctx.worker.generate(payloadFor(row));
+    expect(out.outcome).toBe('stored');
+    expect(budgetOf(complete, 1)).toBe(4_096);
+    expect(sentContent(complete, 1).length + 256 + budgetOf(complete, 1)).toBeLessThanOrEqual(8_192);
   });
 });
 

@@ -1,19 +1,64 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { AiSettings } from '@weavestream/shared';
+import type {
+  AiProbeResult,
+  AiProvider,
+  AiReasoningEffort,
+  AiSettings,
+  AiTestResult,
+} from '@weavestream/shared';
 import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
-import { Btn, Field, Input, Select, Tag, useToast } from '../../../../components/ui';
+import {
+  Btn,
+  Field,
+  Input,
+  Select,
+  ShowMore,
+  Tag,
+  useToast,
+} from '../../../../components/ui';
+
+type ModelEntry = AiTestResult['models'][number];
+
+const PROVIDERS: Array<{ value: AiProvider; label: string; urlPlaceholder: string }> = [
+  { value: 'openai', label: 'OpenAI', urlPlaceholder: 'https://api.openai.com/v1' },
+  { value: 'anthropic', label: 'Anthropic', urlPlaceholder: 'https://api.anthropic.com/v1' },
+  {
+    value: 'openai_compatible',
+    label: 'OpenAI-compatible (Ollama, LM Studio, vLLM, routers)',
+    urlPlaceholder: 'http://localhost:11434/v1',
+  },
+];
+
+const REASONING: Array<{ value: AiReasoningEffort; label: string }> = [
+  { value: 'default', label: 'Provider default' },
+  { value: 'off', label: 'Off / lowest' },
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+];
+
+/** Below this, a reasoning model can spend the whole reply budget on thinking. */
+const REASONING_OUTPUT_HINT_TOKENS = 16_384;
+/** Mirrors the API's DEFAULT_MAX_OUTPUT_TOKENS for a blank field. */
+const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
 
 export function AiSettingsForm({ initial }: { initial: AiSettings }) {
   const toast = useToast();
   const baseline = useRef(initial);
   const [enabled, setEnabled] = useState(initial.enabled);
+  const [provider, setProvider] = useState<AiProvider>(initial.provider);
   const [baseUrl, setBaseUrl] = useState(initial.baseUrl ?? '');
   const [apiKey, setApiKey] = useState('');
   const [clearApiKey, setClearApiKey] = useState(false);
   const [defaultModel, setDefaultModel] = useState(initial.defaultModel ?? '');
+  const [backgroundModel, setBackgroundModel] = useState(initial.backgroundModel ?? '');
+  const [reasoningEffort, setReasoningEffort] = useState<AiReasoningEffort>(
+    initial.reasoningEffort,
+  );
+  const [workspaceId, setWorkspaceId] = useState(initial.anthropicWorkspaceId ?? '');
   const [maxOutputTokens, setMaxOutputTokens] = useState(
     initial.maxOutputTokens != null ? String(initial.maxOutputTokens) : '',
   );
@@ -26,7 +71,8 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     initial.allowPrivateNetwork,
   );
   const [autoSummaries, setAutoSummaries] = useState(initial.autoSummaries);
-  const [models, setModels] = useState<string[] | null>(null);
+  const [models, setModels] = useState<ModelEntry[] | null>(null);
+  const [probe, setProbe] = useState<AiProbeResult | null>(null);
   const [pending, setPending] = useState(false);
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,12 +82,17 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
   // claim to know what the new endpoint will return.
   useEffect(() => {
     setModels(null);
-  }, [baseUrl, apiKey, clearApiKey]);
+    setProbe(null);
+  }, [baseUrl, apiKey, clearApiKey, provider, workspaceId]);
 
   const dirty =
     enabled !== baseline.current.enabled ||
+    provider !== baseline.current.provider ||
     clean(baseUrl) !== baseline.current.baseUrl ||
     clean(defaultModel) !== baseline.current.defaultModel ||
+    clean(backgroundModel) !== baseline.current.backgroundModel ||
+    reasoningEffort !== baseline.current.reasoningEffort ||
+    clean(workspaceId) !== baseline.current.anthropicWorkspaceId ||
     numOrNull(maxOutputTokens) !== baseline.current.maxOutputTokens ||
     numOrNull(contextWindowTokens) !== baseline.current.contextWindowTokens ||
     allowPrivateNetwork !== baseline.current.allowPrivateNetwork ||
@@ -54,8 +105,12 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     setPending(true);
     const payload: Record<string, unknown> = {
       enabled,
+      provider,
       baseUrl: clean(baseUrl),
       defaultModel: clean(defaultModel),
+      backgroundModel: clean(backgroundModel),
+      reasoningEffort,
+      anthropicWorkspaceId: clean(workspaceId),
       maxOutputTokens: numOrNull(maxOutputTokens),
       contextWindowTokens: numOrNull(contextWindowTokens),
       allowPrivateNetwork,
@@ -90,22 +145,31 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     const url = clean(baseUrl);
     if (url) payload.baseUrl = url;
     if (apiKey) payload.apiKey = apiKey;
-    // Always send the checkbox state so an unsaved change is honoured by
-    // the test (the server treats any provided field as an override).
+    // Always send the checkbox state and provider so an unsaved change is
+    // honoured by the test (the server treats any provided field as an
+    // override).
     payload.allowPrivateNetwork = allowPrivateNetwork;
-    const res = await apiFetch<{ ok: true; models: string[] }>('/settings/ai/test', {
+    payload.provider = provider;
+    const ws = clean(workspaceId);
+    if (ws && provider === 'anthropic') payload.anthropicWorkspaceId = ws;
+    // The reply check uses the selected model; without one it is skipped.
+    const model = clean(defaultModel);
+    if (model) payload.model = model;
+    const res = await apiFetch<AiTestResult>('/settings/ai/test', {
       method: 'POST',
       body: JSON.stringify(payload),
     });
     setTesting(false);
     if (!res.ok || !res.data) {
       setModels(null);
+      setProbe(null);
       setError(problemMessage(res.problem) ?? 'Could not reach the LLM endpoint.');
       return;
     }
     setModels(res.data.models);
+    setProbe(res.data.probe);
     if (!defaultModel && res.data.models[0]) {
-      setDefaultModel(res.data.models[0]);
+      setDefaultModel(res.data.models[0].id);
     }
     toast.push(`Connected — ${res.data.models.length} model${res.data.models.length === 1 ? '' : 's'} found.`, 'ok');
   }
@@ -113,10 +177,14 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
   function reset() {
     const b = baseline.current;
     setEnabled(b.enabled);
+    setProvider(b.provider);
     setBaseUrl(b.baseUrl ?? '');
     setApiKey('');
     setClearApiKey(false);
     setDefaultModel(b.defaultModel ?? '');
+    setBackgroundModel(b.backgroundModel ?? '');
+    setReasoningEffort(b.reasoningEffort);
+    setWorkspaceId(b.anthropicWorkspaceId ?? '');
     setMaxOutputTokens(b.maxOutputTokens != null ? String(b.maxOutputTokens) : '');
     setContextWindowTokens(
       b.contextWindowTokens != null ? String(b.contextWindowTokens) : '',
@@ -124,10 +192,16 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
     setAllowPrivateNetwork(b.allowPrivateNetwork);
     setAutoSummaries(b.autoSummaries);
     setModels(null);
+    setProbe(null);
     setError(null);
   }
 
   const hasDiscoveredModels = models !== null && models.length > 0;
+  const providerInfo = PROVIDERS.find((p) => p.value === provider) ?? PROVIDERS[2]!;
+  const effectiveMaxOutput = numOrNull(maxOutputTokens) ?? DEFAULT_MAX_OUTPUT_TOKENS;
+  const showOutputHint =
+    (reasoningEffort !== 'off' || provider === 'anthropic') &&
+    effectiveMaxOutput < REASONING_OUTPUT_HINT_TOKENS;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
@@ -150,15 +224,33 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
       </label>
 
       <Field
+        label="Provider"
+        htmlFor="ai-provider"
+        help="Decides how Weavestream talks to the endpoint. Use OpenAI-compatible for local servers and routers."
+      >
+        <Select
+          id="ai-provider"
+          value={provider}
+          onChange={(e) => setProvider(e.target.value as AiProvider)}
+        >
+          {PROVIDERS.map((p) => (
+            <option key={p.value} value={p.value}>
+              {p.label}
+            </option>
+          ))}
+        </Select>
+      </Field>
+
+      <Field
         label="Base URL"
         htmlFor="ai-base-url"
-        help="Root URL of your OpenAI-compatible endpoint. Include the /v1 suffix."
+        help="Root URL of the endpoint. Include the /v1 suffix."
       >
         <Input
           id="ai-base-url"
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder="http://localhost:11434/v1"
+          placeholder={providerInfo.urlPlaceholder}
           maxLength={2048}
           autoComplete="off"
         />
@@ -280,29 +372,29 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
             : 'Run "Test connection" to discover available models, or type a name manually.'
         }
       >
-        {hasDiscoveredModels ? (
-          <Select
-            id="ai-default-model"
-            value={defaultModel}
-            onChange={(e) => setDefaultModel(e.target.value)}
-          >
-            <option value="">— None —</option>
-            {models!.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </Select>
-        ) : (
-          <Input
-            id="ai-default-model"
-            value={defaultModel}
-            onChange={(e) => setDefaultModel(e.target.value)}
-            placeholder="llama3:latest"
-            maxLength={120}
-            autoComplete="off"
-          />
-        )}
+        <ModelPicker
+          id="ai-default-model"
+          value={defaultModel}
+          onChange={setDefaultModel}
+          models={models}
+          emptyLabel="— None —"
+          placeholder="llama3:latest"
+        />
+      </Field>
+
+      <Field
+        label="Background model"
+        htmlFor="ai-background-model"
+        help="Used for chat titles, the short line shown before an article proposal, and article summaries. Leave empty to use the default model."
+      >
+        <ModelPicker
+          id="ai-background-model"
+          value={backgroundModel}
+          onChange={setBackgroundModel}
+          models={models}
+          emptyLabel="— Same as default model —"
+          placeholder="Same as default model"
+        />
       </Field>
 
       <div
@@ -349,6 +441,58 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
         </Field>
       </div>
 
+      {showOutputHint && (
+        <Tag tone="warn" style={{ alignSelf: 'flex-start', whiteSpace: 'normal' }}>
+          Reasoning models spend output tokens on thinking; 16k or more avoids
+          cut-off tool calls.
+        </Tag>
+      )}
+
+      <ShowMore moreLabel="Advanced" lessLabel="Hide advanced">
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: 16,
+          }}
+        >
+          <Field
+            label="Reasoning effort"
+            htmlFor="ai-reasoning-effort"
+            help="How much the default model reasons in chat. Provider default sends no setting. Others apply only where the model supports them; titles and summaries always use the lowest setting."
+          >
+            <Select
+              id="ai-reasoning-effort"
+              value={reasoningEffort}
+              onChange={(e) => setReasoningEffort(e.target.value as AiReasoningEffort)}
+            >
+              {REASONING.map((r) => (
+                <option key={r.value} value={r.value}>
+                  {r.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+
+          {provider === 'anthropic' && (
+            <Field
+              label="Anthropic workspace ID"
+              htmlFor="ai-anthropic-workspace"
+              help="Only needed for keys that are not scoped to a workspace."
+            >
+              <Input
+                id="ai-anthropic-workspace"
+                value={workspaceId}
+                onChange={(e) => setWorkspaceId(e.target.value)}
+                placeholder="wrkspc_…"
+                maxLength={128}
+                autoComplete="off"
+              />
+            </Field>
+          )}
+        </div>
+      </ShowMore>
+
       <section
         style={{
           padding: 14,
@@ -386,7 +530,14 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
               ? 'Enter a base URL to test the connection.'
               : dirty
                 ? 'Tests with the current form values — save afterwards to keep them.'
-                : 'Hits {baseUrl}/models to verify the connection and list available models.'}
+                : 'Lists the available models, then sends one short prompt to the default model.'}
+          {probe && (
+            <div style={{ marginTop: 6 }}>
+              <Tag tone={probe.status === 'ok' ? 'ok' : probe.status === 'skipped' ? 'default' : 'warn'}>
+                {probeMessage(probe)}
+              </Tag>
+            </div>
+          )}
         </div>
         <Btn
           kind="outline"
@@ -422,6 +573,64 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
       </div>
     </div>
   );
+}
+
+function ModelPicker({
+  id,
+  value,
+  onChange,
+  models,
+  emptyLabel,
+  placeholder,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  models: ModelEntry[] | null;
+  emptyLabel: string;
+  placeholder: string;
+}) {
+  if (models && models.length > 0) {
+    return (
+      <Select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{emptyLabel}</option>
+        {/* Keep a saved model the list no longer reports selectable. */}
+        {value && !models.some((m) => m.id === value) && (
+          <option value={value}>{value}</option>
+        )}
+        {models.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label ? `${m.label} (${m.id})` : m.id}
+          </option>
+        ))}
+      </Select>
+    );
+  }
+  return (
+    <Input
+      id={id}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      maxLength={120}
+      autoComplete="off"
+    />
+  );
+}
+
+/** Fixed server codes only (`AiProbeResult.reason`) — never upstream text. */
+function probeMessage(probe: AiProbeResult): string {
+  if (probe.status === 'ok') return 'Test reply OK.';
+  if (probe.status === 'skipped') return 'Select a model, then test again to check a reply.';
+  const reason = probe.reason ?? '';
+  if (reason === 'empty') return 'The model replied with no text.';
+  if (reason === 'truncated') return 'The model used its whole budget before replying.';
+  if (reason === 'refused') return 'The model declined the test prompt.';
+  if (reason === 'timeout') return 'The model did not reply in time.';
+  if (reason === 'invalid-response') return 'The endpoint sent a reply that was not valid JSON.';
+  if (reason === 'transport') return 'Could not reach the endpoint for the test reply.';
+  if (reason.startsWith('http:')) return `Test reply failed: ${reason.slice(5)}.`;
+  return 'Test reply failed.';
 }
 
 function clean(value: string): string | null {

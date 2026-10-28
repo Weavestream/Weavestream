@@ -11,6 +11,13 @@ import {
   aiEgressOptions,
   type AiResolvedConfig,
 } from './ai-settings.service.js';
+import { fromAnthropicMessage } from './anthropic-messages.js';
+import {
+  outputTokenParam,
+  providerAuthHeaders,
+  reasoningParams,
+  temperatureParam,
+} from './provider-http.js';
 
 /**
  * One-shot, non-streaming completions against the configured
@@ -33,18 +40,13 @@ import {
  * only the flagship chat *stream* still owns its own fetch.
  */
 
-/**
- * Model-family quirk: gpt-5-era OpenAI models renamed `max_tokens`.
- * (Moved verbatim from chat-stream.service.ts.)
- */
-export function outputTokenParam(
-  model: string | null,
-  budget: number,
-): { max_completion_tokens: number } | { max_tokens: number } {
-  return model && /^gpt-5/i.test(model)
-    ? { max_completion_tokens: budget }
-    : { max_tokens: budget };
-}
+// Provider rules moved to `provider-http.ts`; re-exported for existing
+// importers (the worker reaches them through `public/ai.ts`).
+export {
+  outputTokenParam,
+  rejectsTemperature,
+  temperatureParam,
+} from './provider-http.js';
 
 /**
  * Drop a reasoning model's `<think>…</think>` scratchpad. Some servers
@@ -73,6 +75,17 @@ export function stripThinkTags(raw: string): string {
 }
 
 /**
+ * The visible answer in a `content` field: closed `<think>` blocks
+ * removed, and everything from an unclosed `<think>` on removed too (a
+ * reply cut off inside its scratchpad). Empty when nothing is left.
+ */
+export function visibleText(content: string): string {
+  const stripped = stripThinkTags(content);
+  const open = stripped.toLowerCase().indexOf('<think>');
+  return (open >= 0 ? stripped.slice(0, open) : stripped).trim();
+}
+
+/**
  * Model output is untrusted input (CLAUDE.md §7). Reduce a raw
  * completion to a bounded plain-text summary: think-strip → flatten any
  * markdown the model emitted → drop control characters → collapse
@@ -89,6 +102,24 @@ export function sanitizeAiSummary(raw: string): string | null {
     .trim();
   if (!clean) return null;
   return excerptFromPlaintext(clean, 280);
+}
+
+/**
+ * The model used its whole output budget without visible text (typically
+ * on reasoning). Not retried here: the caller decides whether a larger
+ * budget fits its context window.
+ */
+export class AiCompletionTruncatedError extends Error {
+  constructor() {
+    super('AI completion ran out of output tokens before any visible text');
+  }
+}
+
+/** The provider declined the request (refusal / content filter). Not retryable. */
+export class AiCompletionRefusedError extends Error {
+  constructor() {
+    super('AI completion was declined by the provider');
+  }
 }
 
 /** Non-2xx from the completion endpoint. Retryable via BullMQ unless a caller downgrades it. */
@@ -136,9 +167,14 @@ const SENT_REQUEST_PARAMS: ReadonlySet<string> = new Set([
   'enable_thinking',
   'chat_template_kwargs',
   'reasoning',
+  'reasoning_effort',
   'messages',
   'max_tokens',
   'max_completion_tokens',
+  // Native Anthropic Messages fields.
+  'system',
+  'thinking',
+  'output_config',
 ]);
 
 /**
@@ -178,6 +214,17 @@ export function describeCompletionHttpError(err: AiCompletionHttpError): string 
   return `${err.status} unclassified (${body.length} chars, sha256:${fp})`;
 }
 
+/** The config fields a completion needs. */
+export type CompletionConfig = Pick<
+  AiResolvedConfig,
+  'provider' | 'baseUrl' | 'apiKey' | 'anthropicWorkspaceId' | 'allowPrivateNetwork'
+>;
+
+/**
+ * Every caller is a short background task (title, prelude, summary,
+ * connection probe), so reasoning always uses the model's lowest
+ * supported setting (`reasoningParams`, purpose 'background').
+ */
 export interface CompleteOptions {
   model: string;
   system: string;
@@ -205,12 +252,12 @@ export interface CompleteOptions {
 @Injectable()
 export class AiCompletionService {
   async complete(
-    config: Pick<
-      AiResolvedConfig,
-      'baseUrl' | 'apiKey' | 'allowPrivateNetwork'
-    >,
+    config: CompletionConfig,
     opts: CompleteOptions,
   ): Promise<string | null> {
+    // The native Messages API has no local-server flags to strip, so the
+    // strict-endpoint retry below does not apply.
+    if (config.provider === 'anthropic') return this.requestAnthropic(config, opts);
     try {
       return await this.request(config, opts, 'full');
     } catch (err) {
@@ -236,11 +283,63 @@ export class AiCompletionService {
     }
   }
 
+  /**
+   * One non-streaming call to the native Messages API. Same error
+   * contract as `request`: HTTP failures throw `AiCompletionHttpError`,
+   * a refusal or a thinking-only cut-off throws its own error, and a
+   * well-formed empty reply returns null. No `temperature`: Claude 4.7+
+   * rejects it, and the reply needs no sampling control.
+   */
+  private async requestAnthropic(
+    config: CompletionConfig,
+    opts: CompleteOptions,
+  ): Promise<string | null> {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
+    const onExternalAbort = () => ctrl.abort();
+    if (opts.signal?.aborted) ctrl.abort();
+    else opts.signal?.addEventListener('abort', onExternalAbort);
+    try {
+      const res = await safeFetch(`${stripTrailingSlashes(config.baseUrl)}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...providerAuthHeaders(config),
+        },
+        body: JSON.stringify({
+          model: opts.model,
+          max_tokens: opts.maxOutputTokens,
+          system: opts.system,
+          messages: [{ role: 'user', content: opts.user }],
+          ...reasoningParams({
+            provider: 'anthropic',
+            model: opts.model,
+            setting: 'off',
+            purpose: 'background',
+            maxTokens: opts.maxOutputTokens,
+          }),
+        }),
+        signal: ctrl.signal,
+        timeoutMs: opts.timeoutMs,
+        ...aiEgressOptions(config),
+      });
+      if (!res.ok) {
+        const raw = (await res.text().catch(() => '')).slice(0, 2048);
+        throw new AiCompletionHttpError(res.status, redactSecretsInText(raw).slice(0, 500));
+      }
+      const { text, finishReason } = fromAnthropicMessage(await res.json());
+      const raw = visibleText(text);
+      if (finishReason === 'refusal') throw new AiCompletionRefusedError();
+      if (!raw && finishReason === 'length') throw new AiCompletionTruncatedError();
+      return raw || null;
+    } finally {
+      clearTimeout(timer);
+      opts.signal?.removeEventListener('abort', onExternalAbort);
+    }
+  }
+
   private async request(
-    config: Pick<
-      AiResolvedConfig,
-      'baseUrl' | 'apiKey' | 'allowPrivateNetwork'
-    >,
+    config: CompletionConfig,
     opts: CompleteOptions,
     mode: 'full' | 'minimal',
   ): Promise<string | null> {
@@ -256,24 +355,25 @@ export class AiCompletionService {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(config.apiKey
-              ? { Authorization: `Bearer ${config.apiKey}` }
-              : {}),
+            ...providerAuthHeaders(config),
           },
           body: JSON.stringify({
             model: opts.model,
             stream: false,
-            ...outputTokenParam(opts.model, opts.maxOutputTokens),
+            ...outputTokenParam(opts.model, opts.maxOutputTokens, config.provider),
             ...(mode === 'full'
               ? {
-                  temperature: opts.temperature ?? 0.3,
-                  // vLLM / LM Studio / SGLang convention to disable
-                  // reasoning-mode emission for this request; servers
-                  // that don't recognise a flag ignore it. Some honour
-                  // the OpenAI-shape `reasoning.effort` instead.
-                  enable_thinking: false,
-                  chat_template_kwargs: { enable_thinking: false },
-                  reasoning: { effort: 'none' },
+                  ...temperatureParam(opts.model, opts.temperature ?? 0.3),
+                  // Lowest reasoning the model supports. For
+                  // openai_compatible these are the local-server
+                  // disable flags (ignored where unknown).
+                  ...reasoningParams({
+                    provider: config.provider,
+                    model: opts.model,
+                    setting: 'off',
+                    purpose: 'background',
+                    maxTokens: opts.maxOutputTokens,
+                  }),
                 }
               : {}),
             messages: [
@@ -298,8 +398,10 @@ export class AiCompletionService {
       }
       const json = (await res.json()) as {
         choices?: Array<{
+          finish_reason?: string | null;
           message?: {
             content?: string | null;
+            refusal?: string | null;
             reasoning_content?: string | null;
             reasoning?: string | null;
           };
@@ -308,15 +410,29 @@ export class AiCompletionService {
       };
       const choice = json?.choices?.[0];
       const msg = choice?.message;
-      const raw =
-        (msg?.content && msg.content.trim()) ||
-        (opts.contentOnly
+      if (msg?.refusal && msg.refusal.trim()) throw new AiCompletionRefusedError();
+      // Decide on the VISIBLE answer before any reasoning-field fallback:
+      // content that is empty or only a `<think>` scratchpad is no answer.
+      // A cut-off or refused reply must throw here, or the fallback below
+      // would return unfinished reasoning as a successful result.
+      const content = visibleText(msg?.content ?? '');
+      if (!content) {
+        const finish = choice?.finish_reason;
+        if (finish === 'content_filter' || finish === 'refusal') {
+          throw new AiCompletionRefusedError();
+        }
+        if (finish === 'length') throw new AiCompletionTruncatedError();
+        // A finished reply with no visible text: some local servers put
+        // the whole answer in a reasoning field.
+        const fallback = opts.contentOnly
           ? ''
           : (msg?.reasoning_content && msg.reasoning_content.trim()) ||
             (msg?.reasoning && msg.reasoning.trim()) ||
             (choice?.reasoning && choice.reasoning.trim()) ||
-            '');
-      return raw || null;
+            '';
+        return fallback || null;
+      }
+      return content;
     } finally {
       clearTimeout(timer);
       opts.signal?.removeEventListener('abort', onExternalAbort);

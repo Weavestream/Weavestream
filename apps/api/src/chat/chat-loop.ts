@@ -79,6 +79,13 @@ export interface UpstreamMessage {
     function: { name: string; arguments: string };
   }>;
   tool_call_id?: string;
+  /**
+   * Native content blocks of an assistant tool-call turn (the Anthropic
+   * transport only: thinking + text + tool_use, in order). Replayed
+   * unchanged in the next round of the same turn; the OpenAI transport
+   * never sends this key. Not persisted: history across turns is text.
+   */
+  providerBlocks?: unknown[];
 }
 
 export function partitionToolCalls(calls: FinalizedToolCall[]): {
@@ -194,8 +201,10 @@ export function fitToolResultChars(input: {
 export function assistantToolCallMessage(
   text: string,
   calls: FinalizedToolCall[],
+  providerBlocks?: unknown[],
 ): UpstreamMessage {
   return {
+    ...(providerBlocks && providerBlocks.length > 0 ? { providerBlocks } : {}),
     role: 'assistant',
     // Some servers reject an empty string next to tool_calls; null is
     // the portable spelling of "no visible text this round".
@@ -220,6 +229,8 @@ export interface RoundResult {
   text: string;
   finishReason: string | null;
   toolCalls: FinalizedToolCall[];
+  /** The Anthropic transport's content blocks for this round (see `UpstreamMessage`). */
+  providerBlocks?: unknown[];
 }
 
 export interface ToolLoopDeps {
@@ -343,7 +354,9 @@ export async function runToolLoop(
     // feeds the forced-final round MAX_COMPLETIONS, which then answers
     // with no tools. Echo the round's calls, then answer every single one
     // (protocol validity), executing reads up to the budget.
-    input.messages.push(assistantToolCallMessage(result.text, result.toolCalls));
+    input.messages.push(
+      assistantToolCallMessage(result.text, result.toolCalls, result.providerBlocks),
+    );
     const toExecute = new Set(reads.slice(0, Math.max(0, readBudget)));
     for (const call of result.toolCalls) {
       if (call.status !== 'pending') {

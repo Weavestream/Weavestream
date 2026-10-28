@@ -1135,6 +1135,17 @@ model AiSetting {
   // existing install upgrading with AI already on must never start
   // silently. The settings UI carries the disclosure.
   autoSummaries       Boolean  @default(false) @map("auto_summaries")
+  // Wire format / auth / request shaping: 'openai' | 'anthropic' |
+  // 'openai_compatible' (CHECK in migration 0088).
+  provider            String   @default("openai_compatible")
+  // Model for titles, the tool-intent prelude and article summaries.
+  // Null → `defaultModel`.
+  backgroundModel     String?  @map("background_model")
+  // 'default' | 'off' | 'low' | 'medium' | 'high'; mapped per model family
+  // server-side. 'default' sends no reasoning parameter in chat.
+  reasoningEffort     String   @default("default") @map("reasoning_effort")
+  // Sent as `anthropic-workspace-id` for keys not scoped to a workspace.
+  anthropicWorkspaceId String? @map("anthropic_workspace_id")
   updatedAt           DateTime @default(now()) @updatedAt @map("updated_at")
   updatedBy           String?  @map("updated_by") @db.Uuid
 

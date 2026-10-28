@@ -5,19 +5,25 @@ jest.mock('../common/egress/safe-fetch.js', () => ({
 import { safeFetch } from '../common/egress/safe-fetch.js';
 import {
   AiCompletionHttpError,
+  AiCompletionRefusedError,
   AiCompletionService,
+  AiCompletionTruncatedError,
   describeCompletionHttpError,
   isContextLengthError,
   outputTokenParam,
+  temperatureParam,
   sanitizeAiSummary,
   stripThinkTags,
 } from './ai-completion.service.js';
+import type { CompletionConfig } from './ai-completion.service.js';
 
 const safeFetchMock = safeFetch as jest.Mock;
 
-const CONFIG = {
+const CONFIG: CompletionConfig = {
+  provider: 'openai_compatible',
   baseUrl: 'http://ollama.lan:11434/v1/',
   apiKey: null as string | null,
+  anthropicWorkspaceId: null,
   allowPrivateNetwork: true,
 };
 
@@ -29,10 +35,19 @@ const OPTS = {
   timeoutMs: 5_000,
 };
 
-function okResponse(message: Record<string, unknown>) {
+function okResponse(message: Record<string, unknown>, finishReason?: string) {
   return {
     ok: true,
-    json: async () => ({ choices: [{ message }] }),
+    json: async () => ({
+      choices: [{ message, ...(finishReason ? { finish_reason: finishReason } : {}) }],
+    }),
+  };
+}
+
+function anthropicResponse(content: unknown[], stopReason: string) {
+  return {
+    ok: true,
+    json: async () => ({ type: 'message', content, stop_reason: stopReason }),
   };
 }
 
@@ -62,6 +77,47 @@ describe('sanitizeAiSummary (§7 — model output is untrusted)', () => {
       expect(sanitizeAiSummary(raw)).toBeNull();
     },
   );
+});
+
+describe('temperatureParam', () => {
+  it('omits temperature for models that reject a caller-supplied value', () => {
+    for (const m of [
+      'claude-haiku-5-5',
+      'claude-sonnet-5-5',
+      'claude-opus-5',
+      'claude-fable-5-1',
+      // Claude 4.7+ already rejects temperature < 1.
+      'claude-opus-4-7',
+      'claude-opus-4-8',
+      'claude-mythos-preview',
+      'claude-sonnet-6',
+      'anthropic/claude-opus-4.7',
+      'gpt-5-mini',
+      'openai/gpt-5',
+      'o3',
+      'o4-mini',
+    ]) {
+      expect(temperatureParam(m, 0.2)).toEqual({});
+    }
+  });
+
+  it('keeps temperature for everything else', () => {
+    for (const m of [
+      'claude-haiku-4-5',
+      'claude-haiku-4-5-20251001',
+      'claude-opus-4-6',
+      'claude-sonnet-4-6',
+      // Date snapshot, not version 4.20250514.
+      'claude-sonnet-4-20250514',
+      'claude-opus-4-1-20250805',
+      'claude-3-5-sonnet',
+      'gpt-4o',
+      'llama3:latest',
+    ]) {
+      expect(temperatureParam(m, 0.2)).toEqual({ temperature: 0.2 });
+    }
+    expect(temperatureParam(null, 0.3)).toEqual({ temperature: 0.3 });
+  });
 });
 
 describe('outputTokenParam / stripThinkTags (moved from chat-stream)', () => {
@@ -350,6 +406,169 @@ describe('AiCompletionService.complete', () => {
     // The abort reached the request's own controller, and an
     // AbortError is not a 400 — exactly one upstream call.
     expect(fetchSignal?.aborted).toBe(true);
+    expect(safeFetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('AiCompletionService — finish reasons', () => {
+  it('a thinking-only reply cut off by the token cap throws AiCompletionTruncatedError', async () => {
+    safeFetchMock.mockResolvedValue(okResponse({ content: '' }, 'length'));
+    const err = await new AiCompletionService().complete(CONFIG, OPTS).catch((e) => e);
+    expect(err).toBeInstanceOf(AiCompletionTruncatedError);
+    // Not a 400: the strict-endpoint retry does not run.
+    expect(safeFetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refusal throws AiCompletionRefusedError', async () => {
+    safeFetchMock.mockResolvedValueOnce(okResponse({ content: '', refusal: 'No.' }));
+    await expect(new AiCompletionService().complete(CONFIG, OPTS)).rejects.toBeInstanceOf(
+      AiCompletionRefusedError,
+    );
+    safeFetchMock.mockResolvedValueOnce(okResponse({ content: '' }, 'content_filter'));
+    await expect(new AiCompletionService().complete(CONFIG, OPTS)).rejects.toBeInstanceOf(
+      AiCompletionRefusedError,
+    );
+  });
+
+  it('a well-formed empty reply that stopped normally is still null', async () => {
+    safeFetchMock.mockResolvedValue(okResponse({ content: '' }, 'stop'));
+    expect(await new AiCompletionService().complete(CONFIG, OPTS)).toBeNull();
+  });
+
+  it('a length cut-off with only reasoning fields throws truncated, never returns the reasoning', async () => {
+    safeFetchMock.mockResolvedValue(
+      okResponse({ content: null, reasoning_content: 'First, I should consider' }, 'length'),
+    );
+    await expect(new AiCompletionService().complete(CONFIG, OPTS)).rejects.toBeInstanceOf(
+      AiCompletionTruncatedError,
+    );
+  });
+
+  it.each([
+    ['a closed <think> block', '<think>planning the summary</think>'],
+    ['an unclosed <think> block', '<think>planning the summary, step one is'],
+  ])('content with only %s and a length finish throws truncated', async (_label, content) => {
+    safeFetchMock.mockResolvedValue(okResponse({ content }, 'length'));
+    await expect(new AiCompletionService().complete(CONFIG, OPTS)).rejects.toBeInstanceOf(
+      AiCompletionTruncatedError,
+    );
+  });
+
+  it('an unclosed <think> after visible text is dropped from the result', async () => {
+    safeFetchMock.mockResolvedValue(okResponse({ content: 'Answer. <think>more' }, 'length'));
+    expect(await new AiCompletionService().complete(CONFIG, OPTS)).toBe('Answer.');
+  });
+
+  it('a finished reply with only a reasoning field still uses the fallback', async () => {
+    safeFetchMock.mockResolvedValue(
+      okResponse({ content: '<think>x</think>', reasoning_content: 'The title' }, 'stop'),
+    );
+    expect(await new AiCompletionService().complete(CONFIG, OPTS)).toBe('The title');
+  });
+
+  it('visible text wins over a length finish', async () => {
+    safeFetchMock.mockResolvedValue(okResponse({ content: 'Partial.' }, 'length'));
+    expect(await new AiCompletionService().complete(CONFIG, OPTS)).toBe('Partial.');
+  });
+});
+
+describe('AiCompletionService — provider openai', () => {
+  it('sends max_completion_tokens and reasoning_effort, never the local-server flags', async () => {
+    safeFetchMock.mockResolvedValue(okResponse({ content: 'x' }));
+    await new AiCompletionService().complete(
+      { ...CONFIG, provider: 'openai', baseUrl: 'https://api.openai.com/v1' },
+      { ...OPTS, model: 'gpt-5.1' },
+    );
+    const body = JSON.parse(safeFetchMock.mock.calls[0]![1].body);
+    expect(body.max_completion_tokens).toBe(512);
+    expect(body).not.toHaveProperty('max_tokens');
+    expect(body.reasoning_effort).toBe('none');
+    for (const k of ['enable_thinking', 'chat_template_kwargs', 'reasoning', 'temperature']) {
+      expect(body).not.toHaveProperty(k);
+    }
+  });
+});
+
+describe('AiCompletionService — provider anthropic (native Messages API)', () => {
+  const ANTHROPIC: CompletionConfig = {
+    provider: 'anthropic',
+    baseUrl: 'https://api.anthropic.com/v1/',
+    apiKey: 'sk-ant-test',
+    anthropicWorkspaceId: 'wrkspc_01',
+    allowPrivateNetwork: false,
+  };
+
+  it('posts /messages with native auth, a top-level system and no temperature', async () => {
+    safeFetchMock.mockResolvedValue(
+      anthropicResponse([{ type: 'text', text: ' Hello ' }], 'end_turn'),
+    );
+    const out = await new AiCompletionService().complete(ANTHROPIC, {
+      ...OPTS,
+      model: 'claude-opus-5-5',
+      temperature: 0.3,
+    });
+    expect(out).toBe('Hello');
+    const [url, init] = safeFetchMock.mock.calls[0]!;
+    expect(url).toBe('https://api.anthropic.com/v1/messages');
+    expect(init.headers).toEqual({
+      'Content-Type': 'application/json',
+      'x-api-key': 'sk-ant-test',
+      'anthropic-version': '2023-06-01',
+      'anthropic-workspace-id': 'wrkspc_01',
+    });
+    const body = JSON.parse(init.body);
+    expect(body).toEqual({
+      model: 'claude-opus-5-5',
+      max_tokens: 512,
+      system: 'sys',
+      messages: [{ role: 'user', content: 'usr' }],
+      // Opus 5.5 always thinks; background calls use the lowest effort.
+      output_config: { effort: 'low' },
+    });
+  });
+
+  it('turns thinking off where the model allows it', async () => {
+    safeFetchMock.mockResolvedValue(anthropicResponse([{ type: 'text', text: 'x' }], 'end_turn'));
+    await new AiCompletionService().complete(ANTHROPIC, { ...OPTS, model: 'claude-opus-5' });
+    const body = JSON.parse(safeFetchMock.mock.calls[0]![1].body);
+    expect(body.thinking).toEqual({ type: 'disabled' });
+    expect(body).not.toHaveProperty('output_config');
+  });
+
+  it('reads only text blocks, never thinking', async () => {
+    safeFetchMock.mockResolvedValue(
+      anthropicResponse(
+        [
+          { type: 'thinking', thinking: 'secret plan', signature: 'sig' },
+          { type: 'text', text: 'Answer' },
+        ],
+        'end_turn',
+      ),
+    );
+    expect(
+      await new AiCompletionService().complete(ANTHROPIC, { ...OPTS, model: 'claude-opus-5-5' }),
+    ).toBe('Answer');
+  });
+
+  it('maps refusal and a thinking-only max_tokens stop to the typed errors', async () => {
+    const svc = new AiCompletionService();
+    safeFetchMock.mockResolvedValueOnce(anthropicResponse([], 'refusal'));
+    await expect(svc.complete(ANTHROPIC, OPTS)).rejects.toBeInstanceOf(AiCompletionRefusedError);
+    safeFetchMock.mockResolvedValueOnce(
+      anthropicResponse([{ type: 'thinking', thinking: '', signature: 's' }], 'max_tokens'),
+    );
+    await expect(svc.complete(ANTHROPIC, OPTS)).rejects.toBeInstanceOf(AiCompletionTruncatedError);
+  });
+
+  it('does not run the strict-endpoint retry on a 400', async () => {
+    safeFetchMock.mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: async () => '{"type":"error","error":{"type":"invalid_request_error"}}',
+    });
+    await expect(new AiCompletionService().complete(ANTHROPIC, OPTS)).rejects.toBeInstanceOf(
+      AiCompletionHttpError,
+    );
     expect(safeFetchMock).toHaveBeenCalledTimes(1);
   });
 });

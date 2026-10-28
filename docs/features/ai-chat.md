@@ -2,7 +2,7 @@
 label: AI Chat
 icon: hubot
 order: 810
-description: OpenAI-compatible AI assistant with article editing, context attachment, and persistent chat history.
+description: AI assistant (OpenAI, Anthropic or any OpenAI-compatible endpoint) with article editing, context attachment, and persistent chat history.
 ---
 
 # AI Chat
@@ -15,16 +15,32 @@ Click the **chat icon** in the company sidebar toolbar to toggle the chat panel 
 
 ## LLM Configuration
 
-The AI chat requires an OpenAI-compatible language model endpoint. Configure this under **Admin → Settings → AI**:
+Configure the language model under **Admin → Settings → AI**:
 
 | Setting | Description |
 |---|---|
-| **API Base URL** | The base URL of your OpenAI-compatible endpoint (e.g. `https://api.openai.com/v1`) |
-| **Model** | The model identifier to use (e.g. `gpt-4o`, `gpt-4o-mini`) |
-| **API Key** | Your API key for the endpoint |
+| **Provider** | **OpenAI**, **Anthropic**, or **OpenAI-compatible** (Ollama, LM Studio, vLLM, OpenRouter and similar). The provider sets the request format, the auth headers and how reasoning is controlled. |
+| **Base URL** | The API base URL, e.g. `https://api.openai.com/v1`, `https://api.anthropic.com/v1` or `http://localhost:11434/v1` |
+| **API key** | Your API key for the endpoint. Optional for local servers. |
+| **Default model** | The model "Ask anything" uses for chat. **Test connection** lists the models the endpoint offers. |
+| **Background model** | Used for chat titles, the short line shown before an article proposal, and article summaries. Leave empty to use the default model. A small, fast model is a good choice here. |
+| **Max output tokens** / **Context window tokens** | Limits for each request. Reasoning models spend output tokens on thinking, so 16,384 or more avoids cut-off replies and tool calls. |
 | **Allow private-network addresses** | Opt-in required for endpoints on loopback or LAN addresses (local Ollama, LM Studio). Off by default. |
 
-Any provider that implements the OpenAI chat completions API is compatible, including self-hosted models via Ollama, LM Studio, or similar tools.
+Under **Advanced**:
+
+| Setting | Description |
+|---|---|
+| **Reasoning effort** | **Provider default** (the default) sends no reasoning setting in chat, so each model uses its own default. `off`, `low`, `medium` and `high` are targets: Weavestream sends the nearest setting each model supports, and nothing for a model it does not know. Titles, summaries and the connection test always use the lowest setting. |
+| **Anthropic workspace ID** | Shown for the Anthropic provider only. Needed when the API key is not limited to one workspace. |
+
+**Test connection** lists the models, then sends one short prompt to the selected default model. "Test reply OK" means the model gave a visible reply. If the reply check fails, the model list still shows, with the reason (for example a missing model, a timeout, or a reply cut off by the output-token limit).
+
+### Providers
+
+- **OpenAI** — Chat Completions API. Reasoning models (gpt-5 family, o-series) get `reasoning_effort`; models that reject `temperature` do not get it.
+- **Anthropic** — Anthropic's native Messages API. Weavestream sends the system prompt with prompt caching, uses strict tool schemas where the model supports them, and keeps a model's reasoning between tool calls in the same reply. A model that does not accept a forced tool choice gets a plain instruction instead.
+- **OpenAI-compatible** — any server that implements the OpenAI Chat Completions API. With reasoning effort `off`, Weavestream sends the usual "disable thinking" flags. Most servers ignore flags they do not know; if a server rejects them, the chat retries once without them and stops sending them to that model.
 
 ### Private network access
 

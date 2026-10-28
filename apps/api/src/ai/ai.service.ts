@@ -1,11 +1,26 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { stripTrailingSlashes } from '@weavestream/shared';
-import type { TestAiSettingsInput } from '@weavestream/shared';
+import type {
+  AiProbeResult,
+  AiProvider,
+  AiTestResult,
+  TestAiSettingsInput,
+} from '@weavestream/shared';
 import {
   AiNotConfiguredError,
   AiSettingsService,
+  DEFAULT_CONTEXT_WINDOW_TOKENS,
   aiEgressOptions,
+  type AiResolvedConfig,
 } from './ai-settings.service.js';
+import {
+  AiCompletionHttpError,
+  AiCompletionRefusedError,
+  AiCompletionService,
+  AiCompletionTruncatedError,
+  describeCompletionHttpError,
+} from './ai-completion.service.js';
+import { backgroundOutputBudget, providerAuthHeaders } from './provider-http.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
@@ -16,86 +31,106 @@ import { redactUrl } from '../common/redact-url.js';
 import { readUpstreamSnippet } from '../common/redact-secrets.js';
 
 const TEST_TIMEOUT_MS = 8_000;
+/** The reply check runs after a successful model list, with its own cap. */
+const PROBE_TIMEOUT_MS = 15_000;
+/** Visible budget for "OK"; reasoning models get headroom on top. */
+const PROBE_VISIBLE_TOKENS = 32;
 
 /**
- * Thin client for OpenAI-compatible endpoints. Foundation phase only
- * exposes `listModels()` — used by the settings page's "Test connection"
- * button to verify the saved base URL + API key and surface the
- * server's model list. The full chat/completion/embedding surface lands
- * in a follow-up phase.
+ * OpenAI's `/models` also lists models that cannot chat. Applied only to
+ * the `openai` provider; local servers list exactly what they serve.
+ */
+const OPENAI_NON_CHAT_MODEL =
+  /(embedding|tts|whisper|dall-e|gpt-image|audio|realtime|transcribe|moderation|search|computer-use)/i;
+
+/** The endpoint, key and options one connection test uses. */
+interface TestTarget {
+  provider: AiProvider;
+  baseUrl: string;
+  apiKey: string | null;
+  anthropicWorkspaceId: string | null;
+  allowPrivateNetwork: boolean;
+  contextWindowTokens: number;
+  /** A saved key exists but was not sent: the test targets another endpoint. */
+  savedKeyWithheld: boolean;
+}
+
+/**
+ * "Test connection" for Settings → AI: lists the endpoint's models and,
+ * when a model is selected, checks that it gives a usable reply.
  */
 @Injectable()
 export class AiService {
   constructor(
     private readonly settings: AiSettingsService,
     private readonly audit: AuditLogService,
+    private readonly completion: AiCompletionService,
   ) {}
 
-  async listModels(
-    override?: {
-      baseUrl?: string;
-      apiKey?: string;
-      allowPrivateNetwork?: boolean;
-    },
-    // Out-param so `runTest` can audit the flag that was actually applied
-    // even when the call fails after resolution.
-    telemetry?: { privateNetworkAllowed?: boolean },
-  ): Promise<string[]> {
-    let baseUrl: string;
-    let apiKey: string | null = null;
-    let allowPrivateNetwork: boolean;
-    // Set when a saved key exists but was not sent because the test
-    // targets a different endpoint; drives the 401/403 hint below.
-    let savedKeyWithheld = false;
-
-    // Test path: never enforce `enabled` — the user is verifying a
-    // candidate config. Prefer override values; for any field the
-    // override doesn't supply, fall back to whatever is currently saved.
-    // An unsaved private-network checkbox alone must also enter this
-    // branch, or Test Connection would silently ignore it.
+  /**
+   * Resolves what a test sends where. Test path: never enforce
+   * `enabled` — the user is verifying a candidate config. Override
+   * values win; any field the override doesn't supply falls back to the
+   * saved config. Without any override the persisted config is tested
+   * as-is, including the `enabled` gate.
+   */
+  private async resolveTarget(override?: TestAiSettingsInput): Promise<TestTarget> {
     if (
       override?.baseUrl ||
       override?.apiKey ||
-      override?.allowPrivateNetwork !== undefined
+      override?.allowPrivateNetwork !== undefined ||
+      override?.provider ||
+      override?.anthropicWorkspaceId
     ) {
-      let savedBaseUrl: string | null = null;
-      let savedApiKey: string | null = null;
-      let savedAllowPrivate = false;
+      let saved: AiResolvedConfig | null = null;
       try {
-        const saved = await this.settings.getRawConfig();
-        savedBaseUrl = saved.baseUrl;
-        savedApiKey = saved.apiKey;
-        savedAllowPrivate = saved.allowPrivateNetwork;
+        saved = await this.settings.getRawConfig();
       } catch {
-        // No saved baseUrl — fine, override has to carry it.
+        // No saved baseUrl — fine, the override has to carry it.
       }
-      baseUrl = override.baseUrl ?? savedBaseUrl ?? '';
-      // The saved key is bound to the saved endpoint. Pairing it with a
-      // caller-supplied base URL would let anyone who can call this route
-      // send the decrypted secret to a host of their choice, so a different
-      // URL must bring its own key or go without one.
-      const sameEndpoint =
-        override.baseUrl === undefined ||
-        (savedBaseUrl !== null &&
-          stripTrailingSlashes(override.baseUrl) === stripTrailingSlashes(savedBaseUrl));
-      apiKey = override.apiKey ?? (sameEndpoint ? savedApiKey : null);
-      savedKeyWithheld = !override.apiKey && !sameEndpoint && savedApiKey !== null;
-      allowPrivateNetwork = override.allowPrivateNetwork ?? savedAllowPrivate;
+      const baseUrl = override.baseUrl ?? saved?.baseUrl ?? '';
       if (!baseUrl) {
         throw new BadRequestException('Enter a base URL to test the connection.');
       }
-    } else {
-      // No override at all: tester wants to verify the persisted config
-      // as-is, including the `enabled` gate (treat it as a "would this
-      // be usable right now?" check).
-      const config = await this.settings.getConfig();
-      baseUrl = config.baseUrl;
-      apiKey = config.apiKey;
-      allowPrivateNetwork = config.allowPrivateNetwork;
+      // The saved key is bound to the saved endpoint. Pairing it with a
+      // caller-supplied base URL would let anyone who can call this route
+      // send the decrypted secret to a host of their choice, so a different
+      // URL must bring its own key or go without one. This applies to the
+      // model list AND the reply check, which share this target.
+      const savedApiKey = saved?.apiKey ?? null;
+      const sameEndpoint =
+        override.baseUrl === undefined ||
+        (saved !== null &&
+          stripTrailingSlashes(override.baseUrl) === stripTrailingSlashes(saved.baseUrl));
+      return {
+        provider: override.provider ?? saved?.provider ?? 'openai_compatible',
+        baseUrl,
+        apiKey: override.apiKey ?? (sameEndpoint ? savedApiKey : null),
+        anthropicWorkspaceId:
+          override.anthropicWorkspaceId ?? saved?.anthropicWorkspaceId ?? null,
+        allowPrivateNetwork:
+          override.allowPrivateNetwork ?? saved?.allowPrivateNetwork ?? false,
+        contextWindowTokens: saved?.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
+        savedKeyWithheld: !override.apiKey && !sameEndpoint && savedApiKey !== null,
+      };
     }
+    const config = await this.settings.getConfig();
+    return { ...config, savedKeyWithheld: false };
+  }
 
-    if (telemetry) telemetry.privateNetworkAllowed = allowPrivateNetwork;
+  async listModels(
+    override?: TestAiSettingsInput,
+    // Out-param so `runTest` can audit the flag that was actually applied
+    // even when the call fails after resolution.
+    telemetry?: { privateNetworkAllowed?: boolean },
+  ): Promise<AiModelEntry[]> {
+    const target = await this.resolveTarget(override);
+    if (telemetry) telemetry.privateNetworkAllowed = target.allowPrivateNetwork;
+    return this.fetchModels(target);
+  }
 
+  private async fetchModels(target: TestTarget): Promise<AiModelEntry[]> {
+    const { baseUrl, allowPrivateNetwork, savedKeyWithheld } = target;
     const url = `${stripTrailingSlashes(baseUrl)}/models`;
     // Admin-pasted base URLs can carry userinfo/query secrets; never echo
     // the raw form back in error messages.
@@ -105,7 +140,9 @@ export class AiService {
     try {
       res = await safeFetch(url, {
         method: 'GET',
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+        // Anthropic's `/v1/models` is the native endpoint: `x-api-key` +
+        // `anthropic-version`, and it 400s on Bearer alone.
+        headers: providerAuthHeaders(target),
         timeoutMs: TEST_TIMEOUT_MS,
         // Private/LAN endpoints (LM Studio, on-prem Ollama, …) require the
         // explicit Settings → AI opt-in, which allows only the curated
@@ -148,7 +185,7 @@ export class AiService {
       throw new BadRequestException(`Response was not valid JSON: ${messageOf(err)}`);
     }
 
-    const models = extractModelIds(json);
+    const models = extractModels(json, target.provider);
     if (models.length === 0) {
       throw new BadRequestException(
         'Endpoint responded, but no models were listed. Confirm the server has at least one model loaded.',
@@ -157,20 +194,52 @@ export class AiService {
     return models;
   }
 
+  /**
+   * One short prompt through the same transport the chat uses. OK only
+   * with non-empty visible text. Every failure maps to a fixed code —
+   * nothing from the probe escapes, so a failed check never hides a
+   * successful model list.
+   */
+  private async probe(target: TestTarget, model: string | undefined): Promise<AiProbeResult> {
+    if (!model) return { status: 'skipped', reason: 'no-model' };
+    try {
+      const reply = await this.completion.complete(target, {
+        model,
+        system: 'You confirm that the connection works.',
+        user: 'Reply with the word OK.',
+        maxOutputTokens: backgroundOutputBudget({
+          provider: target.provider,
+          model,
+          visible: PROBE_VISIBLE_TOKENS,
+          contextWindowTokens: target.contextWindowTokens,
+        }),
+        timeoutMs: PROBE_TIMEOUT_MS,
+        contentOnly: true,
+      });
+      return reply ? { status: 'ok' } : { status: 'failed', reason: 'empty' };
+    } catch (err) {
+      return { status: 'failed', reason: probeFailureCode(err) };
+    }
+  }
+
   async runTest(
     actor: AuthedUser,
     meta: RequestMeta,
     input?: TestAiSettingsInput,
-  ): Promise<{ ok: true; models: string[] }> {
+  ): Promise<AiTestResult> {
     let success = false;
     let error: string | null = null;
     let modelCount = 0;
-    const telemetry: { privateNetworkAllowed?: boolean } = {};
+    let probe: AiProbeResult | null = null;
+    let privateNetworkAllowed: boolean | null = null;
     try {
-      const models = await this.listModels(input ?? undefined, telemetry);
+      const target = await this.resolveTarget(input ?? undefined);
+      privateNetworkAllowed = target.allowPrivateNetwork;
+      const models = await this.fetchModels(target);
       success = true;
       modelCount = models.length;
-      return { ok: true, models };
+      probe = await this.probe(target, input?.model);
+      return { ok: true, models, probe };
     } catch (err) {
       // Capture the full cause chain in the durable audit record too, so
       // a failed test is diagnosable after the fact.
@@ -191,33 +260,68 @@ export class AiService {
           success,
           modelCount,
           error,
+          // Status and fixed code only — never the reply text.
+          probe,
           // Null when the test failed before the flag was even resolved
           // (e.g. no base URL saved or supplied).
-          privateNetworkAllowed: telemetry.privateNetworkAllowed ?? null,
+          privateNetworkAllowed,
           overrideUsed: Boolean(
             input?.baseUrl ||
               input?.apiKey ||
-              input?.allowPrivateNetwork !== undefined,
+              input?.allowPrivateNetwork !== undefined ||
+              input?.provider ||
+              input?.anthropicWorkspaceId,
           ),
         },
       });
     }
   }
-
 }
 
-function extractModelIds(payload: unknown): string[] {
+export type AiModelEntry = AiTestResult['models'][number];
+
+/**
+ * `{ data: [{ id, display_name? }] }` — the OpenAI shape, which
+ * Anthropic's native list shares (plus `display_name`).
+ */
+function extractModels(payload: unknown, provider: AiProvider): AiModelEntry[] {
   if (!payload || typeof payload !== 'object') return [];
   const data = (payload as { data?: unknown }).data;
   if (!Array.isArray(data)) return [];
-  const ids: string[] = [];
+  const models: AiModelEntry[] = [];
   for (const entry of data) {
-    if (entry && typeof entry === 'object') {
-      const id = (entry as { id?: unknown }).id;
-      if (typeof id === 'string' && id.length > 0) ids.push(id);
-    }
+    if (!entry || typeof entry !== 'object') continue;
+    const { id, display_name: label } = entry as { id?: unknown; display_name?: unknown };
+    if (typeof id !== 'string' || id.length === 0) continue;
+    if (provider === 'openai' && OPENAI_NON_CHAT_MODEL.test(id)) continue;
+    models.push(
+      provider === 'anthropic' && typeof label === 'string' && label.trim()
+        ? { id, label: label.trim().slice(0, 120) }
+        : { id },
+    );
   }
-  return ids;
+  return models;
+}
+
+/** Fixed code for a failed reply check. Never upstream text. */
+function probeFailureCode(err: unknown): string {
+  if (err instanceof AiCompletionRefusedError) return 'refused';
+  if (err instanceof AiCompletionTruncatedError) return 'truncated';
+  if (err instanceof AiCompletionHttpError) {
+    return `http:${describeCompletionHttpError(err)}`.slice(0, 80);
+  }
+  // By name, not `instanceof`: `res.json()` and the abort/timeout
+  // DOMExceptions can come from another realm than this module's globals.
+  const { name, message } = (err ?? {}) as { name?: unknown; message?: unknown };
+  if (name === 'SyntaxError') return 'invalid-response';
+  if (
+    name === 'AbortError' ||
+    name === 'TimeoutError' ||
+    (typeof message === 'string' && /timeout|timed out/i.test(message))
+  ) {
+    return 'timeout';
+  }
+  return 'transport';
 }
 
 function messageOf(err: unknown): string {

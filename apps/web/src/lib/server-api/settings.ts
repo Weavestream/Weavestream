@@ -96,8 +96,12 @@ export const getEmailSettings = cache(async (): Promise<EmailSettings> => {
 
 const DEFAULT_AI_SETTINGS: AiSettings = {
   enabled: false,
+  provider: 'openai_compatible',
   baseUrl: null,
   defaultModel: null,
+  backgroundModel: null,
+  reasoningEffort: 'default',
+  anthropicWorkspaceId: null,
   apiKeyConfigured: false,
   maxOutputTokens: null,
   contextWindowTokens: null,

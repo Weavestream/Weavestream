@@ -39,7 +39,7 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
   {
     id: 'ai',
     label: 'AI',
-    help: 'OpenAI-compatible LLM endpoint (Ollama, LMStudio, …).',
+    help: 'LLM provider for Ask anything: OpenAI, Anthropic, or an OpenAI-compatible server (Ollama, LMStudio, …).',
   },
   {
     id: 'integrations',

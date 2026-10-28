@@ -31,6 +31,10 @@ function baseRow(overrides: Partial<Record<string, unknown>> = {}) {
     maxOutputTokens: null as number | null,
     contextWindowTokens: null as number | null,
     allowPrivateNetwork: false,
+    provider: 'openai_compatible',
+    backgroundModel: null as string | null,
+    reasoningEffort: 'off',
+    anthropicWorkspaceId: null as string | null,
     updatedAt: NOW,
     updatedBy: null as string | null,
     ...overrides,
@@ -166,9 +170,14 @@ describe('AiSettingsService', () => {
     );
 
     await expect(svc.getConfig()).resolves.toEqual({
+      provider: 'openai_compatible',
       baseUrl: 'http://localhost:11434/v1',
       apiKey: 'sk-test',
       defaultModel: 'llama3:latest',
+      // No background model saved: falls back to the default model.
+      backgroundModel: 'llama3:latest',
+      reasoningEffort: 'off',
+      anthropicWorkspaceId: null,
       maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
       contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
       allowPrivateNetwork: false,
@@ -221,6 +230,65 @@ describe('AiSettingsService', () => {
     );
     const config = await svc.getConfig();
     expect(config.allowPrivateNetwork).toBe(true);
+  });
+
+  it('saves the provider fields and audits both sides, never the key', async () => {
+    const prisma = makePrisma();
+    prisma.aiSetting.findUnique.mockResolvedValue(
+      baseRow({ enabled: true, baseUrl: 'https://api.anthropic.com/v1' }),
+    );
+    const saved = baseRow({
+      enabled: true,
+      baseUrl: 'https://api.anthropic.com/v1',
+      provider: 'anthropic',
+      backgroundModel: 'claude-haiku-4-5',
+      reasoningEffort: 'medium',
+      anthropicWorkspaceId: 'wrkspc_01',
+      defaultModel: 'claude-opus-5-5',
+    });
+    prisma.aiSetting.update.mockResolvedValue(saved);
+    const audit = makeAudit();
+    const svc = new AiSettingsService(prisma as never, audit as never, makeCrypto() as never);
+
+    const out = await svc.update(
+      ACTOR,
+      {
+        provider: 'anthropic',
+        backgroundModel: 'claude-haiku-4-5',
+        reasoningEffort: 'medium',
+        anthropicWorkspaceId: 'wrkspc_01',
+        apiKey: 'sk-ant-secret',
+      },
+      META,
+    );
+
+    expect(prisma.aiSetting.update.mock.calls[0]![0].data).toEqual(
+      expect.objectContaining({
+        provider: 'anthropic',
+        backgroundModel: 'claude-haiku-4-5',
+        reasoningEffort: 'medium',
+        anthropicWorkspaceId: 'wrkspc_01',
+      }),
+    );
+    expect(out).toEqual(
+      expect.objectContaining({
+        provider: 'anthropic',
+        backgroundModel: 'claude-haiku-4-5',
+        reasoningEffort: 'medium',
+        anthropicWorkspaceId: 'wrkspc_01',
+      }),
+    );
+    const entry = audit.log.mock.calls[0]![0];
+    expect(entry.before).toEqual(expect.objectContaining({ provider: 'openai_compatible' }));
+    expect(entry.after).toEqual(
+      expect.objectContaining({ provider: 'anthropic', anthropicWorkspaceId: 'wrkspc_01' }),
+    );
+    expect(JSON.stringify(entry)).not.toContain('sk-ant-secret');
+
+    prisma.aiSetting.findUnique.mockResolvedValue(saved);
+    const config = await svc.getConfig();
+    expect(config.backgroundModel).toBe('claude-haiku-4-5');
+    expect(config.defaultModel).toBe('claude-opus-5-5');
   });
 
   it('leaves the private-network opt-in untouched when omitted from an update', async () => {

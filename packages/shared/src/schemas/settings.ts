@@ -142,15 +142,48 @@ export type UpdateEmailSettingsInput = z.infer<typeof updateEmailSettingsSchema>
 export type TestEmailSettingsInput = z.infer<typeof testEmailSettingsSchema>;
 
 /**
- * Workspace-wide OpenAI-compatible LLM endpoint (Ollama, LMStudio, vLLM,
- * OpenAI itself, …). Foundation only — nothing in the app calls the LLM
- * yet. The API key is encrypted server-side and never returned; clients
- * only see the `apiKeyConfigured` boolean.
+ * Which wire format, auth headers and request shaping the AI endpoint
+ * uses. `openai_compatible` covers local servers (Ollama, LM Studio,
+ * vLLM) and routers, and keeps their pre-provider behavior exactly.
+ */
+export const aiProviderSchema = z.enum(['openai', 'anthropic', 'openai_compatible']);
+export type AiProvider = z.infer<typeof aiProviderSchema>;
+
+/**
+ * Reasoning target for chat. The server maps it per model family and
+ * leaves it out where a model does not support it; background calls
+ * (titles, summaries) always use the lowest supported setting.
+ */
+/**
+ * Chat reasoning target. `default` sends no reasoning parameter at all
+ * (the provider's own default, and the pre-0088 chat request shape);
+ * `off` asks for the lowest setting the model supports.
+ */
+export const aiReasoningEffortSchema = z.enum(['default', 'off', 'low', 'medium', 'high']);
+export type AiReasoningEffort = z.infer<typeof aiReasoningEffortSchema>;
+
+/** Sent as a request header, so the pattern is strict. */
+const anthropicWorkspaceIdSchema = z
+  .string()
+  .trim()
+  .regex(/^[A-Za-z0-9_-]{1,128}$/, 'Workspace ID may contain only letters, digits, "_" and "-".');
+
+/**
+ * Workspace-wide LLM endpoint: OpenAI, Anthropic, or any
+ * OpenAI-compatible server (Ollama, LM Studio, vLLM, …). The API key is
+ * encrypted server-side and never returned; clients only see the
+ * `apiKeyConfigured` boolean.
  */
 export const aiSettingsSchema = z.object({
   enabled: z.boolean(),
+  provider: aiProviderSchema,
   baseUrl: z.string().min(1).max(2048).nullable(),
   defaultModel: z.string().min(1).max(120).nullable(),
+  /** Titles, the tool-intent prelude and summaries; null → `defaultModel`. */
+  backgroundModel: z.string().min(1).max(120).nullable(),
+  reasoningEffort: aiReasoningEffortSchema,
+  /** Not a secret; only used with the `anthropic` provider. */
+  anthropicWorkspaceId: z.string().min(1).max(128).nullable(),
   apiKeyConfigured: z.boolean(),
   /**
    * Output-token ceiling for chat completions and the budget reserved
@@ -184,6 +217,7 @@ export const aiSettingsSchema = z.object({
 export const updateAiSettingsSchema = z
   .object({
     enabled: z.boolean().optional(),
+    provider: aiProviderSchema.optional(),
     baseUrl: z
       .union([
         z.string().trim().url('Base URL must be a valid URL').max(2048),
@@ -193,6 +227,11 @@ export const updateAiSettingsSchema = z
     apiKey: z.string().min(1).max(1024, 'API key is too long').optional(),
     clearApiKey: z.boolean().optional(),
     defaultModel: nullableTrimmedString(1, 120, 'Default model').optional(),
+    backgroundModel: nullableTrimmedString(1, 120, 'Background model').optional(),
+    reasoningEffort: aiReasoningEffortSchema.optional(),
+    anthropicWorkspaceId: z
+      .union([anthropicWorkspaceIdSchema, z.literal('').transform(() => null), z.null()])
+      .optional(),
     // Null explicitly resets to the server default; omitted leaves as-is.
     maxOutputTokens: z.number().int().min(256).max(200_000).nullable().optional(),
     contextWindowTokens: z
@@ -230,9 +269,22 @@ export const updateAiSettingsSchema = z
 export type AiSettings = z.infer<typeof aiSettingsSchema>;
 export type UpdateAiSettingsInput = z.infer<typeof updateAiSettingsSchema>;
 
+/**
+ * Fixed codes for a failed or skipped reply check — never upstream text.
+ * `http:*` carries `describeCompletionHttpError`'s bounded class.
+ */
+export const aiProbeResultSchema = z.object({
+  status: z.enum(['ok', 'failed', 'skipped']),
+  reason: z.string().max(80).optional(),
+});
+export type AiProbeResult = z.infer<typeof aiProbeResultSchema>;
+
 export const aiTestResultSchema = z.object({
   ok: z.literal(true),
-  models: z.array(z.string()),
+  /** `label` is a provider display name when one is reported. */
+  models: z.array(z.object({ id: z.string(), label: z.string().optional() })),
+  /** The one-prompt reply check; reported beside a successful model list. */
+  probe: aiProbeResultSchema,
 });
 export type AiTestResult = z.infer<typeof aiTestResultSchema>;
 
@@ -246,6 +298,10 @@ export const testAiSettingsSchema = z
     baseUrl: z.string().trim().url('Base URL must be a valid URL').max(2048).optional(),
     apiKey: z.string().min(1).max(1024).optional(),
     allowPrivateNetwork: z.boolean().optional(),
+    provider: aiProviderSchema.optional(),
+    anthropicWorkspaceId: anthropicWorkspaceIdSchema.optional(),
+    /** Model for the reply check; without one the check is skipped. */
+    model: z.string().trim().min(1).max(120).optional(),
   })
   .optional();
 export type TestAiSettingsInput = z.infer<typeof testAiSettingsSchema>;

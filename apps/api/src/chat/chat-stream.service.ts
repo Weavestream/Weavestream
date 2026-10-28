@@ -22,12 +22,26 @@ import type { AiResolvedConfig } from '../ai/ai-settings.service.js';
 import {
   AiCompletionHttpError,
   AiCompletionService,
-  outputTokenParam,
   stripThinkTags,
 } from '../ai/ai-completion.service.js';
+import {
+  backgroundOutputBudget,
+  outputTokenParam,
+  providerAuthHeaders,
+  reasoningParams,
+  temperatureParam,
+} from '../ai/provider-http.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { EgressBlockedError, safeFetch } from '../common/egress/safe-fetch.js';
 import { readUpstreamSnippet } from '../common/redact-secrets.js';
+import { parseSse } from '../ai/sse.js';
+import {
+  AnthropicStreamError,
+  acceptsForcedTool,
+  parseAnthropicStream,
+  stripThinkingBlocks,
+  toAnthropicRequest,
+} from '../ai/anthropic-messages.js';
 import { AiToolExecutorService } from '../ai-tools/ai-tool-executor.service.js';
 import { hasGlobalReadScope } from '../ai-tools/entity-scope.js';
 import { EntityScopeService } from '../ai-tools/entity-scope.js';
@@ -57,6 +71,23 @@ const STREAM_TIMEOUT_MS = 120_000;
 const HISTORY_TURN_CAP = 40;
 const TITLE_MAX = 60;
 const TITLE_TIMEOUT_MS = 15_000;
+/**
+ * Visible-text budget for the title and the tool-intent prelude. Reasoning
+ * models get headroom on top (`backgroundOutputBudget`).
+ */
+const BACKGROUND_VISIBLE_TOKENS = 1024;
+
+/** What the title and prelude calls need from the resolved config. */
+type BackgroundCallConfig = Pick<
+  AiResolvedConfig,
+  | 'provider'
+  | 'baseUrl'
+  | 'apiKey'
+  | 'anthropicWorkspaceId'
+  | 'allowPrivateNetwork'
+  | 'backgroundModel'
+  | 'contextWindowTokens'
+>;
 const TOOL_INTENT_TIMEOUT_MS = 15_000;
 const DEFAULT_TITLE = 'New chat';
 // Low but non-zero — article edits want fidelity, not creativity, and a
@@ -102,6 +133,11 @@ const TRUNCATED_MESSAGE =
 @Injectable()
 export class ChatStreamService {
   private readonly logger = new Logger(ChatStreamService.name);
+  /** Features each model was seen rejecting at runtime (see `runCompletionRound`). */
+  private readonly modelQuirks = new Map<
+    string,
+    { noTemperature?: boolean; noForcedTool?: boolean; noReasoningParams?: boolean }
+  >();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -412,6 +448,7 @@ export class ChatStreamService {
     let assistantText = '';
     let finishReason: string | null = null;
     let toolCalls: ChatToolCallDto[] = [];
+    const roundState: RoundTurnState = { sentTools: null };
     try {
       const outcome = await runToolLoop(
         {
@@ -425,6 +462,7 @@ export class ChatStreamService {
               abort,
               deadline,
               leadingSeparator: opts.leadingSeparator,
+              turn: roundState,
             }),
           executeRead: (call) =>
             this.executor.executeRead(call.id, call.name, call.arguments, execCtx),
@@ -505,11 +543,20 @@ export class ChatStreamService {
     // top of the bubble. Trailing whitespace is left intact in case
     // the model intentionally ended on a newline.
     const persistedText = assistantText.replace(/^\s+/, '');
-    if (!persistedText && toolCalls.length === 0) {
+    // Judge the model's own output, not the prelude: the prelude is a
+    // separate call that already streamed, so a turn whose completion was
+    // cut off or refused must not pass as a reply just because the
+    // prelude text is there.
+    const completionText = assistantText.slice(toolIntentPreludeText.length).trim();
+    if (!completionText && toolCalls.length === 0) {
       writeError(
         res,
         new BadRequestException(
-          'LLM returned an empty response. Check the model configuration.',
+          finishReason === 'length'
+            ? 'The model used its whole output budget before replying (often on reasoning). Raise "Max output tokens" in Settings → AI.'
+            : finishReason === 'refusal' || finishReason === 'content_filter'
+              ? 'The model declined this request.'
+              : 'LLM returned an empty response. Check the model configuration.',
         ),
       );
       res.end();
@@ -595,48 +642,72 @@ export class ChatStreamService {
    * the round's text + finalized calls. Throws on upstream failure —
    * the caller maps errors onto the SSE channel.
    */
-  private async runCompletionRound(opts: {
-    config: AiResolvedConfig;
-    messages: ReadonlyArray<UpstreamMessage>;
-    tools: ToolDef[] | null;
-    toolChoice: ToolChoice | null;
-    res: Response;
-    abort: AbortController;
-    deadline: number;
-    /** Emit a '\n\n' delta before this round's first text so multi-
-     *  round replies render as paragraphs (mirrors joinRoundText). */
-    leadingSeparator: boolean;
-  }): Promise<RoundResult> {
+  private async runCompletionRound(opts: CompletionRoundOptions): Promise<RoundResult> {
+    if (opts.config.provider === 'anthropic') return this.runAnthropicRound(opts);
     const { config, res } = opts;
-    const timeLeft = Math.max(1_000, remainingMs(opts.deadline, Date.now()));
-    const upstream = await safeFetch(
+    const model = config.defaultModel;
+    const quirks = (model && this.modelQuirks.get(model)) || {};
+    const temperature = temperatureParam(model, CHAT_TEMPERATURE);
+    const forcedTool =
+      opts.toolChoice && typeof opts.toolChoice === 'object'
+        ? opts.toolChoice.function.name
+        : null;
+    // What this round may still send. A rejected feature is switched off
+    // for the retry and remembered for the model (see the loop below).
+    // The admin's reasoning target, mapped per model family. Empty for
+    // the `default` setting (the pre-0088 chat request shape).
+    const reasoning = reasoningParams({
+      provider: config.provider,
+      model,
+      setting: config.reasoningEffort,
+      purpose: 'chat',
+      maxTokens: config.maxOutputTokens,
+    });
+    const send = {
+      temperature: 'temperature' in temperature && !quirks.noTemperature,
+      forcedTool: forcedTool !== null && !quirks.noForcedTool,
+      reasoning: Object.keys(reasoning).length > 0 && !quirks.noReasoningParams,
+    };
+    const post = () => safeFetch(
       `${stripTrailingSlashes(config.baseUrl)}/chat/completions`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Accept: 'text/event-stream',
-          ...(config.apiKey ? { Authorization: `Bearer ${config.apiKey}` } : {}),
+          ...providerAuthHeaders(config),
         },
         body: JSON.stringify({
-          model: config.defaultModel,
+          model,
           stream: true,
           // Deterministic-ish + an explicit output ceiling. Without an
           // output-token cap the model can run to its default limit
           // mid-JSON and the tool arguments arrive truncated. The field
-          // name depends on the model (see `outputTokenParam`).
-          temperature: CHAT_TEMPERATURE,
-          ...outputTokenParam(config.defaultModel, config.maxOutputTokens),
-          messages: opts.messages,
+          // names depend on the model (see `temperatureParam` and
+          // `outputTokenParam`).
+          ...(send.temperature ? temperature : {}),
+          ...outputTokenParam(model, config.maxOutputTokens, config.provider),
+          ...(send.reasoning ? reasoning : {}),
+          messages: withoutProviderBlocks(
+            forcedTool && !send.forcedTool
+              ? withToolInstruction(opts.messages, forcedTool)
+              : opts.messages,
+          ),
           // The forced-final round omits the `tools` key entirely —
           // matching the pre-loop tool-less request shape (some servers
-          // reject `tool_choice: 'none'` without `tools`).
+          // reject `tool_choice: 'none'` without `tools`). A model that
+          // rejects a forced tool gets `auto`; only that one tool is
+          // offered and the prompt names it.
           ...(opts.tools && opts.toolChoice
-            ? { tools: opts.tools, tool_choice: opts.toolChoice }
+            ? {
+                tools: opts.tools,
+                tool_choice:
+                  forcedTool && !send.forcedTool ? 'auto' : opts.toolChoice,
+              }
             : {}),
         }),
         signal: opts.abort.signal,
-        timeoutMs: timeLeft,
+        timeoutMs: Math.max(1_000, remainingMs(opts.deadline, Date.now())),
         // SSE streams can run for many minutes and many MB; the
         // upstream is admin-configured so the body-size cap exists
         // only to defend against runaway non-LLM origins, not the
@@ -650,8 +721,40 @@ export class ChatStreamService {
       },
     );
 
+    let upstream = await post();
+    let bodyText: string | null | undefined;
+    // Newer models and strict servers reject features others accept:
+    // `temperature` (a family `temperatureParam` does not know yet), a
+    // forced named-function `tool_choice` (Claude Opus 5.5, Sonnet 5.5,
+    // Fable 5.1), and the reasoning parameters (a server that rejects
+    // unknown request fields). On a 400 that names one we still sent,
+    // switch it off, remember it for the model, and retry. At most one
+    // retry per feature; every other 400 surfaces unchanged.
+    for (let retries = 0; retries < 3 && upstream.status === 400 && model; retries++) {
+      bodyText = await readUpstreamSnippet(upstream);
+      const rejected =
+        send.temperature && bodyText && /temperature/i.test(bodyText)
+          ? 'temperature'
+          : send.forcedTool && bodyText && /tool_choice/i.test(bodyText)
+            ? 'forcedTool'
+            : send.reasoning && bodyText && REASONING_PARAM_REJECTED.test(bodyText)
+              ? 'reasoning'
+              : null;
+      if (!rejected) break;
+      send[rejected] = false;
+      this.modelQuirks.set(model, {
+        ...this.modelQuirks.get(model),
+        ...QUIRK_FOR[rejected],
+      });
+      this.logger.warn(
+        `Model "${model}" rejected ${REJECTED_LABEL[rejected]}; retrying without it.`,
+      );
+      upstream = await post();
+      bodyText = undefined;
+    }
+
     if (!upstream.ok || !upstream.body) {
-      const bodyText = await readUpstreamSnippet(upstream);
+      bodyText ??= await readUpstreamSnippet(upstream);
       throw new BadRequestException(
         `LLM endpoint returned ${upstream.status}${bodyText ? ` — ${bodyText}` : ''}`,
       );
@@ -698,6 +801,162 @@ export class ChatStreamService {
   }
 
   /**
+   * One round on the native Anthropic Messages API (provider
+   * `anthropic`). Same contract as the OpenAI branch: stream text to the
+   * client, accumulate tool calls, return the round. Differences:
+   *   - Tools stay on the menu for the rest of the turn once offered (a
+   *     later round adds, never removes). The thinking blocks of a turn
+   *     are bound to the tool set they were made with.
+   *   - A round that offers no tools still sends the turn's tools with
+   *     `tool_choice: none`; the API needs `tools` when the history
+   *     holds tool calls.
+   *   - The round's content blocks come back in `providerBlocks`, so the
+   *     next round replays its thinking unchanged.
+   */
+  private async runAnthropicRound(opts: CompletionRoundOptions): Promise<RoundResult> {
+    const { config, res } = opts;
+    const model = config.defaultModel ?? '';
+    const turn = opts.turn ?? { sentTools: null };
+    const tools = opts.tools ? mergeToolMenus(turn.sentTools, opts.tools) : null;
+    if (tools) turn.sentTools = tools;
+    const reasoning = reasoningParams({
+      provider: 'anthropic',
+      model,
+      setting: config.reasoningEffort,
+      purpose: 'chat',
+      maxTokens: config.maxOutputTokens,
+    });
+    const quirks = this.modelQuirks.get(model) || {};
+    const forcedTool =
+      opts.toolChoice && typeof opts.toolChoice === 'object'
+        ? opts.toolChoice.function.name
+        : null;
+    const send = {
+      forcedTool:
+        forcedTool !== null && !quirks.noForcedTool && acceptsForcedTool(model, reasoning),
+      thinking: true,
+    };
+    const post = () => {
+      let messages: ReadonlyArray<UpstreamMessage> =
+        forcedTool && !send.forcedTool
+          ? withToolInstruction(opts.messages, forcedTool)
+          : opts.messages;
+      if (!send.thinking) messages = stripThinkingBlocks(messages);
+      return safeFetch(`${stripTrailingSlashes(config.baseUrl)}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          ...providerAuthHeaders(config),
+        },
+        body: JSON.stringify(
+          toAnthropicRequest({
+            model,
+            messages,
+            tools,
+            toolChoice: tools ? opts.toolChoice : null,
+            replayTools: turn.sentTools,
+            forceTool: send.forcedTool,
+            maxTokens: config.maxOutputTokens,
+            reasoning,
+            stream: true,
+          }),
+        ),
+        signal: opts.abort.signal,
+        timeoutMs: Math.max(1_000, remainingMs(opts.deadline, Date.now())),
+        maxResponseBytes: Number.POSITIVE_INFINITY,
+        ...aiEgressOptions(config),
+      });
+    };
+
+    let upstream = await post();
+    let bodyText: string | null | undefined;
+    // Two known 400s get one retry each:
+    //   - a forced `tool_choice` the model does not accept → `auto` plus
+    //     the prompt instruction, remembered for the model;
+    //   - replayed thinking the API no longer accepts for this request
+    //     (on accounts that check it, a thinking block is bound to the
+    //     prompt and tool set it was made with) → resend without the
+    //     thinking blocks. That is the API's documented recovery; the
+    //     model then answers this round without that reasoning.
+    const hasThinking = opts.messages.some((m) =>
+      m.providerBlocks?.some((b) => {
+        const t = (b as { type?: string }).type;
+        return t === 'thinking' || t === 'redacted_thinking';
+      }),
+    );
+    for (let retries = 0; retries < 2 && upstream.status === 400; retries++) {
+      bodyText = await readUpstreamSnippet(upstream);
+      const rejected =
+        send.forcedTool && bodyText && /tool_choice/i.test(bodyText)
+          ? 'forcedTool'
+          : send.thinking &&
+              hasThinking &&
+              bodyText &&
+              /thinking/i.test(bodyText) &&
+              /signature|different conversation/i.test(bodyText)
+            ? 'thinking'
+            : null;
+      if (!rejected) break;
+      send[rejected] = false;
+      if (rejected === 'forcedTool' && model) {
+        this.modelQuirks.set(model, { ...this.modelQuirks.get(model), noForcedTool: true });
+        this.logger.warn(`Model "${model}" rejected a forced tool_choice; retrying with auto.`);
+      } else {
+        this.logger.log(`Model "${model}" did not accept replayed thinking; retrying without it.`);
+      }
+      upstream = await post();
+      bodyText = undefined;
+    }
+
+    if (!upstream.ok || !upstream.body) {
+      bodyText ??= await readUpstreamSnippet(upstream);
+      throw new BadRequestException(
+        `LLM endpoint returned ${upstream.status}${bodyText ? ` — ${bodyText}` : ''}`,
+      );
+    }
+
+    let text = '';
+    let finishReason: string | null = null;
+    let blocks: unknown[] = [];
+    let separatorPending = opts.leadingSeparator;
+    const accumulator = new ToolCallAccumulator();
+    try {
+      for await (const item of parseAnthropicStream(parseSse(upstream.body))) {
+        if (item.kind === 'text') {
+          if (separatorPending && item.text.trim().length > 0) {
+            separatorPending = false;
+            writeFrame(res, 'delta', { text: '\n\n' });
+          }
+          text += item.text;
+          writeFrame(res, 'delta', { text: item.text });
+        } else if (item.kind === 'toolCallDelta') {
+          accumulator.ingest([item.delta]);
+        } else {
+          finishReason = item.finishReason;
+          blocks = item.blocks;
+        }
+      }
+    } catch (err) {
+      if (err instanceof AnthropicStreamError) {
+        throw new BadRequestException(
+          err.errorType === 'stream_interrupted'
+            ? 'The model’s reply stopped before it finished. Try again.'
+            : `LLM endpoint stream error — ${err.errorType}`,
+        );
+      }
+      throw err;
+    }
+    const hasToolUse = blocks.some((b) => (b as { type?: string }).type === 'tool_use');
+    return {
+      text: text.replace(/^\s+/, ''),
+      finishReason,
+      toolCalls: accumulator.finalize(finishReason),
+      ...(hasToolUse ? { providerBlocks: blocks } : {}),
+    };
+  }
+
+  /**
    * Asks the LLM for a short title summarising the first turn — the
    * same OpenAI-compatible endpoint as the chat stream, but one-shot
    * via `AiCompletionService.complete`, which owns the request quirks
@@ -718,23 +977,24 @@ export class ChatStreamService {
    *     `sanitizeTitle`.
    */
   private async generateTitle(
-    config: {
-      baseUrl: string;
-      apiKey: string | null;
-      defaultModel: string | null;
-      allowPrivateNetwork: boolean;
-    },
+    config: BackgroundCallConfig,
     userMessage: string,
     assistantReply: string,
   ): Promise<string | null> {
-    if (!config.defaultModel) return null;
+    const model = config.backgroundModel;
+    if (!model) return null;
     try {
       const raw = await this.aiCompletion.complete(config, {
-        model: config.defaultModel,
+        model,
         system:
           'You produce concise chat titles. Reply with ONLY a 3 to 6 word title summarising the conversation. No quotes, no trailing punctuation, no markdown, no prefixes like "Title:". /no_think',
         user: `User: ${userMessage}\n\nAssistant: ${assistantReply}\n\nReturn the title only. /no_think`,
-        maxOutputTokens: 1024,
+        maxOutputTokens: backgroundOutputBudget({
+          provider: config.provider,
+          model,
+          visible: BACKGROUND_VISIBLE_TOKENS,
+          contextWindowTokens: config.contextWindowTokens,
+        }),
         temperature: 0.3,
         timeoutMs: TITLE_TIMEOUT_MS,
       });
@@ -773,21 +1033,17 @@ export class ChatStreamService {
    * rather than leaving it to run out its 15s cap for nobody.
    */
   private async generateToolIntentPrelude(
-    config: {
-      baseUrl: string;
-      apiKey: string | null;
-      defaultModel: string | null;
-      allowPrivateNetwork: boolean;
-    },
+    config: BackgroundCallConfig,
     userMessage: string,
     kind: 'create' | 'edit',
     context?: ChatRequestContext,
     clientSignal?: AbortSignal,
   ): Promise<string | null> {
-    if (!config.defaultModel) return null;
+    const model = config.backgroundModel;
+    if (!model) return null;
     try {
       const raw = await this.aiCompletion.complete(config, {
-        model: config.defaultModel,
+        model,
         system: [
           'You write one short assistant sentence shown before a proposed article tool action.',
           'Make it specific to the user request and available context.',
@@ -807,7 +1063,12 @@ export class ChatStreamService {
           '</user_request>',
           'Write the sentence now. /no_think',
         ].join('\n'),
-        maxOutputTokens: 1024,
+        maxOutputTokens: backgroundOutputBudget({
+          provider: config.provider,
+          model,
+          visible: BACKGROUND_VISIBLE_TOKENS,
+          contextWindowTokens: config.contextWindowTokens,
+        }),
         temperature: 0.4,
         timeoutMs: TOOL_INTENT_TIMEOUT_MS,
         contentOnly: true,
@@ -837,6 +1098,78 @@ export class ChatStreamService {
 
 function messageOf(err: unknown): string {
   return err instanceof Error && err.message ? err.message : 'Unknown error';
+}
+
+/**
+ * Replaces a forced `tool_choice` with a prompt instruction. Appended to
+ * the FIRST system message, never added as a new trailing one: some
+ * local chat templates reject a system message after the first turn.
+ */
+export function withToolInstruction(
+  messages: ReadonlyArray<UpstreamMessage>,
+  toolName: string,
+): UpstreamMessage[] {
+  const instruction = `Respond by calling the \`${toolName}\` tool.`;
+  const i = messages.findIndex((m) => m.role === 'system');
+  if (i < 0) return [{ role: 'system', content: instruction }, ...messages];
+  return messages.map((m, j) =>
+    j === i ? { ...m, content: `${m.content ?? ''}\n\n${instruction}` } : m,
+  );
+}
+
+/**
+ * A 400 that rejects the reasoning parameters: one of them by name, or a
+ * strict server's generic "unknown / extra field" message.
+ */
+const REASONING_PARAM_REJECTED =
+  /enable_thinking|chat_template_kwargs|reasoning|(?:unrecognized|unknown|unsupported|unexpected|extra)\s+(?:request\s+)?(?:argument|parameter|field|input|key|property)|not permitted/i;
+
+const QUIRK_FOR = {
+  temperature: { noTemperature: true },
+  forcedTool: { noForcedTool: true },
+  reasoning: { noReasoningParams: true },
+} as const;
+
+const REJECTED_LABEL = {
+  temperature: 'temperature',
+  forcedTool: 'a forced tool_choice',
+  reasoning: 'the reasoning parameters',
+} as const;
+
+/** Options for one completion round (both transports). */
+interface CompletionRoundOptions {
+  config: AiResolvedConfig;
+  messages: ReadonlyArray<UpstreamMessage>;
+  tools: ToolDef[] | null;
+  toolChoice: ToolChoice | null;
+  res: Response;
+  abort: AbortController;
+  deadline: number;
+  /** Emit a '\n\n' delta before this round's first text so multi-
+   *  round replies render as paragraphs (mirrors joinRoundText). */
+  leadingSeparator: boolean;
+  /** Per-turn transport state (the Anthropic transport's tool menu). */
+  turn?: RoundTurnState;
+}
+
+interface RoundTurnState {
+  /** Every tool offered so far this turn, in first-offered order. */
+  sentTools: ToolDef[] | null;
+}
+
+/** The earlier menu plus any new tools, appended. Never removes a tool. */
+export function mergeToolMenus(previous: ToolDef[] | null, current: ToolDef[]): ToolDef[] {
+  if (!previous) return current;
+  const seen = new Set(previous.map((t) => t.function.name));
+  return [...previous, ...current.filter((t) => !seen.has(t.function.name))];
+}
+
+/** The OpenAI transport never sends the Anthropic transport's blocks. */
+function withoutProviderBlocks(
+  messages: ReadonlyArray<UpstreamMessage>,
+): ReadonlyArray<UpstreamMessage> {
+  if (!messages.some((m) => m.providerBlocks)) return messages;
+  return messages.map(({ providerBlocks: _blocks, ...rest }) => rest);
 }
 
 function sanitizeTitle(raw: string): string | null {
@@ -1420,64 +1753,6 @@ function appendToolSections(
     '- Article tool calls are PROPOSALS — the user must click Apply — so phrase the accompanying reply as a proposal ("Here is a revised version…"), not as completed work.',
   );
   return lines.join('\n');
-}
-
-type SseEvent = { event: string | null; data: string };
-
-/**
- * Async iterator that parses an OpenAI-style SSE response body, line
- * by line. The official OpenAI streaming format emits:
- *
- *   data: {"choices":[...]}
- *   data: {"choices":[...]}
- *   data: [DONE]
- *
- * — possibly with an explicit `event:` header on each frame for other
- * vendors (Ollama, vLLM, …). Frames are separated by a blank line.
- */
-async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buf = '';
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        const tail = buf.trim();
-        if (tail) {
-          const evt = parseEventBlock(tail);
-          if (evt) yield evt;
-        }
-        return;
-      }
-      buf += decoder.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buf.indexOf('\n\n')) !== -1) {
-        const block = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const evt = parseEventBlock(block);
-        if (evt) yield evt;
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-function parseEventBlock(block: string): SseEvent | null {
-  let event: string | null = null;
-  const dataLines: string[] = [];
-  for (const rawLine of block.split('\n')) {
-    const line = rawLine.replace(/\r$/, '');
-    if (!line || line.startsWith(':')) continue;
-    const colon = line.indexOf(':');
-    const field = colon === -1 ? line : line.slice(0, colon);
-    const value = colon === -1 ? '' : line.slice(colon + 1).replace(/^ /, '');
-    if (field === 'event') event = value;
-    else if (field === 'data') dataLines.push(value);
-  }
-  if (dataLines.length === 0) return null;
-  return { event, data: dataLines.join('\n') };
 }
 
 function cryptoRandomUuid(): string {

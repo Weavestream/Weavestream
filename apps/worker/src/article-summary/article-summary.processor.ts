@@ -9,7 +9,10 @@ import {
 import { RedisService, PrismaService, QueuesService } from '@weavestream/api/runtime';
 import {
   AiCompletionHttpError,
+  AiCompletionRefusedError,
   AiCompletionService,
+  AiCompletionTruncatedError,
+  backgroundOutputBudget,
   describeCompletionHttpError,
   isContextLengthError,
   sanitizeAiSummary,
@@ -59,6 +62,7 @@ const SWEEP_BATCH = 25;
  * ratio, which is fine — a 35-word summary needs the head of the
  * article, not the whole window.
  */
+/** Minimum output reservation (the pre-budget-policy value). */
 const OUTPUT_RESERVE_TOKENS = 1024;
 const PROMPT_OVERHEAD_TOKENS = 256;
 const INPUT_CHAR_CAP = 12_000;
@@ -66,7 +70,22 @@ const MIN_INPUT_CHARS = 1_000;
 const TITLE_CHAR_CAP = 300;
 
 const COMPLETION_TIMEOUT_MS = 60_000;
+/** Visible-text budget; reasoning models get headroom (`backgroundOutputBudget`). */
 const MAX_OUTPUT_TOKENS = 512;
+
+/**
+ * Input chars that fit beside a given output budget (1 char/token, see
+ * above). Computed per attempt, so a retry with a larger output budget
+ * still fits the window.
+ */
+function inputCharBudget(contextWindowTokens: number, outputBudget: number): number {
+  return Math.min(
+    contextWindowTokens -
+      Math.max(outputBudget, OUTPUT_RESERVE_TOKENS) -
+      PROMPT_OVERHEAD_TOKENS,
+    INPUT_CHAR_CAP,
+  );
+}
 
 /**
  * Word cap, repeated in BOTH turns on purpose. The list row clamps the
@@ -102,6 +121,8 @@ type GenerateOutcome =
   | 'superseded'
   | 'window_too_small'
   | 'context_rejected'
+  | 'truncated'
+  | 'refused'
   | 'stale';
 
 @Injectable()
@@ -195,7 +216,9 @@ export class ArticleSummaryWorker implements OnModuleDestroy {
       if (err instanceof AiNotConfiguredError) return done('ai_disabled');
       throw err;
     }
-    if (!config.defaultModel) return done('ai_disabled');
+    // Summaries use the background model (falls back to the default one).
+    const model = config.backgroundModel;
+    if (!model) return done('ai_disabled');
 
     // Tenant scope + liveness + PENDING state in the read — a stray job
     // against a row some other write already settled skips before any
@@ -228,10 +251,13 @@ export class ArticleSummaryWorker implements OnModuleDestroy {
       return done('stamped_empty');
     }
 
-    const charBudget = Math.min(
-      config.contextWindowTokens - OUTPUT_RESERVE_TOKENS - PROMPT_OVERHEAD_TOKENS,
-      INPUT_CHAR_CAP,
-    );
+    const outputBudget = backgroundOutputBudget({
+      provider: config.provider,
+      model,
+      visible: MAX_OUTPUT_TOKENS,
+      contextWindowTokens: config.contextWindowTokens,
+    });
+    const charBudget = inputCharBudget(config.contextWindowTokens, outputBudget);
     if (charBudget < MIN_INPUT_CHARS) {
       // The admin saved a window too small to summarize into (the
       // schema floor is 1024 tokens). Stamp rather than send a garbage
@@ -241,43 +267,99 @@ export class ArticleSummaryWorker implements OnModuleDestroy {
     }
 
     const title = row.title.slice(0, TITLE_CHAR_CAP);
-    let input = plain.slice(0, charBudget);
+    const input = plain.slice(0, charBudget);
+    const settle = async (outcome: GenerateOutcome) => {
+      await this.stampSettled(payload, null, null);
+      return done(outcome);
+    };
 
-    let raw: string | null;
+    let raw: string | null | 'context_rejected';
     try {
-      raw = await this.requestSummary(config, title, input);
+      raw = await this.requestWithHalving(config, model, title, input, outputBudget);
     } catch (err) {
-      if (!isContextLengthError(err)) throw err; // BullMQ retries transport/5xx
-      // Pathological tokenizer: one retry at half the input, then
-      // terminal-stamp — spending more attempts on the same oversized
-      // prompt would fail identically.
-      input = input.slice(0, Math.floor(input.length / 2));
+      if (err instanceof AiCompletionRefusedError) return settle('refused');
+      if (!(err instanceof AiCompletionTruncatedError)) throw err;
+      // The model spent its whole budget (typically on reasoning) before
+      // any visible text. One retry with double the budget, and an input
+      // re-sized for it so the request still fits the window. Skipped
+      // when the cap allows no increase or the input would get too short.
+      const retryBudget = Math.min(
+        outputBudget * 2,
+        Math.floor(config.contextWindowTokens / 2),
+      );
+      const retryChars = inputCharBudget(config.contextWindowTokens, retryBudget);
+      if (retryBudget <= outputBudget || retryChars < MIN_INPUT_CHARS) {
+        this.logger.warn(
+          `article-summary ${payload.articleId}@r${payload.revision}: truncated, no room to retry`,
+        );
+        return settle('truncated');
+      }
       try {
-        raw = await this.requestSummary(config, title, input);
+        raw = await this.requestWithHalving(
+          config,
+          model,
+          title,
+          input.slice(0, retryChars),
+          retryBudget,
+        );
       } catch (err2) {
-        if (!isContextLengthError(err2)) throw err2;
-        await this.stampSettled(payload, null, null);
-        return done('context_rejected');
+        if (err2 instanceof AiCompletionRefusedError) return settle('refused');
+        if (!(err2 instanceof AiCompletionTruncatedError)) throw err2;
+        this.logger.warn(
+          `article-summary ${payload.articleId}@r${payload.revision}: truncated twice`,
+        );
+        return settle('truncated');
       }
     }
+    if (raw === 'context_rejected') return settle('context_rejected');
 
     const summary = raw ? sanitizeAiSummary(raw) : null;
     const count = await this.stampSettled(
       payload,
       summary,
-      summary ? config.defaultModel : null,
+      summary ? model : null,
     );
     if (count === 0) return done('stale');
     return done(summary ? 'stored' : 'stamped_empty');
   }
 
+  /**
+   * One summary request; on a context-length rejection (a pathological
+   * tokenizer), one retry at half the input. A second rejection returns
+   * the 'context_rejected' marker — spending more attempts on the same
+   * oversized prompt would fail identically. Transport/5xx errors throw
+   * for BullMQ to retry.
+   */
+  private async requestWithHalving(
+    config: AiResolvedConfig,
+    model: string,
+    title: string,
+    input: string,
+    outputBudget: number,
+  ): Promise<string | null | 'context_rejected'> {
+    try {
+      return await this.requestSummary(config, model, title, input, outputBudget);
+    } catch (err) {
+      if (!isContextLengthError(err)) throw err;
+      const half = input.slice(0, Math.floor(input.length / 2));
+      try {
+        return await this.requestSummary(config, model, title, half, outputBudget);
+      } catch (err2) {
+        if (!isContextLengthError(err2)) throw err2;
+        return 'context_rejected';
+      }
+    }
+  }
+
   private requestSummary(
     config: AiResolvedConfig,
+    model: string,
     title: string,
     content: string,
+    outputBudget: number,
   ): Promise<string | null> {
     return this.completion.complete(config, {
-      model: config.defaultModel!,
+      model,
       system: SYSTEM_PROMPT,
       // The delimit-as-data idiom from the chat prelude prompt: the
       // article is wrapped as tagged data and the system prompt tells
@@ -287,7 +369,7 @@ export class ArticleSummaryWorker implements OnModuleDestroy {
         `<article_content>${content}</article_content>\n` +
         `Summarize the article above in at most ${SUMMARY_WORD_CAP} words. ` +
         '/no_think',
-      maxOutputTokens: MAX_OUTPUT_TOKENS,
+      maxOutputTokens: outputBudget,
       temperature: 0.3,
       timeoutMs: COMPLETION_TIMEOUT_MS,
     });

@@ -2,7 +2,9 @@
 export { AiModule } from '../ai/ai.module.js';
 export {
   AiCompletionHttpError,
+  AiCompletionRefusedError,
   AiCompletionService,
+  AiCompletionTruncatedError,
   describeCompletionHttpError,
   isContextLengthError,
   sanitizeAiSummary,
@@ -12,3 +14,4 @@ export {
   AiSettingsService,
   type AiResolvedConfig,
 } from '../ai/ai-settings.service.js';
+export { backgroundOutputBudget } from '../ai/provider-http.js';
