@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { stripTrailingSlashes } from '@weavestream/shared';
+import { AI_DEFAULT_CONTEXT_WINDOW_TOKENS, stripTrailingSlashes } from '@weavestream/shared';
 import type {
   AiProbeResult,
   AiProvider,
@@ -9,7 +9,6 @@ import type {
 import {
   AiNotConfiguredError,
   AiSettingsService,
-  DEFAULT_CONTEXT_WINDOW_TOKENS,
   aiEgressOptions,
   type AiResolvedConfig,
 } from './ai-settings.service.js';
@@ -110,7 +109,7 @@ export class AiService {
           override.anthropicWorkspaceId ?? saved?.anthropicWorkspaceId ?? null,
         allowPrivateNetwork:
           override.allowPrivateNetwork ?? saved?.allowPrivateNetwork ?? false,
-        contextWindowTokens: saved?.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
+        contextWindowTokens: saved?.contextWindowTokens ?? AI_DEFAULT_CONTEXT_WINDOW_TOKENS,
         savedKeyWithheld: !override.apiKey && !sameEndpoint && savedApiKey !== null,
       };
     }

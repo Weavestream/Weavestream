@@ -1,9 +1,13 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
-import type {
-  AiProvider,
-  AiReasoningEffort,
-  AiSettings,
-  UpdateAiSettingsInput,
+import {
+  AI_DEFAULT_CONTEXT_WINDOW_TOKENS,
+  AI_DEFAULT_MAX_OUTPUT_TOKENS,
+  aiOutputTokenCap,
+  stripTrailingSlashes,
+  type AiProvider,
+  type AiReasoningEffort,
+  type AiSettings,
+  type UpdateAiSettingsInput,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
@@ -18,15 +22,6 @@ import type { SafeFetchOptions } from '../common/egress/safe-fetch.js';
 import { ADMIN_PRIVATE_ENDPOINT_CIDRS } from '../common/egress/private-cidrs.js';
 
 const SINGLETON_ID = 'singleton';
-
-/**
- * Conservative fallbacks used when an admin hasn't tuned the limits.
- * `maxOutputTokens` doubles as the reply budget reserved by the chat
- * prompt builder; `contextWindowTokens` sizes the prompt budget so the
- * reply fits. Picked low enough to be safe on small self-hosted models.
- */
-export const DEFAULT_MAX_OUTPUT_TOKENS = 8_192;
-export const DEFAULT_CONTEXT_WINDOW_TOKENS = 32_768;
 
 /**
  * Workspace-wide config for the LLM endpoint: OpenAI, Anthropic, or any
@@ -60,6 +55,21 @@ export class AiSettingsService {
     meta: RequestMeta,
   ): Promise<AiSettings> {
     const before = await this.loadOrSeed();
+    // The saved key is bound to its endpoint, the same rule the test route
+    // applies. A new endpoint must bring its own key or remove the saved
+    // one; otherwise chat would send the old key to the new host.
+    const nextBaseUrl = input.baseUrl !== undefined ? input.baseUrl : before.baseUrl;
+    if (
+      Boolean(before.apiKeyCiphertext) &&
+      input.apiKey === undefined &&
+      !input.clearApiKey &&
+      nextBaseUrl !== null &&
+      stripTrailingSlashes(nextBaseUrl) !== stripTrailingSlashes(before.baseUrl ?? '')
+    ) {
+      throw new BadRequestException(
+        'Enter an API key for the new endpoint, or remove the saved key.',
+      );
+    }
     const data: Record<string, unknown> = { updatedBy: actor.id };
 
     if (input.enabled !== undefined) data.enabled = input.enabled;
@@ -191,8 +201,8 @@ export class AiSettingsService {
       }
     }
     const contextWindowTokens =
-      row.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS;
-    const requestedOutput = row.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS;
+      row.contextWindowTokens ?? AI_DEFAULT_CONTEXT_WINDOW_TOKENS;
+    const requestedOutput = row.maxOutputTokens ?? AI_DEFAULT_MAX_OUTPUT_TOKENS;
     // Cross-field guard, applied AFTER defaults resolve (per-field schema
     // validation can't see the resolved pair, and one side may be a
     // null→default while the other is an explicit value). The reply may
@@ -200,7 +210,7 @@ export class AiSettingsService {
     // budget and that `max_tokens` never exceeds the window — so an admin
     // who saves a tiny window (or an oversized output cap) can't collapse
     // budgeting to zero or trigger upstream rejections.
-    const outputCap = Math.max(256, Math.floor(contextWindowTokens / 2));
+    const outputCap = aiOutputTokenCap(contextWindowTokens);
     const maxOutputTokens = Math.min(requestedOutput, outputCap);
     return {
       provider: row.provider as AiProvider,

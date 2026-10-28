@@ -45,7 +45,7 @@ export default async function SettingsPage({
         description="Manage workspace defaults, password generator defaults, SMTP email delivery, integration priority, and API access."
       />
       <PageBody>
-        <Panel noPad>
+        <Panel noPad fillHeight>
           <SettingsTabs
             initialTab={resolveSettingsTab(sp.tab)}
             settings={settings}

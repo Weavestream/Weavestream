@@ -20,11 +20,11 @@ Configure the language model under **Admin → Settings → AI**:
 | Setting | Description |
 |---|---|
 | **Provider** | **OpenAI**, **Anthropic**, or **OpenAI-compatible** (Ollama, LM Studio, vLLM, OpenRouter and similar). The provider sets the request format, the auth headers and how reasoning is controlled. |
-| **Base URL** | The API base URL, e.g. `https://api.openai.com/v1`, `https://api.anthropic.com/v1` or `http://localhost:11434/v1` |
-| **API key** | Your API key for the endpoint. Optional for local servers. |
+| **Endpoint URL** | OpenAI and Anthropic use their standard endpoints automatically. Compatible providers require an explicit URL, such as `http://localhost:11434/v1`. Hosted providers can override their endpoint under **Advanced**. |
+| **API key** | Your API key for the endpoint. Optional for local servers. The saved key is bound to its endpoint: when you change the endpoint or switch to a provider with a different endpoint, enter a new key or remove the saved key before you save. |
 | **Default model** | The model "Ask anything" uses for chat. **Test connection** lists the models the endpoint offers. |
 | **Background model** | Used for chat titles, the short line shown before an article proposal, and article summaries. Leave empty to use the default model. A small, fast model is a good choice here. |
-| **Max output tokens** / **Context window tokens** | Limits for each request. Reasoning models spend output tokens on thinking, so 16,384 or more avoids cut-off replies and tool calls. |
+| **Max output tokens** / **Context window tokens** | Sliders under **Advanced** set the reply and context budgets. Defaults are **16,384 output tokens** and **32,768 context tokens**. **Use default** restores the server default. Existing custom values are preserved, but blank values now use the new 16,384 default. The server caps the reply budget at half the context window, and the form shows the capped value. The output limit must be less than the context window. Reasoning models spend output tokens on thinking, so smaller reply budgets can cut off replies and tool calls. Some older or local models accept fewer output tokens than the default; set an explicit value for them. |
 | **Allow private-network addresses** | Opt-in required for endpoints on loopback or LAN addresses (local Ollama, LM Studio). Off by default. |
 
 Under **Advanced**:

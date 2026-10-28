@@ -1,9 +1,9 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
-  AiSettingsService,
-  DEFAULT_CONTEXT_WINDOW_TOKENS,
-  DEFAULT_MAX_OUTPUT_TOKENS,
-} from './ai-settings.service.js';
+  AI_DEFAULT_CONTEXT_WINDOW_TOKENS,
+  AI_DEFAULT_MAX_OUTPUT_TOKENS,
+} from '@weavestream/shared';
+import { AiSettingsService } from './ai-settings.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { AI_SETTINGS_API_KEY_AAD } from '../crypto/integration-secret-encryption.service.js';
 
@@ -114,7 +114,8 @@ describe('AiSettingsService', () => {
   it('preserves API key ciphertext when key is omitted', async () => {
     const prisma = makePrisma();
     prisma.aiSetting.findUnique.mockResolvedValue(
-      baseRow({ apiKeyCiphertext: 'ENC(existing)' }),
+      // A trailing slash is the same endpoint, so the saved key stays.
+      baseRow({ baseUrl: 'http://localhost:11434/v1/', apiKeyCiphertext: 'ENC(existing)' }),
     );
     prisma.aiSetting.update.mockResolvedValue(
       baseRow({ baseUrl: 'http://localhost:11434/v1', apiKeyCiphertext: 'ENC(existing)' }),
@@ -126,6 +127,67 @@ describe('AiSettingsService', () => {
     );
 
     await svc.update(ACTOR, { baseUrl: 'http://localhost:11434/v1' }, META);
+
+    expect(prisma.aiSetting.update.mock.calls[0]![0].data).not.toHaveProperty(
+      'apiKeyCiphertext',
+    );
+  });
+
+  it('rejects a new endpoint that would reuse the saved key', async () => {
+    const prisma = makePrisma();
+    prisma.aiSetting.findUnique.mockResolvedValue(
+      baseRow({ baseUrl: 'https://api.openai.com/v1', apiKeyCiphertext: 'ENC(existing)' }),
+    );
+    const audit = makeAudit();
+    const svc = new AiSettingsService(prisma as never, audit as never, makeCrypto() as never);
+
+    await expect(
+      svc.update(ACTOR, { provider: 'openai_compatible', baseUrl: 'https://evil.example/v1' }, META),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.aiSetting.update).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['a new key', { apiKey: 'sk-new' }, 'ENC(sk-new)'],
+    ['a key removal', { clearApiKey: true }, null],
+  ])('allows a new endpoint with %s', async (_label, keyInput, ciphertext) => {
+    const prisma = makePrisma();
+    prisma.aiSetting.findUnique.mockResolvedValue(
+      baseRow({ baseUrl: 'https://api.openai.com/v1', apiKeyCiphertext: 'ENC(existing)' }),
+    );
+    prisma.aiSetting.update.mockResolvedValue(
+      baseRow({ baseUrl: 'http://localhost:11434/v1', apiKeyCiphertext: ciphertext }),
+    );
+    const svc = new AiSettingsService(
+      prisma as never,
+      makeAudit() as never,
+      makeCrypto() as never,
+    );
+
+    await svc.update(ACTOR, { baseUrl: 'http://localhost:11434/v1', ...keyInput }, META);
+
+    expect(prisma.aiSetting.update.mock.calls[0]![0].data).toMatchObject({
+      baseUrl: 'http://localhost:11434/v1',
+      apiKeyCiphertext: ciphertext,
+    });
+  });
+
+  it('allows clearing the endpoint without touching the saved key', async () => {
+    const prisma = makePrisma();
+    prisma.aiSetting.findUnique.mockResolvedValue(
+      baseRow({ baseUrl: 'https://api.openai.com/v1', apiKeyCiphertext: 'ENC(existing)' }),
+    );
+    prisma.aiSetting.update.mockResolvedValue(
+      baseRow({ baseUrl: null, apiKeyCiphertext: 'ENC(existing)' }),
+    );
+    const svc = new AiSettingsService(
+      prisma as never,
+      makeAudit() as never,
+      makeCrypto() as never,
+    );
+
+    await svc.update(ACTOR, { baseUrl: null }, META);
 
     expect(prisma.aiSetting.update.mock.calls[0]![0].data).not.toHaveProperty(
       'apiKeyCiphertext',
@@ -178,8 +240,8 @@ describe('AiSettingsService', () => {
       backgroundModel: 'llama3:latest',
       reasoningEffort: 'off',
       anthropicWorkspaceId: null,
-      maxOutputTokens: DEFAULT_MAX_OUTPUT_TOKENS,
-      contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
+      maxOutputTokens: AI_DEFAULT_MAX_OUTPUT_TOKENS,
+      contextWindowTokens: AI_DEFAULT_CONTEXT_WINDOW_TOKENS,
       allowPrivateNetwork: false,
     });
     expect(crypto.decrypt).toHaveBeenCalledWith('ENC(sk-test)', AI_SETTINGS_API_KEY_AAD);
@@ -375,7 +437,7 @@ describe('AiSettingsService', () => {
       baseRow({
         enabled: true,
         baseUrl: 'http://localhost:11434/v1',
-        // Tiny window, output left blank → default (8192) would exceed it.
+        // Tiny window, output left blank: the default would exceed it.
         contextWindowTokens: 4096,
         maxOutputTokens: null,
       }),
@@ -389,7 +451,7 @@ describe('AiSettingsService', () => {
     await expect(svc.getConfig()).resolves.toEqual(
       expect.objectContaining({
         contextWindowTokens: 4096,
-        maxOutputTokens: 2048, // floor(4096 / 2), not the 8192 default
+        maxOutputTokens: 2048, // floor(4096 / 2), not the default
       }),
     );
   });

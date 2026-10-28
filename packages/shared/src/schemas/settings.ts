@@ -162,6 +162,38 @@ export type AiProvider = z.infer<typeof aiProviderSchema>;
 export const aiReasoningEffortSchema = z.enum(['default', 'off', 'low', 'medium', 'high']);
 export type AiReasoningEffort = z.infer<typeof aiReasoningEffortSchema>;
 
+/**
+ * Server fallbacks used when an admin leaves the AI token limits blank.
+ * The reply budget (16,384) leaves room for reasoning models to think
+ * before they answer. Models with a smaller output limit (older GPT-4
+ * Turbo and Claude 3.x models, some local servers) reject a larger
+ * `max_tokens`, so admins set an explicit value for them.
+ */
+export const AI_DEFAULT_MAX_OUTPUT_TOKENS = 16_384;
+export const AI_DEFAULT_CONTEXT_WINDOW_TOKENS = 32_768;
+export const AI_MAX_OUTPUT_TOKENS_RANGE = { min: 256, max: 200_000 } as const;
+export const AI_CONTEXT_WINDOW_TOKENS_RANGE = { min: 1_024, max: 2_000_000 } as const;
+
+/**
+ * Highest reply budget the server allows for a context window: half the
+ * window, so the prompt always keeps a positive budget and `max_tokens`
+ * never exceeds the window.
+ */
+export function aiOutputTokenCap(contextWindowTokens: number): number {
+  return Math.max(AI_MAX_OUTPUT_TOKENS_RANGE.min, Math.floor(contextWindowTokens / 2));
+}
+
+const maxOutputTokensSchema = z
+  .number()
+  .int()
+  .min(AI_MAX_OUTPUT_TOKENS_RANGE.min)
+  .max(AI_MAX_OUTPUT_TOKENS_RANGE.max);
+const contextWindowTokensSchema = z
+  .number()
+  .int()
+  .min(AI_CONTEXT_WINDOW_TOKENS_RANGE.min)
+  .max(AI_CONTEXT_WINDOW_TOKENS_RANGE.max);
+
 /** Sent as a request header, so the pattern is strict. */
 const anthropicWorkspaceIdSchema = z
   .string()
@@ -190,13 +222,13 @@ export const aiSettingsSchema = z.object({
    * for the model's reply (e.g. a full article rewrite). `null` falls
    * back to a conservative server default.
    */
-  maxOutputTokens: z.number().int().min(256).max(200_000).nullable(),
+  maxOutputTokens: maxOutputTokensSchema.nullable(),
   /**
    * Total context window of the configured model, used to size the
    * prompt budget so the reply fits. `null` falls back to a
    * conservative server default.
    */
-  contextWindowTokens: z.number().int().min(1_024).max(2_000_000).nullable(),
+  contextWindowTokens: contextWindowTokensSchema.nullable(),
   /**
    * Opt-in for AI endpoints on private/LAN addresses (local Ollama,
    * LM Studio). Off by default; when enabled, only curated private ranges
@@ -233,14 +265,8 @@ export const updateAiSettingsSchema = z
       .union([anthropicWorkspaceIdSchema, z.literal('').transform(() => null), z.null()])
       .optional(),
     // Null explicitly resets to the server default; omitted leaves as-is.
-    maxOutputTokens: z.number().int().min(256).max(200_000).nullable().optional(),
-    contextWindowTokens: z
-      .number()
-      .int()
-      .min(1_024)
-      .max(2_000_000)
-      .nullable()
-      .optional(),
+    maxOutputTokens: maxOutputTokensSchema.nullable().optional(),
+    contextWindowTokens: contextWindowTokensSchema.nullable().optional(),
     allowPrivateNetwork: z.boolean().optional(),
     autoSummaries: z.boolean().optional(),
   })

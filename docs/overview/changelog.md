@@ -13,6 +13,14 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Changed
+
+- **Higher default reply budget for "Ask anything".** When **Max output tokens** is blank, Weavestream now requests up to 16,384 output tokens (was 8,192), which leaves reasoning models room to think. With the default 32,768-token context window, the prompt budget falls from 24,576 to 16,384 tokens. Custom values are unchanged. If your model accepts fewer than 16,384 output tokens (for example older GPT-4 Turbo or Claude 3.x models, or some local servers), set **Max output tokens** under **Admin → Settings → AI → Advanced**.
+
+### Security
+
+- **Saved AI API key stays with its endpoint.** Saving a different endpoint URL now requires a new API key or removal of the saved key, so the saved key is never sent to a new host. Connection tests already followed this rule.
+
 ## [1.10.5] - 2026-10-26
 
 ### Added

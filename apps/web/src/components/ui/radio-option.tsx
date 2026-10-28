@@ -17,6 +17,8 @@ export function RadioOption({
   hint,
   disabled = false,
   dense = false,
+  hideIndicator = false,
+  className,
 }: {
   name: string;
   checked: boolean;
@@ -25,9 +27,12 @@ export function RadioOption({
   hint: ReactNode;
   disabled?: boolean;
   dense?: boolean;
+  hideIndicator?: boolean;
+  className?: string;
 }) {
   return (
     <label
+      className={className}
       style={{
         display: 'flex',
         alignItems: 'flex-start',
@@ -46,7 +51,11 @@ export function RadioOption({
         checked={checked}
         onChange={onChange}
         disabled={disabled}
-        style={{ accentColor: 'var(--accent)', marginTop: 2 }}
+        style={
+          hideIndicator
+            ? { position: 'absolute', opacity: 0, width: 1, height: 1 }
+            : { accentColor: 'var(--accent)', marginTop: 2 }
+        }
       />
       <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         <span style={{ fontSize: 12.5, color: 'var(--text)' }}>{label}</span>

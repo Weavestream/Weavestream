@@ -1,0 +1,10 @@
+Provider marks sourced from the svgl library (MIT license in LICENSE):
+
+OpenAI:
+https://github.com/pheralb/svgl/blob/main/static/library/openai.svg
+The viewBox is fitted to the mark to remove surrounding whitespace.
+
+Anthropic:
+https://github.com/pheralb/svgl/blob/main/static/library/anthropic_black.svg
+
+Provider names and marks belong to their respective owners.

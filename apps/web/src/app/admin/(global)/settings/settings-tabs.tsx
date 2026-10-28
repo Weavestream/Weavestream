@@ -80,12 +80,21 @@ export function SettingsTabs({
   }
 
   return (
-    <div>
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        flex: 1,
+        minHeight: 0,
+        overflow: 'hidden',
+      }}
+    >
       <div
         role="tablist"
         aria-label="Settings sections"
         style={{
           display: 'flex',
+          flexShrink: 0,
           gap: 2,
           padding: '6px 6px 0',
           // Draw the baseline inside the strip and keep tabs in it. A border plus
@@ -124,7 +133,20 @@ export function SettingsTabs({
           );
         })}
       </div>
-      <div style={{ padding: 18 }}>
+      <div
+        key={tab}
+        role="tabpanel"
+        aria-label={TABS.find((t) => t.id === tab)?.label}
+        tabIndex={0}
+        style={{
+          padding: tab === 'ai' ? 0 : 18,
+          display: tab === 'ai' ? 'flex' : undefined,
+          flexDirection: 'column',
+          flex: 1,
+          minHeight: 0,
+          overflowY: tab === 'ai' ? 'hidden' : 'auto',
+        }}
+      >
         {tab === 'general' && <GeneralSettingsForm initial={settings} />}
         {tab === 'passwords' && <PasswordSettingsForm initial={settings} />}
         {tab === 'articles' && <ArticleSettingsForm initial={settings} />}
