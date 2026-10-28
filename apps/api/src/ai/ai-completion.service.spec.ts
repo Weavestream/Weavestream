@@ -9,6 +9,7 @@ import {
   describeCompletionHttpError,
   isContextLengthError,
   outputTokenParam,
+  temperatureParam,
   sanitizeAiSummary,
   stripThinkTags,
 } from './ai-completion.service.js';
@@ -62,6 +63,21 @@ describe('sanitizeAiSummary (§7 — model output is untrusted)', () => {
       expect(sanitizeAiSummary(raw)).toBeNull();
     },
   );
+});
+
+describe('temperatureParam', () => {
+  it('omits temperature for models that reject a caller-supplied value', () => {
+    for (const m of ['claude-haiku-5-5', 'claude-sonnet-5-5', 'claude-opus-5', 'gpt-5-mini', 'o3', 'o4-mini']) {
+      expect(temperatureParam(m, 0.2)).toEqual({});
+    }
+  });
+
+  it('keeps temperature for everything else', () => {
+    for (const m of ['claude-haiku-4-5', 'claude-3-5-sonnet', 'gpt-4o', 'llama3:latest']) {
+      expect(temperatureParam(m, 0.2)).toEqual({ temperature: 0.2 });
+    }
+    expect(temperatureParam(null, 0.3)).toEqual({ temperature: 0.3 });
+  });
 });
 
 describe('outputTokenParam / stripThinkTags (moved from chat-stream)', () => {

@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { AiService } from './ai.service.js';
+import { AiService, modelListHeaders } from './ai.service.js';
 import type { AiResolvedConfig } from './ai-settings.service.js';
 import {
   resetEgressGuardForTests,
@@ -247,5 +247,24 @@ describe('AiService — saved key is bound to the saved endpoint', () => {
     await expect(svc.listModels({ baseUrl: 'https://other.example/v1' })).rejects.toThrow(
       /only sent to the saved base URL/,
     );
+  });
+});
+
+describe('modelListHeaders', () => {
+  it('uses Anthropic native auth for api.anthropic.com', () => {
+    expect(modelListHeaders('https://api.anthropic.com/v1', 'k')).toEqual({
+      'x-api-key': 'k',
+      'anthropic-version': '2023-06-01',
+    });
+  });
+
+  it('uses Bearer auth everywhere else', () => {
+    expect(modelListHeaders('https://api.openai.com/v1', 'k')).toEqual({ Authorization: 'Bearer k' });
+    expect(modelListHeaders('http://localhost:11434/v1', 'k')).toEqual({ Authorization: 'Bearer k' });
+  });
+
+  it('sends no auth header without a key', () => {
+    expect(modelListHeaders('https://api.anthropic.com/v1', '')).toBeUndefined();
+    expect(modelListHeaders('https://api.anthropic.com/v1', null)).toBeUndefined();
   });
 });

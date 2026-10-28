@@ -105,7 +105,7 @@ export class AiService {
     try {
       res = await safeFetch(url, {
         method: 'GET',
-        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+        headers: modelListHeaders(baseUrl, apiKey),
         timeoutMs: TEST_TIMEOUT_MS,
         // Private/LAN endpoints (LM Studio, on-prem Ollama, …) require the
         // explicit Settings → AI opt-in, which allows only the curated
@@ -204,6 +204,30 @@ export class AiService {
     }
   }
 
+}
+
+/**
+ * Auth headers for `GET {baseUrl}/models`. Anthropic's OpenAI-compatible
+ * surface accepts `Authorization: Bearer` for chat completions, but its
+ * `/v1/models` is the native endpoint: it requires `x-api-key` plus an
+ * `anthropic-version` header and 400s without them. Its response already
+ * has the OpenAI `{ data: [{ id }] }` shape, so only the headers differ.
+ */
+export function modelListHeaders(
+  baseUrl: string,
+  apiKey: string | null | undefined,
+): Record<string, string> | undefined {
+  if (!apiKey) return undefined;
+  let host = '';
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    // Fall through to the OpenAI default; safeFetch reports the bad URL.
+  }
+  if (host === 'api.anthropic.com') {
+    return { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' };
+  }
+  return { Authorization: `Bearer ${apiKey}` };
 }
 
 function extractModelIds(payload: unknown): string[] {

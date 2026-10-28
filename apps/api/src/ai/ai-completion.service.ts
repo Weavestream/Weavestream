@@ -47,6 +47,22 @@ export function outputTokenParam(
 }
 
 /**
+ * Model families that reject a caller-supplied `temperature` with a 400:
+ * Anthropic's Claude 5 generation (`claude-<family>-5-…`) via its
+ * OpenAI-compatible endpoint, and OpenAI's gpt-5 / o-series reasoning
+ * models (non-default values only). For these we omit the field and let
+ * the provider use its default.
+ */
+const FIXED_TEMPERATURE_MODELS = /^(claude-[a-z]+-5(?:-|$)|gpt-5|o[134](?:-|$))/i;
+
+export function temperatureParam(
+  model: string | null,
+  temperature: number,
+): { temperature: number } | Record<string, never> {
+  return model && FIXED_TEMPERATURE_MODELS.test(model) ? {} : { temperature };
+}
+
+/**
  * Drop a reasoning model's `<think>…</think>` scratchpad. Some servers
  * leak it into `content` even with every suppression flag set.
  *
@@ -266,7 +282,7 @@ export class AiCompletionService {
             ...outputTokenParam(opts.model, opts.maxOutputTokens),
             ...(mode === 'full'
               ? {
-                  temperature: opts.temperature ?? 0.3,
+                  ...temperatureParam(opts.model, opts.temperature ?? 0.3),
                   // vLLM / LM Studio / SGLang convention to disable
                   // reasoning-mode emission for this request; servers
                   // that don't recognise a flag ignore it. Some honour

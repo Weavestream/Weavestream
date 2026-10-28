@@ -23,6 +23,7 @@ import {
   AiCompletionHttpError,
   AiCompletionService,
   outputTokenParam,
+  temperatureParam,
   stripThinkTags,
 } from '../ai/ai-completion.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
@@ -625,7 +626,7 @@ export class ChatStreamService {
           // output-token cap the model can run to its default limit
           // mid-JSON and the tool arguments arrive truncated. The field
           // name depends on the model (see `outputTokenParam`).
-          temperature: CHAT_TEMPERATURE,
+          ...temperatureParam(config.defaultModel, CHAT_TEMPERATURE),
           ...outputTokenParam(config.defaultModel, config.maxOutputTokens),
           messages: opts.messages,
           // The forced-final round omits the `tools` key entirely —
