@@ -23,7 +23,7 @@ jest.mock('next/headers', () => ({
 }));
 
 import { RateLimitedError } from '../api-errors';
-import { getAsset } from './assets';
+import { getAsset, listAllAssets } from './assets';
 import { forMetadata } from './core';
 
 function resetRequestCache() {
@@ -113,5 +113,43 @@ describe('getAsset request memoization', () => {
     resetRequestCache();
     expect((await getAsset('co-1', 'a-1'))?.name).toBe('Core Router');
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('listAllAssets', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  const page = (items: Array<{ id: string }>, nextCursor: string | null) =>
+    new Response(JSON.stringify({ items, nextCursor }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  it('follows nextCursor past the 200-row page and keeps the filters on every request (#97)', async () => {
+    const fetchMock = jest
+      .spyOn(global, 'fetch')
+      .mockResolvedValueOnce(page([{ id: 'a-1' }, { id: 'a-2' }], 'a-2'))
+      .mockResolvedValueOnce(page([{ id: 'a-3' }], null));
+
+    const res = await listAllAssets('co-1', {
+      layoutId: 'lay-1',
+      q: 'switch',
+      fieldFilters: { vendor: 'acme' },
+    });
+
+    expect(res.items.map((a) => a.id)).toEqual(['a-1', 'a-2', 'a-3']);
+    expect(res.truncated).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const urls = fetchMock.mock.calls.map(([u]) => new URL(String(u)));
+    for (const url of urls) {
+      expect(url.pathname).toMatch(/\/api\/v1\/companies\/co-1\/assets$/);
+      expect(url.searchParams.get('limit')).toBe('200');
+      expect(url.searchParams.get('layout')).toBe('lay-1');
+      expect(url.searchParams.get('q')).toBe('switch');
+      expect(url.searchParams.get('field.vendor')).toBe('acme');
+    }
+    expect(urls[0]!.searchParams.has('cursor')).toBe(false);
+    expect(urls[1]!.searchParams.get('cursor')).toBe('a-2');
   });
 });

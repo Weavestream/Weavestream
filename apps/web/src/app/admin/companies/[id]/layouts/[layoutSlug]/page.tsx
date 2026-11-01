@@ -4,7 +4,7 @@ import { requireMe } from '../../../../../../lib/server-api/auth';
 import { getSettings } from '../../../../../../lib/server-api/settings';
 import { getCompanyDetail } from '../../../../../../lib/server-api/companies';
 import { getActiveLayouts } from '../../../../../../lib/server-api/layouts';
-import { listAssets } from '../../../../../../lib/server-api/assets';
+import { listAllAssets } from '../../../../../../lib/server-api/assets';
 import {
   forMetadata,
   throwUnlessFound,
@@ -85,11 +85,10 @@ export default async function LayoutAssetsPage({
 
   // Filter server-side by layoutId so counts + row data stay
   // consistent with the sidebar.
-  const assets = await listAssets(companyId, {
+  const assets = await listAllAssets(companyId, {
     layoutId: layout.id,
     q,
     includeArchived,
-    limit: 200,
   });
 
   return (
@@ -118,10 +117,17 @@ export default async function LayoutAssetsPage({
         <Panel
           title={
             <span>
-              {assets.items.length} record{assets.items.length === 1 ? '' : 's'}
+              {assets.items.length}
+              {assets.truncated ? '+' : ''} record
+              {assets.items.length === 1 ? '' : 's'}
               {includeArchived && (
                 <Tag tone="outline" style={{ marginLeft: 10 }}>
                   incl. archived
+                </Tag>
+              )}
+              {assets.truncated && (
+                <Tag tone="warn" style={{ marginLeft: 10 }}>
+                  showing the first {assets.items.length}
                 </Tag>
               )}
             </span>

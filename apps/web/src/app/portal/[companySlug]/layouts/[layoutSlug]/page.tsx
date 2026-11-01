@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { getMe } from '../../../../../lib/server-api/auth';
 import { listLayouts } from '../../../../../lib/server-api/layouts';
-import { listAssets } from '../../../../../lib/server-api/assets';
+import { listAllAssets } from '../../../../../lib/server-api/assets';
 import { forMetadata } from '../../../../../lib/server-api/core';
 import {
   ApiUnavailableError,
@@ -76,11 +76,10 @@ export default async function PortalLayoutAssetsPage({
   const q = typeof sp.q === 'string' ? sp.q : undefined;
   const includeArchived = sp.archived === '1';
 
-  const assets = await listAssets(companyId, {
+  const assets = await listAllAssets(companyId, {
     layoutId: layout.id,
     q,
     includeArchived,
-    limit: 200,
   });
 
   return (
@@ -100,10 +99,17 @@ export default async function PortalLayoutAssetsPage({
         <Panel
           title={
             <span>
-              {assets.items.length} record{assets.items.length === 1 ? '' : 's'}
+              {assets.items.length}
+              {assets.truncated ? '+' : ''} record
+              {assets.items.length === 1 ? '' : 's'}
               {includeArchived && (
                 <Tag tone="outline" style={{ marginLeft: 10 }}>
                   incl. archived
+                </Tag>
+              )}
+              {assets.truncated && (
+                <Tag tone="warn" style={{ marginLeft: 10 }}>
+                  showing the first {assets.items.length}
                 </Tag>
               )}
             </span>

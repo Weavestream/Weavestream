@@ -1,7 +1,7 @@
 import { cache } from 'react';
 import type { AssetPage, AssetSummary } from '@weavestream/shared';
 import { unwrapApiResponse } from '../api-errors';
-import { serverApiFetch } from './core';
+import { collectAllPages, serverApiFetch } from './core';
 
 // ───────────────────────────────────────────────────────────────────
 // Phase 3: assets
@@ -37,6 +37,39 @@ export async function listAssets(
       items: [],
       nextCursor: null,
     }
+  );
+}
+
+/**
+ * Every asset that matches the filters, by following the API's cursor
+ * until it runs out (#97).
+ *
+ * The asset tables filter by tag, sort, and match credentials on the
+ * client, which is only correct when they hold the whole list — a single
+ * page would silently hide everything past row 200. A 233-asset company
+ * makes 2 requests.
+ *
+ * The ceiling is lower than `listAllArticles` because each list row also
+ * carries its layout's field definitions. `truncated` reports that the
+ * ceiling stopped the loop, so the page can say so instead of presenting
+ * a slice as the total. Errors propagate from `listAssets`.
+ */
+export async function listAllAssets(
+  companyId: string,
+  params: {
+    layoutId?: string;
+    q?: string;
+    includeArchived?: boolean;
+    fieldFilters?: Record<string, string>;
+  } = {},
+): Promise<{ items: AssetSummary[]; truncated: boolean }> {
+  /** The API's own per-request ceiling; asking for more is clamped. */
+  const PAGE_SIZE = 200;
+  /** 25 x 200 = 5,000 assets, then `truncated`. */
+  const MAX_PAGES = 25;
+  return collectAllPages(
+    (cursor) => listAssets(companyId, { ...params, limit: PAGE_SIZE, cursor }),
+    MAX_PAGES,
   );
 }
 

@@ -10,7 +10,8 @@ import type {
   LayoutSummary,
   PasswordSummary,
 } from '@weavestream/shared';
-import { problemMessage } from '@weavestream/shared';
+import { BULK_ASSET_IDS_MAX, problemMessage } from '@weavestream/shared';
+import { runInBatches } from './bulk-batches';
 import {
   Btn,
   DataTable,
@@ -311,28 +312,52 @@ export function AssetsTable({
   async function runBulk(action: 'archive' | 'restore' | 'purge') {
     if (selectedIds.size === 0) return;
     setBulkPending(true);
-    const ids = Array.from(selectedIds);
-    const res = await apiFetch<BulkAssetResult>(
-      `/companies/${companyId}/assets/bulk/${action}`,
-      { method: 'POST', body: JSON.stringify({ ids }) },
-    );
-    setBulkPending(false);
-
-    if (!res.ok || !res.data) {
-      toast.push(
-        problemMessage(res.problem) ?? `Bulk ${action} failed.`,
-        'danger',
+    let result: Awaited<ReturnType<typeof runInBatches>>;
+    try {
+      // The API takes at most BULK_ASSET_IDS_MAX ids per request, and a
+      // "select all" over the full list can pass that (#97).
+      result = await runInBatches(
+        Array.from(selectedIds),
+        BULK_ASSET_IDS_MAX,
+        (ids) =>
+          apiFetch<BulkAssetResult>(
+            `/companies/${companyId}/assets/bulk/${action}`,
+            { method: 'POST', body: JSON.stringify({ ids }) },
+          ),
       );
-      return;
+    } finally {
+      setBulkPending(false);
     }
 
-    const { ok, failed } = res.data;
+    const { ok, failed, stopped, remaining } = result;
     const verb =
       action === 'archive'
         ? 'Archived'
         : action === 'restore'
           ? 'Restored'
           : 'Deleted';
+
+    if (stopped) {
+      const reason = stopped.thrown
+        ? `Bulk ${action} stopped — check your connection.`
+        : (problemMessage(stopped.problem) ?? `Bulk ${action} failed.`);
+      const applied = ok.length + failed.length > 0;
+      toast.push(
+        ok.length > 0
+          ? `${reason} ${verb} ${ok.length} before this; the rest are still selected.`
+          : reason,
+        'danger',
+      );
+      setSelectedIds(new Set(remaining));
+      if (applied) {
+        // Earlier batches went through: show their effect.
+        setPurgeOpen(false);
+        setPurgeText('');
+        router.refresh();
+      }
+      return;
+    }
+
     if (failed.length === 0) {
       toast.push(`${verb} ${ok.length} asset${ok.length === 1 ? '' : 's'}.`, 'ok');
       clearSelection();

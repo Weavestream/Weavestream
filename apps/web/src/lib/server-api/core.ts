@@ -286,3 +286,30 @@ export async function forMetadata<T>(fn: () => Promise<T>): Promise<T | null> {
     throw err;
   }
 }
+
+/**
+ * Every row of a cursor-paged list, by following `nextCursor` until it
+ * runs out or `maxPages` requests have been made.
+ *
+ * `truncated` reports that the ceiling stopped the loop rather than the
+ * data running out, so the caller can say so instead of presenting a
+ * slice as the total. Errors from `fetchPage` propagate: a page that
+ * failed half-way must fail the render, never show a partial list as
+ * complete.
+ */
+export async function collectAllPages<T>(
+  fetchPage: (
+    cursor: string | undefined,
+  ) => Promise<{ items: T[]; nextCursor: string | null }>,
+  maxPages: number,
+): Promise<{ items: T[]; truncated: boolean }> {
+  const items: T[] = [];
+  let cursor: string | undefined;
+  for (let page = 0; page < maxPages; page += 1) {
+    const res = await fetchPage(cursor);
+    items.push(...res.items);
+    if (!res.nextCursor) return { items, truncated: false };
+    cursor = res.nextCursor;
+  }
+  return { items, truncated: true };
+}

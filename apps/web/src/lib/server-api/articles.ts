@@ -5,7 +5,7 @@ import type {
   FolderNode,
   IntegrationTargetProvenance,
 } from '@weavestream/shared';
-import { serverApiFetch } from './core';
+import { collectAllPages, serverApiFetch } from './core';
 
 // ───────────────────────────────────────────────────────────────────
 // Phase 4: folders and articles
@@ -80,19 +80,10 @@ export async function listAllArticles(
   const PAGE_SIZE = 200;
   /** 50 x 200 = 10,000 articles in one company, then `truncated`. */
   const MAX_PAGES = 50;
-  const items: ArticleSummary[] = [];
-  let cursor: string | undefined;
-  for (let page = 0; page < MAX_PAGES; page += 1) {
-    const res = await listArticles(companyId, {
-      ...params,
-      limit: PAGE_SIZE,
-      cursor,
-    });
-    items.push(...res.items);
-    if (!res.nextCursor) return { items, truncated: false };
-    cursor = res.nextCursor;
-  }
-  return { items, truncated: true };
+  return collectAllPages(
+    (cursor) => listArticles(companyId, { ...params, limit: PAGE_SIZE, cursor }),
+    MAX_PAGES,
+  );
 }
 
 export async function getArticle(

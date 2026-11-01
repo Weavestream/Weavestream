@@ -61,10 +61,13 @@ export type UpdateAssetInput = z.infer<typeof updateAssetSchema>;
  *
  * The cap of 500 is a guardrail against accidental "select all then delete"
  * actions that would generate hundreds of audit log entries and pile DB load
- * onto a single request. UI-side limits should mirror this.
+ * onto a single request. UI-side limits should mirror this — the web asset
+ * table splits a larger selection into batches of `BULK_ASSET_IDS_MAX`.
  */
+export const BULK_ASSET_IDS_MAX = 500;
+
 export const bulkAssetIdsSchema = z.object({
-  ids: z.array(z.guid()).min(1).max(500),
+  ids: z.array(z.guid()).min(1).max(BULK_ASSET_IDS_MAX),
 });
 
 export type BulkAssetIdsInput = z.infer<typeof bulkAssetIdsSchema>;

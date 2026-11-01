@@ -5,7 +5,7 @@ import { requireMe } from '../../../../../lib/server-api/auth';
 import { getSettings } from '../../../../../lib/server-api/settings';
 import { getCompanyDetail } from '../../../../../lib/server-api/companies';
 import { getActiveLayouts } from '../../../../../lib/server-api/layouts';
-import { listAssets } from '../../../../../lib/server-api/assets';
+import { listAllAssets } from '../../../../../lib/server-api/assets';
 import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import {
   getCompanyActivePasswords,
@@ -49,12 +49,11 @@ export default async function CompanyAssetsPage({
 
   const [layouts, assets, passwords] = await Promise.all([
     getActiveLayouts(),
-    listAssets(companyId, {
+    listAllAssets(companyId, {
       layoutId,
       q,
       includeArchived,
       fieldFilters,
-      limit: 200,
     }),
     // Passwords share the same global tag namespace as assets, so we load
     // them here too. The table surfaces matching credentials inline when
@@ -95,10 +94,17 @@ export default async function CompanyAssetsPage({
         <Panel
           title={
             <span>
-              {assets.items.length} asset{assets.items.length === 1 ? '' : 's'}
+              {assets.items.length}
+              {assets.truncated ? '+' : ''} asset
+              {assets.items.length === 1 ? '' : 's'}
               {includeArchived && (
                 <Tag tone="outline" style={{ marginLeft: 10 }}>
                   incl. archived
+                </Tag>
+              )}
+              {assets.truncated && (
+                <Tag tone="warn" style={{ marginLeft: 10 }}>
+                  showing the first {assets.items.length}
                 </Tag>
               )}
             </span>
