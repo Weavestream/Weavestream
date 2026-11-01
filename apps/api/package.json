@@ -48,9 +48,9 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",
-    "@nestjs/common": "^11.2.7",
-    "@nestjs/core": "^11.2.7",
-    "@nestjs/platform-express": "^11.2.7",
+    "@nestjs/common": "^11.2.8",
+    "@nestjs/core": "^11.2.8",
+    "@nestjs/platform-express": "^11.2.8",
     "@nestjs/throttler": "^6.7.1",
     "@prisma/client": "^5.22.0",
     "@weavestream/db": "workspace:*",
@@ -86,7 +86,7 @@
   },
   "devDependencies": {
     "@nestjs/cli": "^11.0.24",
-    "@nestjs/testing": "^11.2.7",
+    "@nestjs/testing": "^11.2.8",
     "@types/compression": "^1.7.5",
     "@types/cookie-parser": "^1.4.7",
     "@types/express": "^5.0.0",
