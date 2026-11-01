@@ -19,24 +19,25 @@ function entry(rows: AssetIntegrationSection['section']['groups'][number]['rows'
 
 describe('IntegrationSections', () => {
   it('renders nothing without sections', () => {
-    const { container } = render(<IntegrationSections sections={[]} />);
+    const { container } = render(<IntegrationSections timeZone="UTC" sections={[]} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it('shows an Open in button in the header only when the source has a page', () => {
     const withUrl = { ...entry([]), integrationName: 'Level', sourceUrl: 'https://app.level.io/device/abc/overview' };
-    const { rerender } = render(<IntegrationSections sections={[withUrl]} />);
+    const { rerender } = render(<IntegrationSections timeZone="UTC" sections={[withUrl]} />);
     const button = screen.getByRole('link', { name: /Open in Level/ });
     expect(button).toHaveAttribute('href', 'https://app.level.io/device/abc/overview');
     expect(button).toHaveAttribute('target', '_blank');
     expect(button.closest('summary')).not.toBeNull();
-    rerender(<IntegrationSections sections={[entry([])]} />);
+    rerender(<IntegrationSections timeZone="UTC" sections={[entry([])]} />);
     expect(screen.queryByRole('link', { name: /Open in/ })).toBeNull();
   });
 
   it('renders the panel header, group icon and values formatted by kind', () => {
     const { container } = render(
       <IntegrationSections
+        timeZone="UTC"
         sections={[
           entry([
             { label: 'Status', kind: 'badge', value: 'Active', tone: 'success' },
@@ -74,7 +75,7 @@ describe('IntegrationSections', () => {
     [24 * 1024, 30 * 1024, 'warn', '24.00 GB of 30.00 GB (80%)'],
     [29 * 1024, 30 * 1024, 'danger', '29.00 GB of 30.00 GB (97%)'],
   ])('renders an accessible usage meter (%s MB used)', (used, total, tone, text) => {
-    render(<IntegrationSections sections={[entry([{ label: 'Mailbox', kind: 'meter', used, total, unit: 'mb' }])]} />);
+    render(<IntegrationSections timeZone="UTC" sections={[entry([{ label: 'Mailbox', kind: 'meter', used, total, unit: 'mb' }])]} />);
     const meter = screen.getByRole('meter', { name: 'Mailbox' });
     expect(meter).toHaveAttribute('aria-valuemin', '0');
     expect(meter).toHaveAttribute('aria-valuemax', '100');
@@ -85,7 +86,7 @@ describe('IntegrationSections', () => {
   });
 
   it('clamps aria-valuenow for an over-quota meter but keeps the real percent in text', () => {
-    render(<IntegrationSections sections={[entry([{ label: 'Seats', kind: 'meter', used: 12, total: 10, unit: 'count' }])]} />);
+    render(<IntegrationSections timeZone="UTC" sections={[entry([{ label: 'Seats', kind: 'meter', used: 12, total: 10, unit: 'count' }])]} />);
     const meter = screen.getByRole('meter', { name: 'Seats' });
     expect(meter).toHaveAttribute('aria-valuenow', '100');
     expect(screen.getByText('12 of 10 (120%)')).toBeInTheDocument();
@@ -104,17 +105,17 @@ describe('IntegrationSections', () => {
     expect(meterState(79, 100, true).tone).toBe('warn');
     expect(meterState(50, 100, true).tone).toBe('warn');
     expect(meterState(49, 100, true).tone).toBe('danger');
-    render(<IntegrationSections sections={[entry([{ label: '2SV', kind: 'meter', used: 10, total: 10, unit: 'count', higherIsBetter: true }])]} />);
+    render(<IntegrationSections timeZone="UTC" sections={[entry([{ label: '2SV', kind: 'meter', used: 10, total: 10, unit: 'count', higherIsBetter: true }])]} />);
     expect(screen.getByRole('meter', { name: '2SV' })).toHaveAttribute('data-tone', 'ok');
   });
 
   it('tags a section whose binding is no longer active', () => {
-    render(<IntegrationSections sections={[{ ...entry([{ label: 'Plan', kind: 'text', value: 'x' }]), active: false }]} />);
+    render(<IntegrationSections timeZone="UTC" sections={[{ ...entry([{ label: 'Plan', kind: 'text', value: 'x' }]), active: false }]} />);
     expect(screen.getByText('No longer in Example Workspace')).toBeInTheDocument();
   });
 
   it('shows no tag on an active binding', () => {
-    render(<IntegrationSections sections={[{ ...entry([{ label: 'Plan', kind: 'text', value: 'x' }]), active: true }]} />);
+    render(<IntegrationSections timeZone="UTC" sections={[{ ...entry([{ label: 'Plan', kind: 'text', value: 'x' }]), active: true }]} />);
     expect(screen.queryByText(/No longer in/)).toBeNull();
   });
 });

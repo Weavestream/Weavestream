@@ -6,6 +6,7 @@ import { RichTextView } from '../editor/rich-text-view';
 import { vaultLinkLabel, vaultLinkUrl } from '../../lib/vault-link';
 import { ExternalUrlValue } from './external-url-value';
 import { FileTileRow, type FileFieldValue } from './file-tile-row';
+import { FormattedFieldDateTime } from '../../lib/timezone-context';
 
 /**
  * Routing context for a rendered field value. Required, with no admin
@@ -178,10 +179,9 @@ export function AssetFieldValue({
     case 'DATE':
     case 'DATETIME': {
       const raw = typeof value === 'string' ? value : String(value);
-      const formatted = formatDateField(raw, field.fieldType);
       return (
         <span style={{ fontSize: 12.5 }} title={raw}>
-          {formatted ?? raw}
+          {formatDateField(raw, field.fieldType)}
         </span>
       );
     }
@@ -213,24 +213,17 @@ function fieldChoices(field: AssetSummary['fields'][number]): Choice[] {
 }
 
 /**
- * Formatted DATE / DATETIME value, or null when unparseable (the caller
- * then shows the raw string). DATE is a stored calendar day, so it goes
- * through the shared UTC-pinned `formatCalendarDate` and never rolls back
- * a day west of UTC. DATETIME still formats in the server's zone.
+ * Formatted DATE / DATETIME value, or the raw string when unparseable. DATE
+ * is a stored calendar day, so it goes through the shared UTC-pinned
+ * `formatCalendarDate` and never rolls back a day west of UTC. DATETIME goes
+ * through `<FormattedFieldDateTime>` with the RAW string: a zone-less value is
+ * wall-clock time, and parsing it here would read it in the server's zone.
  */
 function formatDateField(
   raw: string,
   fieldType: 'DATE' | 'DATETIME',
-): string | null {
-  if (!raw) return null;
-  const ms = Date.parse(raw);
-  if (!Number.isFinite(ms)) return null;
-  if (fieldType === 'DATE') return formatCalendarDate(raw);
-  return new Date(ms).toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+): ReactNode {
+  if (fieldType === 'DATETIME') return <FormattedFieldDateTime value={raw} />;
+  if (!raw || !Number.isFinite(Date.parse(raw))) return raw;
+  return formatCalendarDate(raw);
 }

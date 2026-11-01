@@ -31,7 +31,7 @@ const entry: AssetIntegrationSection = {
 function renderSections(canResolve: boolean) {
   return render(
     <ToastProvider>
-      <IntegrationSections sections={[entry]} companyId={COMPANY} assetId={ASSET} canResolve={canResolve} />
+      <IntegrationSections timeZone="UTC" sections={[entry]} companyId={COMPANY} assetId={ASSET} canResolve={canResolve} />
     </ToastProvider>,
   );
 }
@@ -90,7 +90,7 @@ describe('IntegrationSections differences', () => {
       syncRecordId: '00000000-0000-4000-8000-0000000000e3',
       differences: [{ ...entry.differences![0]!, syncRecordId: '00000000-0000-4000-8000-0000000000e3', fieldLabel: 'Title', localValue: 'Engineer', sourceValue: 'Senior Engineer' }],
     };
-    const { container } = render(<ToastProvider><IntegrationSections sections={[google, microsoft]} companyId={COMPANY} assetId={ASSET} canResolve /></ToastProvider>);
+    const { container } = render(<ToastProvider><IntegrationSections timeZone="UTC" sections={[google, microsoft]} companyId={COMPANY} assetId={ASSET} canResolve /></ToastProvider>);
     const titles = [...container.querySelectorAll('details > summary')].map((s) => s.textContent);
     expect(titles).toHaveLength(2);
     expect(titles[0]).toContain('Google Workspace');
@@ -102,7 +102,7 @@ describe('IntegrationSections differences', () => {
   });
 
   it('shows no Differences group without differences', () => {
-    render(<ToastProvider><IntegrationSections sections={[{ ...entry, differences: [] }]} companyId={COMPANY} assetId={ASSET} canResolve /></ToastProvider>);
+    render(<ToastProvider><IntegrationSections timeZone="UTC" sections={[{ ...entry, differences: [] }]} companyId={COMPANY} assetId={ASSET} canResolve /></ToastProvider>);
     expect(screen.queryByRole('group', { name: 'Differences' })).not.toBeInTheDocument();
   });
 });

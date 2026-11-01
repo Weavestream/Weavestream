@@ -15,6 +15,7 @@ import {
   formatShortDateTime,
   type DateInput,
 } from '@weavestream/shared';
+import { formatFieldDateTime } from './field-datetime';
 
 /**
  * React context carrying the viewer's effective IANA timezone (their saved
@@ -66,6 +67,15 @@ export function FormattedShortDateTime({ value }: { value: DateInput }) {
 /** Instant, date only → `"Jul 1, 2026"` in the viewer's zone. */
 export function FormattedDate({ value }: { value: DateInput }) {
   return <>{formatDate(value, useTimezone())}</>;
+}
+
+/**
+ * DATETIME asset field value: a zone-less wall-clock value as entered, a zoned
+ * instant in the viewer's zone, or the raw string when unresolvable. See
+ * `./field-datetime` for why this never goes through `new Date(raw)`.
+ */
+export function FormattedFieldDateTime({ value }: { value: string }) {
+  return <>{formatFieldDateTime(value, useTimezone()) ?? value}</>;
 }
 
 /**

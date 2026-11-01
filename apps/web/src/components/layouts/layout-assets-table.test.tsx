@@ -1,12 +1,13 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import type {
   AssetSummary,
   LayoutFieldSummary,
   LayoutSummary,
 } from '@weavestream/shared';
 import { LayoutAssetsTable } from './layout-assets-table';
+import { TimezoneProvider } from '../../lib/timezone-context';
 
 const push = jest.fn();
 
@@ -30,7 +31,13 @@ jest.mock('next/link', () => ({
 }));
 jest.mock('../../lib/timezone-context', () => {
   const Stamp = ({ value }: { value: unknown }) => <span>{String(value)}</span>;
-  return { FormattedCalendarDate: Stamp, FormattedDateTime: Stamp };
+  // Keep the real provider, `useTimezone` and `FormattedFieldDateTime`: the
+  // DATETIME sort test depends on the viewer's zone.
+  return {
+    ...jest.requireActual('../../lib/timezone-context'),
+    FormattedCalendarDate: Stamp,
+    FormattedDateTime: Stamp,
+  };
 });
 
 const urlField: LayoutFieldSummary = {
@@ -188,5 +195,68 @@ describe('LayoutAssetsTable filters', () => {
     expect(screen.getByText('No Devices yet for this company.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'New Devices' })).toBeInTheDocument();
     expect(screen.queryByPlaceholderText('Search Devices…')).not.toBeInTheDocument();
+  });
+});
+
+describe('LayoutAssetsTable DATETIME sorting', () => {
+  // Issue #98 review: a zone-less value is wall-clock time and an instant
+  // shows in the viewer's zone, so the sort must follow the displayed time.
+  // For a Los Angeles viewer `20:00Z` shows as 01:00 PM and must sort before
+  // the zone-less `15:00` (03:00 PM), although it is the later instant.
+  const whenField: LayoutFieldSummary = {
+    ...urlField,
+    id: 'f-when',
+    name: 'Installed',
+    slug: 'installed',
+    fieldType: 'DATETIME',
+    position: 2,
+  };
+  const whenLayout: LayoutSummary = { ...layout, fields: [urlField, whenField] };
+
+  function whenRow(id: string, name: string, installed: string): AssetSummary {
+    const row = makeRow(id, name, 'example.com');
+    return { ...row, fieldValues: { ...row.fieldValues, installed } };
+  }
+
+  function displayedTimes(): string[] {
+    return screen
+      .getAllByText(/^Jul 1, 2026, /)
+      .map((el) => el.textContent ?? '');
+  }
+
+  it('sorts mixed zone-less and zoned values in displayed order', () => {
+    render(
+      <TimezoneProvider timezone="America/Los_Angeles">
+        <LayoutAssetsTable
+          basePath="/admin/companies/co-1"
+          layout={whenLayout}
+          rows={[
+            whenRow('a-1', 'Wall clock', '2026-07-01T15:00'),
+            whenRow('a-2', 'Instant', '2026-07-01T20:00:00Z'),
+            whenRow('a-3', 'Earlier wall clock', '2026-07-01T14:59'),
+          ]}
+          q=""
+          includeArchived={false}
+          canManage={false}
+        />
+      </TimezoneProvider>,
+    );
+
+    const header = screen.getByRole('columnheader', { name: /Installed/ });
+    fireEvent.click(within(header).getByRole('button'));
+    expect(header).toHaveAttribute('aria-sort', 'ascending');
+    expect(displayedTimes()).toEqual([
+      'Jul 1, 2026, 01:00 PM',
+      'Jul 1, 2026, 02:59 PM',
+      'Jul 1, 2026, 03:00 PM',
+    ]);
+
+    fireEvent.click(within(header).getByRole('button'));
+    expect(header).toHaveAttribute('aria-sort', 'descending');
+    expect(displayedTimes()).toEqual([
+      'Jul 1, 2026, 03:00 PM',
+      'Jul 1, 2026, 02:59 PM',
+      'Jul 1, 2026, 01:00 PM',
+    ]);
   });
 });

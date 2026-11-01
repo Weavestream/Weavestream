@@ -22,6 +22,7 @@ export function IntegrationSections({
   companyId,
   assetId,
   canResolve = false,
+  timeZone,
 }: {
   sections: AssetIntegrationSection[];
   /** With `assetId`: the asset the panels belong to, for resolving differences. */
@@ -29,6 +30,11 @@ export function IntegrationSections({
   assetId?: string;
   /** The viewer can write the asset: show the difference buttons. */
   canResolve?: boolean;
+  /**
+   * The viewer's effective zone (`getEffectiveTimezone(me)`) for the "synced"
+   * label. A prop, not `useTimezone()`: this renders from a server component.
+   */
+  timeZone: string;
 }) {
   if (sections.length === 0) return null;
   return (
@@ -37,6 +43,7 @@ export function IntegrationSections({
         <IntegrationSectionPanel
           key={`${entry.integrationId}:${index}`}
           entry={entry}
+          timeZone={timeZone}
           differences={
             companyId && assetId ? (
               <IntegrationDifferences
@@ -64,7 +71,15 @@ function IconImg({ src, size }: { src: string | null; size: number }) {
   );
 }
 
-function IntegrationSectionPanel({ entry, differences }: { entry: AssetIntegrationSection; differences: ReactNode }) {
+function IntegrationSectionPanel({
+  entry,
+  differences,
+  timeZone,
+}: {
+  entry: AssetIntegrationSection;
+  differences: ReactNode;
+  timeZone: string;
+}) {
   const { section } = entry;
   const sourceHref = entry.sourceUrl ? safeExternalHref(entry.sourceUrl) : null;
   const sourceNameChars = Array.from(entry.integrationName);
@@ -122,7 +137,7 @@ function IntegrationSectionPanel({ entry, differences }: { entry: AssetIntegrati
             title={`${entry.integrationName} · last synced ${new Date(entry.lastSyncedAt).toISOString()}`}
             style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--muted)' }}
           >
-            synced {recentRelative(new Date(entry.lastSyncedAt))}
+            synced {recentRelative(new Date(entry.lastSyncedAt), timeZone)}
           </span>
         </summary>
         <div

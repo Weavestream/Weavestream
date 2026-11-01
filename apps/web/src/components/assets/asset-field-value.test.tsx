@@ -3,6 +3,7 @@ import '@testing-library/jest-dom';
 import { render, screen } from '@testing-library/react';
 import type { AssetSummary } from '@weavestream/shared';
 import { AssetFieldValue, type AssetFieldContext } from './asset-field-value';
+import { TimezoneProvider } from '../../lib/timezone-context';
 
 // Tiptap does not render in jsdom; the stub surfaces the routing props so
 // the admin/portal mention context is still asserted.
@@ -181,6 +182,41 @@ describe('AssetFieldValue', () => {
       expect(screen.getByText('Mar 14, 2026')).toHaveAttribute(
         'title',
         '2026-03-14',
+      );
+    });
+
+    it("renders a DATETIME in the viewer's zone, not the server's", () => {
+      render(
+        <TimezoneProvider timezone="America/Los_Angeles">
+          <AssetFieldValue
+            field={field('DATETIME')}
+            value="2026-07-01T15:00:00.000Z"
+            references={references}
+            context={adminContext}
+          />
+        </TimezoneProvider>,
+      );
+      expect(screen.getByText('Jul 1, 2026, 08:00 AM')).toHaveAttribute(
+        'title',
+        '2026-07-01T15:00:00.000Z',
+      );
+    });
+
+    it('renders a zone-less DATETIME as entered, not shifted by any zone', () => {
+      // The asset forms save `datetime-local` values with no offset.
+      render(
+        <TimezoneProvider timezone="America/Los_Angeles">
+          <AssetFieldValue
+            field={field('DATETIME')}
+            value="2026-07-01T15:00"
+            references={references}
+            context={adminContext}
+          />
+        </TimezoneProvider>,
+      );
+      expect(screen.getByText('Jul 1, 2026, 03:00 PM')).toHaveAttribute(
+        'title',
+        '2026-07-01T15:00',
       );
     });
 

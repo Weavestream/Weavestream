@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { requireMe } from '../../../../../lib/server-api/auth';
 import { getArticleBySlug } from '../../../../../lib/server-api/articles';
 import { resolvePortalCompany } from '../../../../../lib/portal-company';
+import { FormattedDateTime } from '../../../../../lib/timezone-context';
 import { TopBar } from '../../../../../components/shell/top-bar';
 import { Tag } from '../../../../../components/ui';
 import { ArticleBody } from '../../../../../components/editor/article-body';
@@ -74,7 +75,7 @@ export default async function PortalArticleReadPage({
                 marginBottom: 30,
               }}
             >
-              updated {new Date(article.updatedAt).toLocaleString()}
+              updated <FormattedDateTime value={article.updatedAt} />
             </div>
             <ArticleBody
               editorMode={article.editorMode}

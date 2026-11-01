@@ -14,6 +14,8 @@ import { TopBar } from '../../../../../../components/shell/top-bar';
 import { Panel, ShowMore, Tag } from '../../../../../../components/ui';
 import { buildTerm } from '../../../../../../lib/term';
 import { companyCrumbs } from '../../../../../../lib/company-crumbs';
+import { getEffectiveTimezone } from '../../../../../../lib/date-format';
+import { formatDateTime } from '@weavestream/shared';
 import { ArticleBody } from '../../../../../../components/editor/article-body';
 import { ArticleChatContext } from '../../../../../../components/editor/article-chat-context';
 import { ArticleSideNavColumn } from '../../../../../../components/editor/article-side-nav-column';
@@ -44,6 +46,7 @@ export default async function ArticleReadPage({
   const { id: companyId, articleId } = await params;
   const me = await requireMe();
   const term = buildTerm(await getSettings());
+  const timeZone = getEffectiveTimezone(me);
 
   const [companyRes, article, folders, articleList] = await Promise.all([
     getCompanyDetail(companyId),
@@ -186,13 +189,13 @@ export default async function ArticleReadPage({
           />
           <ShowMore attention={provenanceAttention(article.provenance)}>
             <Panel title="Last activity">
-              <Row label="Created" value={new Date(article.createdAt).toLocaleString()} />
+              <Row label="Created" value={formatDateTime(article.createdAt, timeZone)} />
               {article.createdByUser && (
                 <Row label="Created by" value={article.createdByUser.name} />
               )}
               <Row
                 label="Updated"
-                value={new Date(article.updatedAt).toLocaleString()}
+                value={formatDateTime(article.updatedAt, timeZone)}
                 last={!article.updatedByUser}
               />
               {article.updatedByUser && (

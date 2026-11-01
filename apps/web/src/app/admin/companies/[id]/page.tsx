@@ -22,6 +22,7 @@ import {
 } from '../../../../components/ui';
 import { buildTerm } from '../../../../lib/term';
 import { companyCrumbs } from '../../../../lib/company-crumbs';
+import { FormattedDate } from '../../../../lib/timezone-context';
 import {
   buildMapsUrl,
   companyAccent,
@@ -198,7 +199,7 @@ export default async function CompanyDetailPage({ params }: { params: Promise<{ 
                       color: 'var(--dim)',
                     }}
                   >
-                    {new Date(a.updatedAt).toLocaleDateString()}
+                    <FormattedDate value={a.updatedAt} />
                   </span>
                 </li>
               ))}
@@ -429,7 +430,7 @@ function ClassificationPanel({ company, manage }: { company: CompanyDetail; mana
                 fontSize: 12,
               }}
             >
-              {new Date(company.createdAt).toLocaleDateString()}
+              <FormattedDate value={company.createdAt} />
             </span>
           }
         />

@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import { requireMe } from '../../../../../lib/server-api/auth';
 import { type UserDetail } from '../../../../../lib/server-api/admin';
 import { serverApiFetch } from '../../../../../lib/server-api/core';
+import { FormattedDateTime } from '../../../../../lib/timezone-context';
 import {
   capabilityLabel,
   globalAccessLabel,
@@ -89,9 +90,11 @@ export default async function UserDetailPage({
                     color: 'var(--dim)',
                   }}
                 >
-                  {user.lastLoginAt
-                    ? new Date(user.lastLoginAt).toLocaleString()
-                    : 'never'}
+                  {user.lastLoginAt ? (
+                    <FormattedDateTime value={user.lastLoginAt} />
+                  ) : (
+                    'never'
+                  )}
                 </span>
               }
             />

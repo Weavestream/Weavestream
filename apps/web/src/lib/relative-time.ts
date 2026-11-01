@@ -22,6 +22,8 @@
  * renders differently from all five below.
  */
 
+import { formatDate } from '@weavestream/shared';
+
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
@@ -47,25 +49,24 @@ export function compactRelative(value: string | Date, nowMs: number = Date.now()
 }
 
 /**
- * `just now` · `5m ago` · `3h ago` · `4d ago` · then the locale date
+ * `just now` · `5m ago` · `3h ago` · `4d ago` · then `Jul 1, 2026`
  *
- * Stops being relative after a week and prints `toLocaleDateString()`, so it
- * needs a real `Date`. Used on the asset detail pages.
- *
- * That `toLocaleDateString()` trips `no-restricted-syntax` — deliberately left
- * warning rather than suppressed. It is inherited verbatim from the two copies
- * this replaced (the warning moved here, it did not appear), and the rule is
- * right: this ladder is not hydration-safe. Fixing it means routing these
- * surfaces through `<FormattedRelative>`, which changes rendered output and so
- * is not part of this behavior-preserving pass.
+ * Stops being relative after a week and prints the date in `timeZone` (the
+ * viewer's `getEffectiveTimezone(me)`), never the server process's zone. Used
+ * by server components on the asset detail pages, which is why the zone is a
+ * parameter rather than `useTimezone()`.
  */
-export function recentRelative(d: Date, nowMs: number = Date.now()): string {
+export function recentRelative(
+  d: Date,
+  timeZone: string,
+  nowMs: number = Date.now(),
+): string {
   const diff = nowMs - d.getTime();
   if (diff < MINUTE) return 'just now';
   if (diff < HOUR) return `${Math.floor(diff / MINUTE)}m ago`;
   if (diff < DAY) return `${Math.floor(diff / HOUR)}h ago`;
   if (diff < 7 * DAY) return `${Math.floor(diff / DAY)}d ago`;
-  return d.toLocaleDateString();
+  return formatDate(d, timeZone);
 }
 
 /**

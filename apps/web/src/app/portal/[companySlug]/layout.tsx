@@ -10,6 +10,8 @@ import { listSubnets } from '../../../lib/server-api/ipam';
 import { listPasswords } from '../../../lib/server-api/passwords';
 import { listDomains } from '../../../lib/server-api/domains';
 import { resolvePortalCompany } from '../../../lib/portal-company';
+import { getEffectiveTimezone } from '../../../lib/date-format';
+import { formatDate } from '@weavestream/shared';
 
 export async function generateMetadata({
   params,
@@ -91,7 +93,7 @@ export default async function PortalLayout({
           </h1>
           <p style={{ color: 'var(--muted)', fontSize: 13, marginTop: 8 }}>
             Your access to <strong>{company.name}</strong> ended on{' '}
-            {new Date(expiresAt).toLocaleDateString()}. Contact an
+            {formatDate(expiresAt, getEffectiveTimezone(me))}. Contact an
             administrator if you still need access.
           </p>
         </div>

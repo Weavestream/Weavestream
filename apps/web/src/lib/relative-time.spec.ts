@@ -50,19 +50,26 @@ describe('compactRelative', () => {
 
 describe('recentRelative', () => {
   it('walks just now → minutes → hours → days', () => {
-    expect(recentRelative(new Date(NOW), NOW)).toBe('just now');
-    expect(recentRelative(new Date(NOW - MINUTE + 1), NOW)).toBe('just now');
-    expect(recentRelative(new Date(NOW - MINUTE), NOW)).toBe('1m ago');
-    expect(recentRelative(new Date(NOW - HOUR + 1), NOW)).toBe('59m ago');
-    expect(recentRelative(new Date(NOW - HOUR), NOW)).toBe('1h ago');
-    expect(recentRelative(new Date(NOW - DAY + 1), NOW)).toBe('23h ago');
-    expect(recentRelative(new Date(NOW - DAY), NOW)).toBe('1d ago');
-    expect(recentRelative(new Date(NOW - (7 * DAY - 1)), NOW)).toBe('6d ago');
+    expect(recentRelative(new Date(NOW), 'UTC', NOW)).toBe('just now');
+    expect(recentRelative(new Date(NOW - MINUTE + 1), 'UTC', NOW)).toBe('just now');
+    expect(recentRelative(new Date(NOW - MINUTE), 'UTC', NOW)).toBe('1m ago');
+    expect(recentRelative(new Date(NOW - HOUR + 1), 'UTC', NOW)).toBe('59m ago');
+    expect(recentRelative(new Date(NOW - HOUR), 'UTC', NOW)).toBe('1h ago');
+    expect(recentRelative(new Date(NOW - DAY + 1), 'UTC', NOW)).toBe('23h ago');
+    expect(recentRelative(new Date(NOW - DAY), 'UTC', NOW)).toBe('1d ago');
+    expect(recentRelative(new Date(NOW - (7 * DAY - 1)), 'UTC', NOW)).toBe('6d ago');
   });
 
-  it('gives up on relative past a week and prints the locale date', () => {
-    const old = new Date(NOW - 7 * DAY);
-    expect(recentRelative(old, NOW)).toBe(old.toLocaleDateString());
+  it('gives up on relative past a week and prints the date in the given zone', () => {
+    expect(recentRelative(new Date(NOW - 7 * DAY), 'UTC', NOW)).toBe('Aug 12, 2026');
+    // 2026-08-11T16:00Z is still Aug 11 in UTC but already Aug 12 in Tokyo.
+    const lateUtc = new Date(NOW - 7 * DAY - 20 * HOUR);
+    expect(recentRelative(lateUtc, 'UTC', NOW)).toBe('Aug 11, 2026');
+    expect(recentRelative(lateUtc, 'Asia/Tokyo', NOW)).toBe('Aug 12, 2026');
+    // 2026-08-11T01:00Z is still Aug 10 in Los Angeles.
+    const earlyUtc = new Date(NOW - 8 * DAY - 11 * HOUR);
+    expect(recentRelative(earlyUtc, 'UTC', NOW)).toBe('Aug 11, 2026');
+    expect(recentRelative(earlyUtc, 'America/Los_Angeles', NOW)).toBe('Aug 10, 2026');
   });
 });
 

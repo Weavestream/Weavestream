@@ -6,6 +6,7 @@ import {
   listFolderTree,
 } from '../../../../lib/server-api/articles';
 import { resolvePortalCompany } from '../../../../lib/portal-company';
+import { FormattedDate } from '../../../../lib/timezone-context';
 import { PageBody, PageHeader } from '../../../../components/shell/page-header';
 import { Icon, LayoutSwatch, Panel, Tag } from '../../../../components/ui';
 
@@ -188,7 +189,7 @@ function PortalArticles({
                     color: 'var(--dim)',
                   }}
                 >
-                  {new Date(a.updatedAt).toLocaleDateString()}
+                  <FormattedDate value={a.updatedAt} />
                 </span>
               </li>
             ))}

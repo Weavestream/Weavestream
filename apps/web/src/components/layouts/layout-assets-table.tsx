@@ -13,8 +13,13 @@ import type {
 import { vaultLinkLabel } from '../../lib/vault-link';
 import {
   FormattedCalendarDate,
-  FormattedDateTime,
+  FormattedFieldDateTime,
+  useTimezone,
 } from '../../lib/timezone-context';
+import {
+  fieldDateTimeSortKey,
+  parseFieldDateTime,
+} from '../../lib/field-datetime';
 import {
   DataTable,
   type DataColumn,
@@ -67,6 +72,7 @@ export function LayoutAssetsTable({
   canManage: boolean;
 }) {
   const router = useRouter();
+  const timeZone = useTimezone();
   const [pending, startTransition] = useTransition();
   const [draftState, setDraftState] = useState(() => ({ source: q, value: q }));
   const [tagFilter, setTagFilter] = useState<string | null>(null);
@@ -367,7 +373,7 @@ export function LayoutAssetsTable({
           >
             <DataTable
               fillHeight
-              columns={layoutColumns({ layout, extras: columns.extras, basePath })}
+              columns={layoutColumns({ layout, extras: columns.extras, basePath, timeZone })}
               rows={visibleRows}
               renderMobileCard={(r) => (
                 <LayoutAssetMobileBody
@@ -389,10 +395,13 @@ function layoutColumns({
   layout,
   extras,
   basePath,
+  timeZone,
 }: {
   layout: LayoutSummary;
   extras: LayoutFieldSummary[];
   basePath: string;
+  /** The viewer's zone, so DATETIME columns sort in the order they display. */
+  timeZone: string;
 }): DataColumn<AssetSummary>[] {
   const cols: DataColumn<AssetSummary>[] = [
     {
@@ -431,7 +440,8 @@ function layoutColumns({
       id: `field:${f.slug}`,
       header: f.name,
       width: 240,
-      sortValue: (r) => fieldSortValue(f.fieldType, r.fieldValues[f.slug], r.references),
+      sortValue: (r) =>
+        fieldSortValue(f.fieldType, r.fieldValues[f.slug], r.references, timeZone),
       render: (r) => (
         <FieldCell
           fieldType={f.fieldType}
@@ -569,6 +579,7 @@ function fieldSortValue(
   type: FieldType,
   value: unknown,
   references: ReferenceMap,
+  timeZone: string,
 ): string | number | boolean | Date | null | undefined {
   if (value == null || value === '') return null;
   switch (type) {
@@ -576,11 +587,14 @@ function fieldSortValue(
       return value === true || value === 'true';
     case 'NUMBER':
       return Number(value);
-    case 'DATE':
-    case 'DATETIME': {
+    case 'DATE': {
       const d = new Date(String(value));
       return Number.isNaN(d.getTime()) ? String(value) : d;
     }
+    case 'DATETIME':
+      // Sort by the time the cell SHOWS (see `fieldDateTimeSortKey`), not the
+      // absolute instant: zone-less values are wall-clock times.
+      return fieldDateTimeSortKey(String(value), timeZone) ?? String(value);
     case 'TAGS':
     case 'MULTISELECT': {
       const arr = Array.isArray(value) ? (value as unknown[]) : [];
@@ -626,17 +640,23 @@ function FieldCell({
         <Dim>false</Dim>
       );
     }
-    case 'DATE':
-    case 'DATETIME': {
+    case 'DATE': {
       const d = new Date(String(value));
       if (Number.isNaN(d.getTime())) return <Dim>{String(value)}</Dim>;
       return (
         <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5 }}>
-          {fieldType === 'DATETIME' ? (
-            <FormattedDateTime value={d} />
-          ) : (
-            <FormattedCalendarDate value={d} />
-          )}
+          <FormattedCalendarDate value={d} />
+        </span>
+      );
+    }
+    case 'DATETIME': {
+      // Never `new Date(raw)` here: this renders on the server AND in the
+      // browser, and each reads a zone-less value in its own zone.
+      const s = String(value);
+      if (!parseFieldDateTime(s)) return <Dim>{s}</Dim>;
+      return (
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5 }}>
+          <FormattedFieldDateTime value={s} />
         </span>
       );
     }

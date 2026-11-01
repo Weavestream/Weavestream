@@ -32,6 +32,8 @@ import {
   provenanceAttention,
 } from '../../../../../../components/integrations/provenance-badge';
 import { recentRelative as relative } from '../../../../../../lib/relative-time';
+import { getEffectiveTimezone } from '../../../../../../lib/date-format';
+import { formatDateTime } from '@weavestream/shared';
 import { IntegrationSections } from '../../../../../../components/integrations/integration-sections';
 import { assetSourcesLabel } from '../../../../../../lib/asset-sources';
 
@@ -66,6 +68,7 @@ export default async function AssetDetailPage({
   const company = throwUnlessFound(companyRes, `/companies/${companyId}`);
   if (!asset) notFound();
   const manage = canWriteCompany(me, company.id);
+  const timeZone = getEffectiveTimezone(me);
 
   const createdBy = asset.createdByUser;
   const updatedBy = asset.updatedByUser;
@@ -135,6 +138,7 @@ export default async function AssetDetailPage({
               companyId={companyId}
               assetId={asset.id}
               canResolve={manage && !asset.archivedAt}
+              timeZone={timeZone}
             />
           </div>
 
@@ -167,7 +171,7 @@ export default async function AssetDetailPage({
                     <Row
                       key="created"
                       label="Created"
-                      value={new Date(asset.createdAt).toLocaleString()}
+                      value={formatDateTime(asset.createdAt, timeZone)}
                     />,
                   );
                   if (createdBy) {
@@ -183,7 +187,7 @@ export default async function AssetDetailPage({
                     <Row
                       key="updated"
                       label="Updated"
-                      value={new Date(asset.updatedAt).toLocaleString()}
+                      value={formatDateTime(asset.updatedAt, timeZone)}
                     />,
                   );
                   if (updatedBy) {
@@ -231,8 +235,8 @@ export default async function AssetDetailPage({
                       <Row
                         key={`sync-${integrationId}`}
                         label={`Synced · ${src.driver.toLowerCase()}`}
-                        value={relative(new Date(src.lastSyncedAt))}
-                        title={`${src.integrationName} · ${[...src.resourceKeys].join(', ')} · last synced ${new Date(src.lastSyncedAt).toLocaleString()}`}
+                        value={relative(new Date(src.lastSyncedAt), timeZone)}
+                        title={`${src.integrationName} · ${[...src.resourceKeys].join(', ')} · last synced ${formatDateTime(src.lastSyncedAt, timeZone)}`}
                       />,
                     );
                   }
@@ -241,7 +245,7 @@ export default async function AssetDetailPage({
                       <Row
                         key="archived"
                         label="Archived"
-                        value={new Date(asset.archivedAt).toLocaleString()}
+                        value={formatDateTime(asset.archivedAt, timeZone)}
                       />,
                     );
                   }

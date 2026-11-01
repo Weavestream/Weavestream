@@ -18,6 +18,7 @@ import type { AssetFieldContext } from '../../../../../components/assets/asset-f
 import { AssetDetailView } from '../../../../../components/assets/asset-detail-view';
 import { SidebarActive } from '../../../../../components/shell/sidebar-active';
 import { recentRelative as relative } from '../../../../../lib/relative-time';
+import { getEffectiveTimezone } from '../../../../../lib/date-format';
 
 /**
  * Portal asset detail (read-only mirror of the admin page).
@@ -105,7 +106,7 @@ export default async function PortalAssetDetailPage({
             {asset.archivedAt && <Tag tone="warn">archived</Tag>}
           </span>
         }
-        description={`${asset.layoutName} · updated ${relative(new Date(asset.updatedAt))}`}
+        description={`${asset.layoutName} · updated ${relative(new Date(asset.updatedAt), getEffectiveTimezone(me))}`}
       />
       <PageBody>
         <div
