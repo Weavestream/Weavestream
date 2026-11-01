@@ -3,7 +3,6 @@
   "compilerOptions": {
     "rootDir": "./src",
     "outDir": "./dist",
-    "baseUrl": ".",
     "types": ["node", "jest"],
     "paths": {
       "@weavestream/shared": ["../../packages/shared/dist/index.d.ts"],

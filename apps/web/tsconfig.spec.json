@@ -22,7 +22,7 @@
     // Jest's own resolver handles the exports map at runtime; this is
     // purely to satisfy tsc.
     "paths": {
-      "@/*": ["src/*"],
+      "@/*": ["./src/*"],
       "@weavestream/shared": ["../../packages/shared/dist/index.d.ts"],
       "@weavestream/shared/browser": [
         "../../packages/shared/dist/browser/index.d.ts"
@@ -31,7 +31,7 @@
       // publishes `./menus` as a subpath. With these four entries the spec
       // project typechecks clean (it reported 37 errors across 10 files
       // before), so a future regression here is a real signal.
-      "@tiptap/react/menus": ["node_modules/@tiptap/react/dist/menus/index.d.ts"]
+      "@tiptap/react/menus": ["./node_modules/@tiptap/react/dist/menus/index.d.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "types/**/*.d.ts"],
