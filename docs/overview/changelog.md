@@ -13,6 +13,20 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-11-01
+
+### Changed
+
+- **Asset lists load beyond the first 200 records.** The company Assets page and layout lists in admin and the client portal now follow every API page, up to 5,000 matching assets. Tag filters, sorting, and selection work across the loaded list. If more records exist, the count shows a **+** and a warning says how many are shown.
+- **Bulk asset actions support larger selections.** Archive, restore, and permanent delete now split selections into requests of up to 500 assets. If a request fails or the connection drops, completed actions are reported and failed or unprocessed assets stay selected for retry.
+- **TypeScript path configuration is consistent across apps.** Removed redundant `baseUrl` settings and made local path aliases explicitly relative in application and test configurations.
+
+### Fixed
+
+- **Timestamps follow the viewer's configured timezone.** User last login, company creation, article activity, asset activity, integration sync dates, and the portal access-expiry message now use the effective timezone instead of the server's timezone.
+- **Asset date-time fields no longer shift between server and browser.** Values saved without a timezone display exactly as entered; values with `Z` or an explicit offset display in the viewer's timezone. Layout columns sort by the displayed time, and date-only fields keep their calendar day.
+- **Asset expiry calculations no longer depend on the server's timezone.** **Expiring soon**, expiry email alerts, and dismissal checks now interpret date-time values without a timezone as UTC. Date-only values remain midnight UTC, and values with an explicit timezone keep their stated instant. Existing dismissals on UTC deployments remain valid.
+
 ## [1.11.0] - 2026-10-28
 
 ### Added
