@@ -1,42 +1,18 @@
-import { formatDateTime } from '@weavestream/shared';
+import { formatDateTime, parseFieldDateTime } from '@weavestream/shared';
 
 /**
- * DATETIME asset field values come in 2 shapes, and they mean different things:
+ * Display helpers for DATETIME asset field values. The parser and the 2-shape
+ * rule live in `@weavestream/shared` (`parseFieldDateTime`), shared with the
+ * API expiry code:
  *
- *   - Zone-less (`2026-07-01T15:00`): what both asset forms save from a
- *     `datetime-local` input. It is the wall-clock time the user typed, with
- *     no zone, so it shows exactly as entered for every viewer.
- *   - Zoned (`…Z` or `…+02:00`): an instant (API `Date` input, imports). It
- *     shows in the viewer's zone, like every other timestamp.
+ *   - A zone-less value (`2026-07-01T15:00`) is the wall-clock time the user
+ *     typed, so it shows exactly as entered for every viewer.
+ *   - A zoned value (`…Z` or `…+02:00`) is an instant, so it shows in the
+ *     viewer's zone, like every other timestamp.
  *
- * Never hand a zone-less value to `new Date()` / `Date.parse()` and render the
- * result: each runtime reads it in its OWN zone, so the SSR render (UTC in the
- * container) and the browser render disagree — a hydration mismatch and a
- * shifted time. Everything here is runtime-zone-independent.
- *
- * Both patterns mirror the API's `ISO_DATETIME` gate in
- * `apps/api/src/field-types/strategies/date.strategy.ts`. Anything else is
- * not resolvable deterministically, so callers show the raw string.
+ * Everything here is runtime-zone-independent, so the SSR render (UTC in the
+ * container) and the browser render agree.
  */
-const WALL_CLOCK = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/;
-const ZONED = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2})$/i;
-
-export type FieldDateTime =
-  /** `at` holds the typed wall-clock fields read as UTC. */
-  | { kind: 'wall-clock'; at: Date }
-  | { kind: 'instant'; at: Date };
-
-/** Resolve a stored DATETIME value, or null when it is not one of the 2 shapes. */
-export function parseFieldDateTime(raw: string): FieldDateTime | null {
-  const kind = WALL_CLOCK.test(raw)
-    ? 'wall-clock'
-    : ZONED.test(raw)
-      ? 'instant'
-      : null;
-  if (!kind) return null;
-  const at = new Date(kind === 'wall-clock' ? `${raw}Z` : raw);
-  return Number.isNaN(at.getTime()) ? null : { kind, at };
-}
 
 /**
  * `"Jul 1, 2026, 03:00 PM"`: a wall-clock value as entered, an instant in

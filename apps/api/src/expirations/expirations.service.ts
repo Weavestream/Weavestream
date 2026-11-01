@@ -5,7 +5,11 @@ import type {
   ExpirationRow,
   PasswordExpiration,
 } from '@weavestream/shared';
-import { expirationDismissalKey, expirationRowIdentity } from '@weavestream/shared';
+import {
+  expirationDismissalKey,
+  expirationRowIdentity,
+  parseExpiryInstant,
+} from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ExpirationDismissalsService } from './expiration-dismissals.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
@@ -201,13 +205,15 @@ export class ExpirationsService {
       const co = companyById.get(v.asset.companyId);
       if (!co) continue;
       const raw = v.value;
-      // DATE is stored as "YYYY-MM-DD", DATETIME as an ISO timestamp.
+      // DATE is stored as "YYYY-MM-DD", DATETIME as an ISO timestamp that
+      // may have no zone (`datetime-local` input). `parseExpiryInstant` reads
+      // a zone-less value as UTC, never in this process's zone — see its doc.
       // Null / malformed / non-string values are silently skipped — the
       // page's purpose is to surface actionable rows, not to report
       // malformed data (that's the layout builder's job at write time).
       if (typeof raw !== 'string' || raw.length === 0) continue;
-      const expires = new Date(raw);
-      if (Number.isNaN(expires.getTime())) continue;
+      const expires = parseExpiryInstant(raw);
+      if (!expires) continue;
 
       const daysUntil = Math.floor((expires.getTime() - now) / dayMs);
       if (daysUntil > meta.warnWithinDays) continue;

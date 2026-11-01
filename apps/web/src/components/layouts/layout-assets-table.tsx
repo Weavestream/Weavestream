@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { safeExternalHref } from '@weavestream/shared';
+import { parseFieldDateTime, safeExternalHref } from '@weavestream/shared';
 import type {
   AssetSummary,
   FieldType,
@@ -16,10 +16,7 @@ import {
   FormattedFieldDateTime,
   useTimezone,
 } from '../../lib/timezone-context';
-import {
-  fieldDateTimeSortKey,
-  parseFieldDateTime,
-} from '../../lib/field-datetime';
+import { fieldDateTimeSortKey } from '../../lib/field-datetime';
 import {
   DataTable,
   type DataColumn,

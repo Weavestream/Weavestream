@@ -5,7 +5,11 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { ExpirationDismissal } from '@prisma/client';
-import { expirationDismissalKey, type DismissExpirationInput } from '@weavestream/shared';
+import {
+  expirationDismissalKey,
+  parseExpiryInstant,
+  type DismissExpirationInput,
+} from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
@@ -217,10 +221,11 @@ export class ExpirationDismissalsService {
       where: { assetId: a.id, assetFieldId: field.id, companyId },
       select: { value: true },
     });
-    // DATE is stored as "YYYY-MM-DD", DATETIME as an ISO timestamp.
+    // DATE is stored as "YYYY-MM-DD", DATETIME as an ISO timestamp. Same
+    // parse as the Expiring-soon feed, so the `dueAt` the feed handed out
+    // matches on every server zone.
     if (typeof v?.value !== 'string' || v.value.length === 0) return null;
-    const at = new Date(v.value);
-    return Number.isNaN(at.getTime()) ? null : at;
+    return parseExpiryInstant(v.value);
   }
 }
 

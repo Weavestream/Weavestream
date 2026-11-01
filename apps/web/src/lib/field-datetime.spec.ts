@@ -1,8 +1,4 @@
-import {
-  fieldDateTimeSortKey,
-  formatFieldDateTime,
-  parseFieldDateTime,
-} from './field-datetime';
+import { fieldDateTimeSortKey, formatFieldDateTime } from './field-datetime';
 
 describe('formatFieldDateTime', () => {
   it('shows a zone-less value as entered, whatever the viewer zone', () => {
@@ -85,9 +81,6 @@ describe('formatFieldDateTime', () => {
       );
       expect(formatFieldDateTime('2026-07-01T15:00:00Z', 'America/Los_Angeles')).toBe(
         'Jul 1, 2026, 08:00 AM',
-      );
-      expect(parseFieldDateTime('2026-07-01T15:00')?.at.toISOString()).toBe(
-        '2026-07-01T15:00:00.000Z',
       );
       expect(fieldDateTimeSortKey('2026-07-01T20:00:00Z', 'America/Los_Angeles')).toBe(
         Date.UTC(2026, 6, 1, 13, 0, 0),

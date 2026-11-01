@@ -8,7 +8,7 @@ import {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { QueuesService } from '../queues/queues.service.js';
-import { expirationDismissalKey } from '@weavestream/shared';
+import { expirationDismissalKey, parseExpiryInstant } from '@weavestream/shared';
 import { loadDismissalMap } from '../expirations/expiration-dismissals.service.js';
 
 /**
@@ -343,8 +343,10 @@ export class AlertsRunnerService {
         for (const v of values) {
           const raw = v.value;
           if (typeof raw !== 'string' || raw.length === 0) continue;
-          const dt = new Date(raw);
-          if (Number.isNaN(dt.getTime())) continue;
+          // Zone-less DATETIME values read as UTC, not in this process's
+          // zone — same rule as `ExpirationsService`.
+          const dt = parseExpiryInstant(raw);
+          if (!dt) continue;
           const daysUntil = Math.floor((dt.getTime() - now) / dayMs);
           if (daysUntil > triggerDays) continue;
           const fieldLabel = fieldById.get(v.assetFieldId) ?? 'expiry';
