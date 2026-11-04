@@ -34,6 +34,7 @@ const ACTOR: AuthedUser = {
   sessionId: '5bc00000-0000-4000-8000-0000000ab0f1',
   mfaEnforcementCompletedAt: null,
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 
 describeIfDb('UsersService.update vs. concurrent authority edits (DB)', () => {

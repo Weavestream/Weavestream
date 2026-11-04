@@ -37,6 +37,7 @@ const ADMIN: AuthedUser = {
   sessionId: 's-admin',
   mfaEnforcementCompletedAt: new Date(0),
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 
 function makeService(args: {

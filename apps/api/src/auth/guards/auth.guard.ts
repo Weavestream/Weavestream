@@ -20,6 +20,7 @@ import { isInternalListenerRequest } from '../../common/internal-listener.js';
 import { DELEGATION_PREFIX, McpDelegationService } from '../../mcp/mcp-delegation.service.js';
 import { McpConnectionsService } from '../../mcp-oauth/mcp-connections.service.js';
 import { connectionAllowed } from '../../mcp-oauth/mcp-oauth.constants.js';
+import { passesGlobalPasswordPolicy } from '../../passwords/password-access-policy.js';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -94,6 +95,7 @@ export class AuthGuard implements CanActivate {
       platformCapabilities: user.platformCapabilities ?? [],
       sessionId: session.id,
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
+      globalPasswordAccess: await this.globalPasswordAccessFor(user),
       mfaPending: session.mfaPending,
     };
     return true;
@@ -157,6 +159,7 @@ export class AuthGuard implements CanActivate {
       // Nothing writes a step-up marker under it, so step-up routes refuse.
       sessionId: connection.id,
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
+      globalPasswordAccess: await this.globalPasswordAccessFor(user),
       mfaPending: false,
       mcpConnectionId: connection.id,
       apiKeyAllowWrite: connection.allowWrite,
@@ -210,6 +213,7 @@ export class AuthGuard implements CanActivate {
       platformCapabilities: user.platformCapabilities ?? [],
       sessionId: key.id,
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
+      globalPasswordAccess: await this.globalPasswordAccessFor(user),
       // A key is itself the second factor: it is high-entropy, revocable, and
       // was minted by an already-MFA-enrolled human. Leaving this true would
       // deadlock every token behind an interactive TOTP prompt.
@@ -227,6 +231,18 @@ export class AuthGuard implements CanActivate {
     });
 
     return true;
+  }
+
+  /**
+   * The global password access policy for this user (issue #110), through
+   * the settings 5 s cache. Resolved here once so every read path sees the
+   * same answer for the whole request.
+   */
+  private async globalPasswordAccessFor(user: {
+    id: string;
+    role: AuthedUser['role'];
+  }): Promise<boolean> {
+    return passesGlobalPasswordPolicy(user, await this.settings.passwordAccessPolicy());
   }
 
   /**

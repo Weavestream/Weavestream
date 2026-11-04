@@ -225,10 +225,31 @@ export class SearchService {
       // `canReadPassword()` applies on every other read path. Client
       // users are exempt by policy (their gate is visible_to_clients,
       // above) and super admins always pass.
+      //
+      // Issue #110: an entry WITHOUT its own list follows the global
+      // password access policy, resolved per request into
+      // `actor.globalPasswordAccess` and bound as a parameter. An entry
+      // WITH its own list uses only that list.
+      const globalAccess = actor.globalPasswordAccess === true;
       whereParts.push(
         Prisma.sql`(si.entity_type <> 'password'
-          OR si.restricted_to_user_ids = '{}'::uuid[]
+          OR (si.restricted_to_user_ids = '{}'::uuid[] AND ${globalAccess}::boolean)
           OR ${actor.id}::uuid = ANY(si.restricted_to_user_ids))`,
+      );
+      // Files attached to an entry the actor cannot open are hidden too, so
+      // a file name can never reveal a hidden entry. Same predicate as above,
+      // evaluated against the parent `passwords` row.
+      whereParts.push(
+        Prisma.sql`(si.entity_type <> 'upload' OR NOT EXISTS (
+          SELECT 1 FROM uploads u
+          JOIN passwords p ON p.id = u.attached_to_id
+          WHERE u.id = si.entity_id
+            AND u.attached_to_type = 'password'
+            AND NOT (
+              (p.restricted_to_user_ids = '{}'::uuid[] AND ${globalAccess}::boolean)
+              OR ${actor.id}::uuid = ANY(p.restricted_to_user_ids)
+            )
+        ))`,
       );
     }
 

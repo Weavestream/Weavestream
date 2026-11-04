@@ -44,6 +44,11 @@ export type Me = {
   createdAt: string;
   lastLoginAt: string | null;
   memberships: Membership[];
+  /**
+   * Whether the global password access policy lets this user open entries
+   * that have no own allow-list. UI hint only — the API enforces it.
+   */
+  hasPasswordAccess: boolean;
 };
 
 // `cache()` memoizes `getMe` for the duration of a single server request so

@@ -107,6 +107,7 @@ describeIfDb('remote MCP endpoint (DB integration, full app)', () => {
     sessionId: ID('e1'),
     mfaEnforcementCompletedAt: new Date(),
     mfaPending: false,
+    globalPasswordAccess: true,
   });
 
   async function freePort(): Promise<number> {
@@ -317,6 +318,43 @@ describeIfDb('remote MCP endpoint (DB integration, full app)', () => {
     expect((await fetch(`${base}/api/v1/mcp`)).status).toBe(405);
     const meta = await (await fetch(`${base}/api/v1/mcp/resource-metadata`)).json();
     expect(meta).toMatchObject({ resource: oauth.resource, authorization_servers: [oauth.issuer] });
+  });
+
+  it('follows the owner\'s global password access policy (issue #110)', async () => {
+    const pw = await prisma.password.create({
+      data: {
+        id: ID('f1'),
+        companyId: CO_X,
+        name: 'MCP e2e policy entry',
+        // Never decrypted here: metadata tools only.
+        passwordCiphertext: 'not-a-real-ciphertext',
+        createdBy: USER_A,
+        updatedBy: USER_A,
+      },
+    });
+    const client = await mcpClient(await connect(USER_A, false));
+    const policy = jest
+      .spyOn(app.get(SettingsService), 'passwordAccessPolicy')
+      .mockResolvedValue({ mode: 'selected_users', userIds: [] });
+    try {
+      // USER_A is not in the global list: the entry (no own list) is hidden.
+      const listed = await client.callTool({ name: 'list_passwords', arguments: { companyId: CO_X } });
+      expect(text(listed)).not.toContain(pw.id);
+      expect(text(listed)).not.toContain('MCP e2e policy entry');
+      const got = await client.callTool({
+        name: 'get_password',
+        arguments: { companyId: CO_X, passwordId: pw.id },
+      });
+      expect(got.isError).toBe(true);
+
+      // In the list: same as before the policy existed.
+      policy.mockResolvedValue({ mode: 'selected_users', userIds: [USER_A] });
+      const allowed = await client.callTool({ name: 'list_passwords', arguments: { companyId: CO_X } });
+      expect(text(allowed)).toContain(pw.id);
+    } finally {
+      policy.mockRestore();
+      await prisma.password.delete({ where: { id: pw.id } });
+    }
   });
 
   it('a read-only connection lists the 13 read tools and cannot reach a write', async () => {

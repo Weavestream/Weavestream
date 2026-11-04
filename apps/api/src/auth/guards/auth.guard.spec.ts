@@ -32,12 +32,14 @@ function makeGuard(
     mcpRemoteEnabled = true,
     mcpClientPolicy = 'claude_chatgpt',
     connection = CLAUDE_CONNECTION,
+    passwordPolicy = { mode: 'all_users' as const, userIds: [] as string[] },
   }: {
     apiKeysEnabled?: boolean;
     key?: unknown;
     mcpRemoteEnabled?: boolean;
     mcpClientPolicy?: 'claude_chatgpt' | 'any';
     connection?: { id: string; userId: string; allowWrite: boolean; clientId: string; redirectHost: string } | null;
+    passwordPolicy?: { mode: 'all_users' | 'selected_users'; userIds: string[] };
   } = {},
 ) {
   const reflector = { getAllAndOverride: jest.fn().mockReturnValue(false) } as never;
@@ -76,6 +78,7 @@ function makeGuard(
     apiKeysEnabled: jest.fn().mockResolvedValue(apiKeysEnabled),
     mcpRemoteEnabled: jest.fn().mockResolvedValue(mcpRemoteEnabled),
     mcpClientPolicy: jest.fn().mockResolvedValue(mcpClientPolicy),
+    passwordAccessPolicy: jest.fn().mockResolvedValue(passwordPolicy),
   };
   const delegations = new McpDelegationService();
   const mcpConnections = { findActiveById: jest.fn().mockResolvedValue(connection) };
@@ -219,6 +222,49 @@ describe('AuthGuard bearer handling', () => {
   });
 });
 
+/**
+ * Issue #110: the global password access policy is resolved once per
+ * request onto `req.user.globalPasswordAccess`, for every principal kind.
+ * API keys and MCP connections inherit their owner's result.
+ */
+describe('AuthGuard global password access', () => {
+  const ROTATED = {
+    accessToken: 'new-jwt',
+    refreshToken: 'new-refresh-token',
+    payload: { sub: 'u-1', sid: 's-1', role: 'OPERATOR' },
+  };
+  const LIVE_KEY = { id: 'k-1', userId: 'u-1', allowPasswordReveal: false, allowWrite: false, lastUsedAt: null };
+  const OUTSIDE = { mode: 'selected_users' as const, userIds: ['someone-else'] };
+  const INSIDE = { mode: 'selected_users' as const, userIds: ['u-1'] };
+
+  async function cookieUser(passwordPolicy: typeof OUTSIDE) {
+    const { guard } = makeGuard(ROTATED, { passwordPolicy });
+    const { ctx, req } = makeCtx();
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    return (req as unknown as { user: { globalPasswordAccess: boolean } }).user;
+  }
+
+  it('is true under all_users (the default)', async () => {
+    const { guard } = makeGuard(ROTATED);
+    const { ctx, req } = makeCtx();
+    await guard.canActivate(ctx);
+    expect((req as unknown as { user: { globalPasswordAccess: boolean } }).user.globalPasswordAccess).toBe(true);
+  });
+
+  it('follows the selected users list for a cookie session', async () => {
+    expect((await cookieUser(OUTSIDE)).globalPasswordAccess).toBe(false);
+    expect((await cookieUser(INSIDE)).globalPasswordAccess).toBe(true);
+  });
+
+  it("gives an API key its owner's result", async () => {
+    const { guard } = makeGuard(ROTATED, { key: LIVE_KEY, passwordPolicy: OUTSIDE });
+    const { ctx, req } = makeCtx();
+    req.headers.authorization = 'Bearer ws_0123456789abcdef01_secret';
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect((req as unknown as { user: { globalPasswordAccess: boolean } }).user.globalPasswordAccess).toBe(false);
+  });
+});
+
 describe('AuthGuard remote MCP delegation handles', () => {
   const PATH = '/api/v1/companies/11111111-1111-4111-8111-111111111111/assets';
 
@@ -262,10 +308,21 @@ describe('AuthGuard remote MCP delegation handles', () => {
     });
     expect(req.user).not.toHaveProperty('apiKeyId');
     expect(apiKeys.verify).not.toHaveBeenCalled();
+    // The connection inherits its owner's password access (all_users here).
+    expect(req.user).toMatchObject({ globalPasswordAccess: true });
 
     // Single use: the same handle again is refused.
     const again = makeDelegatedCtx(handle);
     await expect(guard.canActivate(again.ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it("gives the connection its owner's global password access", async () => {
+    const { guard, delegations } = makeGuard(null, {
+      passwordPolicy: { mode: 'selected_users', userIds: [] },
+    });
+    const { ctx, req } = makeDelegatedCtx(delegations.mint(grant));
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(req.user).toMatchObject({ globalPasswordAccess: false });
   });
 
   it('carries the connection\'s write grant', async () => {

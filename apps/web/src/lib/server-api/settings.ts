@@ -6,6 +6,8 @@ import type {
   EmailSettings,
   IntegrationPriorityDto,
   McpClientPolicy,
+  PasswordAccessMode,
+  PasswordAccessPolicy,
   PasswordGeneratorDefaults,
 } from '@weavestream/shared';
 import { DEFAULT_PASSWORD_GENERATOR_DEFAULTS } from '@weavestream/shared';
@@ -37,6 +39,11 @@ export type Settings = {
   mcpRemoteEnabled: boolean;
   /** Which AI apps may connect to `/mcp`. Changed only via `PUT /settings/mcp-client-policy`. */
   mcpClientPolicy: McpClientPolicy;
+  /**
+   * Global password access policy mode (UI copy only — the API enforces
+   * it). The user list is only in `getPasswordAccessPolicy()`.
+   */
+  passwordAccessMode: PasswordAccessMode;
   updatedAt: string;
 };
 
@@ -58,6 +65,7 @@ const DEFAULT_SETTINGS: Settings = {
   apiKeysEnabled: false,
   mcpRemoteEnabled: false,
   mcpClientPolicy: 'claude_chatgpt',
+  passwordAccessMode: 'all_users',
   updatedAt: new Date(0).toISOString(),
 };
 
@@ -119,6 +127,16 @@ export const getAiSettings = cache(async (): Promise<AiSettings> => {
 /** Integration priority order; null when the API refused (the card then hides). */
 export const getIntegrationPriority = cache(async (): Promise<IntegrationPriorityDto | null> => {
   const res = await serverApiFetch<IntegrationPriorityDto>('/settings/integration-priority');
+  return res.ok && res.data ? res.data : null;
+});
+
+/**
+ * `/settings/password-access-policy` — the global policy with its user list
+ * and the pickable users. `settings.manage` only; `null` on any failure so
+ * the settings page can still render the other sections.
+ */
+export const getPasswordAccessPolicy = cache(async (): Promise<PasswordAccessPolicy | null> => {
+  const res = await serverApiFetch<PasswordAccessPolicy>('/settings/password-access-policy');
   return res.ok && res.data ? res.data : null;
 });
 

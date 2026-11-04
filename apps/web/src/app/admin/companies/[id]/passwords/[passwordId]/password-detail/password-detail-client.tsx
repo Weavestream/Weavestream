@@ -4,7 +4,11 @@ import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { safeExternalHref } from '@weavestream/shared';
-import type { PasswordDetail, PasswordVersionSummary } from '@weavestream/shared';
+import type {
+  PasswordAccessMode,
+  PasswordDetail,
+  PasswordVersionSummary,
+} from '@weavestream/shared';
 import { copyToClipboard } from '@weavestream/shared/browser';
 import {
   FormattedCalendarDate,
@@ -27,6 +31,8 @@ interface Props {
   versions: PasswordVersionSummary[];
   canManage: boolean;
   canManageInternalAccess: boolean;
+  /** Global password access policy mode, for the internal-access copy. */
+  passwordAccessMode: PasswordAccessMode;
   folderName: string | null;
   assetName: string | null;
   me: { id: string; role: string };
@@ -46,6 +52,7 @@ export function PasswordDetailClient({
   versions,
   canManage,
   canManageInternalAccess,
+  passwordAccessMode,
   folderName,
   assetName,
   me,
@@ -372,6 +379,7 @@ export function PasswordDetailClient({
               password={password}
               canManage={canManageInternalAccess && !password.archivedAt}
               currentUserId={me.id}
+              passwordAccessMode={passwordAccessMode}
               onEdit={() => setEditingInternalAccess(true)}
             />
 
@@ -392,6 +400,7 @@ export function PasswordDetailClient({
         <InternalAccessDialog
           companyId={companyId}
           password={password}
+          passwordAccessMode={passwordAccessMode}
           onClose={() => setEditingInternalAccess(false)}
           onSaved={() => {
             setEditingInternalAccess(false);

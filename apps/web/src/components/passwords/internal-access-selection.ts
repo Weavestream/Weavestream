@@ -1,12 +1,17 @@
 import type { PasswordAccessUser } from '@weavestream/shared';
 
 /**
- * Pure selection rules for the internal-access dialog. The dialog owns
- * the state; these decide what a toggle, a load, or a save does to it.
+ * Pure selection rules for picking internal users: the per-entry
+ * internal-access dialog and the global password access policy in
+ * settings. The UI owns the state; these decide what a toggle, a load, or
+ * a save does to it.
  */
 
+/** The fields the selection rules read from a pickable user. */
+export type SelectableUser = { id: string; alwaysIncluded: boolean };
+
 /** Every eligible user's id, and the subset that can never be deselected. */
-export function accessUserIds(users: readonly PasswordAccessUser[]): {
+export function accessUserIds(users: readonly SelectableUser[]): {
   selectable: Set<string>;
   alwaysIncluded: Set<string>;
 } {
@@ -19,7 +24,7 @@ export function accessUserIds(users: readonly PasswordAccessUser[]): {
 /** The loaded selection, with always-included users ticked. */
 export function withAlwaysIncluded(
   selected: ReadonlySet<string>,
-  users: readonly PasswordAccessUser[],
+  users: readonly SelectableUser[],
 ): Set<string> {
   const next = new Set(selected);
   for (const user of users) {
@@ -71,6 +76,21 @@ export function restrictedIdsToSave(
 ): string[] {
   if (!restricted) return [];
   return Array.from(new Set([...Array.from(selected), ...Array.from(alwaysIncluded)]));
+}
+
+/**
+ * The `userIds` to save for the global password access policy. Super admins
+ * always pass and the API rejects their ids, so — unlike
+ * {@link restrictedIdsToSave} — always-included users are never sent, even
+ * though the UI shows them checked. Sorted for a stable request.
+ */
+export function globalPolicyIdsToSave(
+  selected: ReadonlySet<string>,
+  alwaysIncluded: ReadonlySet<string>,
+): string[] {
+  return Array.from(selected)
+    .filter((id) => !alwaysIncluded.has(id))
+    .sort();
 }
 
 export function accessSourceLabel(source: PasswordAccessUser['accessSource']): string {

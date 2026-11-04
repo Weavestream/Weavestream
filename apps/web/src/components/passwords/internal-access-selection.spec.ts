@@ -2,6 +2,7 @@ import type { PasswordAccessUser } from '@weavestream/shared';
 import {
   accessSourceLabel,
   accessUserIds,
+  globalPolicyIdsToSave,
   pruneUnavailable,
   restrictedIdsToSave,
   toggleSelection,
@@ -92,5 +93,19 @@ describe('accessSourceLabel', () => {
     ['membership', 'membership'],
   ] as const)('labels %s as "%s"', (source, label) => {
     expect(accessSourceLabel(source)).toBe(label);
+  });
+});
+
+describe('globalPolicyIdsToSave', () => {
+  it('sends nothing for an empty selection', () => {
+    expect(globalPolicyIdsToSave(new Set(), alwaysIncluded)).toEqual([]);
+  });
+
+  it('never sends always-included super admins, even when shown checked', () => {
+    expect(globalPolicyIdsToSave(new Set(['admin']), alwaysIncluded)).toEqual([]);
+    expect(globalPolicyIdsToSave(new Set(['ben', 'admin', 'ana']), alwaysIncluded)).toEqual([
+      'ana',
+      'ben',
+    ]);
   });
 });

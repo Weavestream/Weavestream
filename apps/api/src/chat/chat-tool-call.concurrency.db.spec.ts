@@ -49,6 +49,7 @@ const ACTOR: AuthedUser = {
   sessionId: '5bc00000-0000-4000-8000-00000000f001',
   mfaEnforcementCompletedAt: null,
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 
 const OVERRIDES_A = { title: 'Confirmed title', folderId: null, visibleToClients: true };

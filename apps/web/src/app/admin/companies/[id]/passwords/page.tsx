@@ -54,6 +54,10 @@ export default async function CompanyPasswordsPage({
   ]);
 
   const manage = canWriteCompany(me, company.id);
+  // A user outside the global password access policy cannot create an entry
+  // that would use it (the API returns 403), so the create entry points are
+  // hidden. UI hint only — the API enforces it.
+  const canCreate = manage && me.hasPasswordAccess;
   const prefillAssetId = typeof sp.assetId === 'string' ? sp.assetId : undefined;
   const openNew = sp.new === '1';
 
@@ -66,7 +70,7 @@ export default async function CompanyPasswordsPage({
         //description={`Access and manage shared passwords and logins for this ${lower(
         //  term.one,
         //)}.`}
-        actions={manage ? <NewPasswordAction /> : null}
+        actions={canCreate ? <NewPasswordAction /> : null}
       />
       <PageBody>
         <Panel
@@ -89,7 +93,7 @@ export default async function CompanyPasswordsPage({
             rows={items}
             folders={folders}
             canManage={manage}
-            openNew={openNew}
+            openNew={openNew && canCreate}
             prefillAssetId={prefillAssetId}
             generatorDefaults={settings.passwordGeneratorDefaults}
             showCounts={me.preferences.showItemCounts}

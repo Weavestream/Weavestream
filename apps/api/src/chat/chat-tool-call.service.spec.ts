@@ -11,6 +11,7 @@ const ACTOR: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 /** Same identity with the role that carries a row-level read restriction. */
 const CLIENT_ACTOR: AuthedUser = { ...ACTOR, role: 'CLIENT_USER' };

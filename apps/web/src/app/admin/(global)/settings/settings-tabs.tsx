@@ -2,7 +2,12 @@
 
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import type { AiSettings, EmailSettings, IntegrationPriorityDto } from '@weavestream/shared';
+import type {
+  AiSettings,
+  EmailSettings,
+  IntegrationPriorityDto,
+  PasswordAccessPolicy,
+} from '@weavestream/shared';
 import type { Settings } from '../../../../lib/server-api/settings';
 import {
   ArticleSettingsForm,
@@ -13,6 +18,7 @@ import { EmailSettingsForm } from './email-settings-form';
 import { AiSettingsForm } from './ai-settings-form';
 import { ApiKeysSwitch, McpClientPolicyChoice, McpRemoteSwitch } from './api-keys-switch';
 import { IntegrationPriorityList } from './integration-priority-list';
+import { PasswordAccessPolicySection } from './password-access-policy-section';
 import type { TabId } from './tab-ids';
 
 const TABS: Array<{ id: TabId; label: string; help: string }> = [
@@ -24,7 +30,7 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
   {
     id: 'passwords',
     label: 'Passwords',
-    help: 'Password generator defaults.',
+    help: 'Password access policy and password generator defaults.',
   },
   {
     id: 'articles',
@@ -59,6 +65,7 @@ export function SettingsTabs({
   emailSettings,
   aiSettings,
   integrationPriority = null,
+  passwordAccessPolicy = null,
   currentUserEmail,
 }: {
   initialTab: TabId;
@@ -66,6 +73,7 @@ export function SettingsTabs({
   emailSettings: EmailSettings;
   aiSettings: AiSettings;
   integrationPriority?: IntegrationPriorityDto | null;
+  passwordAccessPolicy?: PasswordAccessPolicy | null;
   currentUserEmail: string;
 }) {
   const router = useRouter();
@@ -148,7 +156,12 @@ export function SettingsTabs({
         }}
       >
         {tab === 'general' && <GeneralSettingsForm initial={settings} />}
-        {tab === 'passwords' && <PasswordSettingsForm initial={settings} />}
+        {tab === 'passwords' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
+            <PasswordAccessPolicySection initial={passwordAccessPolicy} />
+            <PasswordSettingsForm initial={settings} />
+          </div>
+        )}
         {tab === 'articles' && <ArticleSettingsForm initial={settings} />}
         {tab === 'email' && (
           <EmailSettingsForm

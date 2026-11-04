@@ -28,11 +28,17 @@ export async function CredentialsPanel({
   assetId,
   mode = 'admin',
   companySlug,
+  canCreate = true,
 }: {
   companyId: string;
   assetId: string;
   mode?: 'admin' | 'portal';
   companySlug?: string;
+  /**
+   * False hides "Add / Attach a credential" for a user outside the global
+   * password access policy. UI hint only — the API enforces it.
+   */
+  canCreate?: boolean;
 }) {
   const [items, folders, settings] = await Promise.all([
     listPasswords(companyId, { assetId }),
@@ -61,7 +67,7 @@ export async function CredentialsPanel({
         </span>
       }
       actions={
-        mode === 'admin' ? (
+        mode === 'admin' && canCreate ? (
           <AttachCredentialButton
             companyId={companyId}
             assetId={assetId}
@@ -85,7 +91,7 @@ export async function CredentialsPanel({
           {mode === 'admin'
             ? 'No credentials are attached to this asset yet.'
             : 'No credentials are available for this asset.'}
-          {mode === 'admin' && (
+          {mode === 'admin' && canCreate && (
             <div style={{ marginTop: 8 }}>
               <AttachCredentialButton
                 companyId={companyId}

@@ -44,6 +44,7 @@ const SUPER: AuthedUser = {
   sessionId: 'sess-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 
 const COMPANY_ID = '00000000-0000-0000-0000-000000000001';

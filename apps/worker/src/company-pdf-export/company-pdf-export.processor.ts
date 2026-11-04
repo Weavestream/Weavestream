@@ -99,7 +99,7 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
     job: Job,
     payload: Extract<CompanyExportJob, { kind: 'export' }>,
   ): Promise<ExportJobResult> {
-    const { exportId, companyId, includePasswords, pdfPasswordCiphertext } = payload;
+    const { exportId, companyId, includePasswords, pdfPasswordCiphertext, requestedBy } = payload;
 
     // Decrypt the PDF password right before we hand it to PDFKit so the
     // plaintext lives in this process's memory for the shortest time
@@ -123,7 +123,9 @@ export class CompanyPdfExportWorker implements OnModuleDestroy {
     this.logger.log(`[${job.id}] Gathering data for company ${companyId}`);
     let data;
     try {
-      data = await this.exportData.gather(companyId, { includePasswords });
+      // `requestedBy` is undefined for a job queued before it existed; the
+      // data service then fails closed (no password entries, no attachments).
+      data = await this.exportData.gather(companyId, { includePasswords, requestedBy });
       await this.hydrateArticleImages(companyId, data);
     } catch (err) {
       await this.recordFailure(exportId, companyId, includePasswords, err);

@@ -4,10 +4,13 @@ import {
   updateApiKeysSettingSchema,
   updateMcpClientPolicySchema,
   updateMcpRemoteSettingSchema,
+  updatePasswordAccessPolicySchema,
   updateSettingsSchema,
   type UpdateApiKeysSettingInput,
   type UpdateMcpClientPolicyInput,
+  type PasswordAccessPolicy,
   type UpdateMcpRemoteSettingInput,
+  type UpdatePasswordAccessPolicyInput,
   type UpdateSettingsInput,
 } from '@weavestream/shared';
 import { SettingsService } from './settings.service.js';
@@ -100,5 +103,38 @@ export class SettingsController {
     @Req() req: Request,
   ) {
     return this.settings.setMcpClientPolicy(user, dto.policy, requestMetaOf(req));
+  }
+
+  /**
+   * The global password access policy with its user list and the users that
+   * can be picked. `settings.manage` only: the list is never part of the
+   * public `GET /settings`.
+   */
+  @Get('password-access-policy')
+  @RequirePermission('settings.manage')
+  async getPasswordAccessPolicy(): Promise<PasswordAccessPolicy> {
+    const [policy, users] = await Promise.all([
+      this.settings.passwordAccessPolicy(),
+      this.settings.listPasswordAccessUsers(),
+    ]);
+    return { mode: policy.mode, userIds: [...policy.userIds], users };
+  }
+
+  /**
+   * Change who can open password entries that have no own allow-list.
+   * Same rules as the switches above: step-up, and never reachable by an
+   * API key or a connection. Returns success only — no echo of the input.
+   */
+  @Put('password-access-policy')
+  @RequirePermission('settings.manage')
+  @RequireStepUp()
+  @InteractiveOnly()
+  async setPasswordAccessPolicy(
+    @CurrentUser() user: AuthedUser,
+    @Body(new ZodBody(updatePasswordAccessPolicySchema)) dto: UpdatePasswordAccessPolicyInput,
+    @Req() req: Request,
+  ): Promise<{ ok: true }> {
+    await this.settings.setPasswordAccessPolicy(user, dto, requestMetaOf(req));
+    return { ok: true };
   }
 }

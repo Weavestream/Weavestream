@@ -149,6 +149,19 @@ Each row shows the user's role and where their access comes from (membership, gl
 
 Editing internal access requires both write access to the company **and** the membership-management permission. Super admins always qualify. Other users without that permission can see the panel's current state but not the **Edit** button. The panel is also read-only on archived credentials.
 
+### Setting a Global Password Access Policy
+
+Use the global policy when most credentials must be limited to a small team, for example to block a new technician from all credentials except those you choose.
+
+1. Go to **Settings → Passwords**
+2. In **Password access**, select **Selected users only**
+3. Tick the operators and contractors who need access. Super admins are always included.
+4. Click **Save password access** and confirm with step-up authentication
+
+The policy applies to every credential that has no own internal-access list. A credential with its own list uses only that list, so you can still give one credential to a user who is not in the global list. When the global policy is **Selected users only**, the first option in a credential's **Internal access** dialog reads **Use the global policy (selected users)**.
+
+Users outside the policy do not see those credentials anywhere, including search, stars, PDF exports, and MCP. They also do not see **New password**, because a credential they create without its own list would be hidden from them. Select **All internal users** to go back to the default. The saved user list is kept for later.
+
 ## Linking to Articles and Assets
 
 Passwords can be linked to articles and assets using the same relations system used by the rest of Weavestream.

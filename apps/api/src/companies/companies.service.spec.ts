@@ -30,6 +30,7 @@ const ACTOR: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 
 const META = { ip: '127.0.0.1', userAgent: 'jest' };

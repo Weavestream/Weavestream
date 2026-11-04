@@ -39,6 +39,25 @@ export const MCP_CLIENT_POLICY_LABELS: Record<McpClientPolicy, string> = {
   any: 'Any MCP app',
 };
 
+/**
+ * Workspace password access policy. `all_users` = every internal user with
+ * company access can open an entry that has no own allow-list (the original
+ * behaviour). `selected_users` = only the users in the global list (plus
+ * super admins) can. An entry with its own allow-list ignores this policy.
+ */
+export const passwordAccessModeValues = ['all_users', 'selected_users'] as const;
+export const passwordAccessModeSchema = z.enum(passwordAccessModeValues);
+export type PasswordAccessMode = z.infer<typeof passwordAccessModeSchema>;
+
+/** UI labels for {@link PasswordAccessMode}. */
+export const PASSWORD_ACCESS_MODE_LABELS: Record<PasswordAccessMode, string> = {
+  all_users: 'All internal users',
+  selected_users: 'Selected users only',
+};
+
+/** Max size of the global password access list. */
+export const PASSWORD_ACCESS_POLICY_MAX_USERS = 500;
+
 export const systemSettingsSchema = z.object({
   workspaceName: z.string().min(1).max(60),
   workspaceSubtitle: z.string().min(1).max(60),
@@ -51,6 +70,9 @@ export const systemSettingsSchema = z.object({
   apiKeysEnabled: z.boolean(),
   mcpRemoteEnabled: z.boolean(),
   mcpClientPolicy: mcpClientPolicySchema,
+  // Mode only. The user list is never in this DTO: `GET /settings` is
+  // readable by every signed-in user.
+  passwordAccessMode: passwordAccessModeSchema,
   updatedAt: z.string(),
 });
 
@@ -92,6 +114,38 @@ export type UpdateMcpRemoteSettingInput = UpdateApiKeysSettingInput;
  */
 export const updateMcpClientPolicySchema = z.object({ policy: mcpClientPolicySchema }).strict();
 export type UpdateMcpClientPolicyInput = z.infer<typeof updateMcpClientPolicySchema>;
+
+/**
+ * Global password access policy (`PUT /settings/password-access-policy`).
+ * Same rules as the switches above: step-up, interactive sessions only.
+ * Super admins always pass and are never stored in `userIds`.
+ */
+export const updatePasswordAccessPolicySchema = z
+  .object({
+    mode: passwordAccessModeSchema,
+    userIds: z.array(z.guid()).max(PASSWORD_ACCESS_POLICY_MAX_USERS),
+  })
+  .strict();
+export type UpdatePasswordAccessPolicyInput = z.infer<typeof updatePasswordAccessPolicySchema>;
+
+/** A user that can be picked for the global password access list. */
+export const passwordPolicyUserSchema = z.object({
+  id: z.guid(),
+  name: z.string(),
+  email: z.string(),
+  role: z.enum(['SUPER_ADMIN', 'OPERATOR', 'CONTRACTOR']),
+  /** Super admins: always pass, shown checked, never saved. */
+  alwaysIncluded: z.boolean(),
+});
+export type PasswordPolicyUser = z.infer<typeof passwordPolicyUserSchema>;
+
+/** `GET /settings/password-access-policy` (settings.manage only). */
+export const passwordAccessPolicySchema = z.object({
+  mode: passwordAccessModeSchema,
+  userIds: z.array(z.guid()),
+  users: z.array(passwordPolicyUserSchema),
+});
+export type PasswordAccessPolicy = z.infer<typeof passwordAccessPolicySchema>;
 
 export type SystemSettings = z.infer<typeof systemSettingsSchema>;
 export type UpdateSettingsInput = z.infer<typeof updateSettingsSchema>;

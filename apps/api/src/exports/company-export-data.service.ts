@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import {
   integrationProvenanceSchema,
@@ -11,6 +11,11 @@ import {
   type ReconstructionGapKind,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
+import {
+  passesGlobalPasswordPolicy,
+  passwordReadWhereFor,
+} from '../passwords/password-access-policy.js';
+import { readPasswordAccessPolicy } from '../settings/settings.service.js';
 import {
   SecretEncryptionService,
   passwordVaultAad,
@@ -295,18 +300,35 @@ interface SafeSyncBindingIndex {
 // Service
 // ---------------------------------------------------------------------------
 
+/**
+ * Which password entries an export may include, as a Prisma filter, or
+ * `null` for none at all (fail closed).
+ */
+type ExportPasswordScope = Prisma.PasswordWhereInput | null;
+
 @Injectable()
 export class CompanyExportDataService {
+  private readonly logger = new Logger(CompanyExportDataService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly crypto: SecretEncryptionService,
   ) {}
 
+  /**
+   * `requestedBy` is the user who started the export. The export contains
+   * only the password entries (and their attachments) that this user can
+   * open, with the same rule as every other read path. Without it — a job
+   * queued before the field existed — no entries are exported.
+   */
   async gather(
     companyId: string,
-    opts: { includePasswords: boolean },
+    opts: { includePasswords: boolean; requestedBy?: string },
   ): Promise<CompanyExportData> {
-    const bindings = await this.fetchSafeSyncBindings(companyId);
+    const [bindings, passwordScope] = await Promise.all([
+      this.fetchSafeSyncBindings(companyId),
+      this.resolvePasswordScope(companyId, opts.requestedBy),
+    ]);
     const [
       company,
       workspaceName,
@@ -327,11 +349,11 @@ export class CompanyExportDataService {
         this.fetchMembers(companyId),
         this.fetchAssets(companyId, bindings),
         this.fetchArticles(companyId, bindings),
-        this.fetchPasswords(companyId, opts.includePasswords),
+        this.fetchPasswords(companyId, opts.includePasswords, passwordScope),
         this.fetchDomains(companyId),
-        this.fetchUploads(companyId),
+        this.fetchUploads(companyId, passwordScope),
         this.fetchIpam(companyId, bindings),
-        this.fetchRelations(companyId, bindings),
+        this.fetchRelations(companyId, bindings, passwordScope),
         this.fetchReconstruction(companyId, bindings),
         this.fetchBreezeIntegrationActive(companyId),
       ]);
@@ -359,6 +381,46 @@ export class CompanyExportDataService {
   // -------------------------------------------------------------------------
   // Private fetchers
   // -------------------------------------------------------------------------
+
+  /**
+   * Build the requester's password access from FRESH rows (the user and the
+   * global policy), not from the moment the job was queued. Fails closed:
+   * a missing requester, or one that no longer exists or is inactive, gets
+   * no password entries at all.
+   */
+  private async resolvePasswordScope(
+    companyId: string,
+    requestedBy: string | undefined,
+  ): Promise<ExportPasswordScope> {
+    if (!requestedBy) {
+      this.logger.warn(
+        `Export for company ${companyId} has no requester; password entries and their attachments are left out.`,
+      );
+      return null;
+    }
+    const [user, settings] = await Promise.all([
+      this.prisma.user.findUnique({
+        where: { id: requestedBy },
+        select: { id: true, role: true, isActive: true },
+      }),
+      this.prisma.systemSetting.findUnique({
+        where: { id: 'singleton' },
+        select: { passwordAccessMode: true, passwordAccessUserIds: true },
+      }),
+    ]);
+    if (!user || !user.isActive) {
+      this.logger.warn(
+        `Export for company ${companyId}: requester ${requestedBy} is missing or inactive; password entries and their attachments are left out.`,
+      );
+      return null;
+    }
+    const policy = readPasswordAccessPolicy(settings ?? {});
+    return passwordReadWhereFor({
+      id: user.id,
+      role: user.role,
+      globalPasswordAccess: passesGlobalPasswordPolicy(user, policy),
+    });
+  }
 
   private async fetchSafeSyncBindings(companyId: string): Promise<SafeSyncBindingIndex> {
     const rows = await this.prisma.integrationSyncRecord.findMany({
@@ -736,7 +798,9 @@ export class CompanyExportDataService {
   private async fetchPasswords(
     companyId: string,
     decrypt: boolean,
+    scope: ExportPasswordScope,
   ): Promise<ExportPassword[]> {
+    if (scope === null) return [];
     // Only pull cipher columns from Postgres when the caller actually
     // intends to decrypt them. The metadata-only path keeps sensitive
     // bytes out of the worker process entirely (and out of any Prisma
@@ -755,7 +819,7 @@ export class CompanyExportDataService {
 
     if (!decrypt) {
       const rows = await this.prisma.password.findMany({
-        where: { companyId, archivedAt: null },
+        where: { companyId, archivedAt: null, AND: [scope] },
         select: baseSelect,
         orderBy: [{ folder: { name: 'asc' } }, { name: 'asc' }],
       });
@@ -775,7 +839,7 @@ export class CompanyExportDataService {
     }
 
     const rows = await this.prisma.password.findMany({
-      where: { companyId, archivedAt: null },
+      where: { companyId, archivedAt: null, AND: [scope] },
       select: {
         ...baseSelect,
         // Row id is needed to rebuild each blob's AAD identity — it is
@@ -860,9 +924,32 @@ export class CompanyExportDataService {
     }));
   }
 
-  private async fetchUploads(companyId: string): Promise<ExportUpload[]> {
+  private async fetchUploads(
+    companyId: string,
+    scope: ExportPasswordScope,
+  ): Promise<ExportUpload[]> {
+    // Files attached to an entry the requester cannot open are left out, so
+    // a file name never reveals a hidden entry. The ids of readable entries
+    // come from the same policy filter as `fetchPasswords`.
+    const readablePasswordIds =
+      scope === null
+        ? []
+        : (
+            await this.prisma.password.findMany({
+              where: { companyId, AND: [scope] },
+              select: { id: true },
+            })
+          ).map((p) => p.id);
     const rows = await this.prisma.upload.findMany({
-      where: { companyId, deletedAt: null },
+      where: {
+        companyId,
+        deletedAt: null,
+        OR: [
+          { attachedToType: null },
+          { attachedToType: { not: 'password' } },
+          { attachedToId: { in: readablePasswordIds } },
+        ],
+      },
       select: {
         filename: true,
         mimeType: true,
@@ -1111,6 +1198,7 @@ export class CompanyExportDataService {
   private async fetchRelations(
     companyId: string,
     bindings: SafeSyncBindingIndex,
+    passwordScope: ExportPasswordScope,
   ): Promise<ExportRelation[]> {
     const rows = await this.prisma.relation.findMany({
       where: { companyId },
@@ -1174,9 +1262,16 @@ export class CompanyExportDataService {
             select: { id: true, companyId: true, title: true },
           })
         : [],
-      idsByType.password.length > 0
+      // A relation to an entry the requester cannot open is omitted, the
+      // same as one to an archived entry (see below).
+      idsByType.password.length > 0 && passwordScope !== null
         ? this.prisma.password.findMany({
-            where: { companyId, id: { in: idsByType.password }, archivedAt: null },
+            where: {
+              companyId,
+              id: { in: idsByType.password },
+              archivedAt: null,
+              AND: [passwordScope],
+            },
             select: { id: true, companyId: true, name: true },
           })
         : [],

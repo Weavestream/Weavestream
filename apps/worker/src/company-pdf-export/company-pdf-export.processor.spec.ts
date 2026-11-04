@@ -108,3 +108,53 @@ describe('CompanyPdfExportWorker reconstruction export compatibility', () => {
     },
   );
 });
+
+/**
+ * Issue #110: `requestedBy` is optional in the job schema so a job queued
+ * before the field existed still reaches the data service, which then
+ * fails closed (no password entries, no password attachments). A required
+ * field would make `dispatch` reject the job before that logic ran.
+ */
+describe('CompanyPdfExportWorker requester pass-through', () => {
+  const REQUESTER = '00000000-0000-4000-8000-0000000000a1';
+
+  function makeWorker() {
+    const data = companyPdfTestFixture({ includePasswords: false });
+    const storage = {
+      exportKey: jest.fn().mockReturnValue('companies/c1/exports/export.pdf'),
+      putObject: jest.fn().mockResolvedValue(undefined),
+      getObjectBody: jest.fn(),
+    };
+    const exportData = { gather: jest.fn().mockResolvedValue(data) };
+    const worker = new CompanyPdfExportWorker(
+      {} as never,
+      storage as never,
+      { decrypt: jest.fn() } as never,
+      { log: jest.fn().mockResolvedValue(undefined) } as never,
+      exportData as never,
+    );
+    return { worker, exportData, data };
+  }
+
+  it.each([
+    ['a new job', REQUESTER],
+    ['a legacy job without an owner', undefined],
+  ])('dispatches %s and passes the requester to the data service', async (_label, requestedBy) => {
+    const { worker, exportData, data } = makeWorker();
+    const payload = {
+      kind: 'export',
+      exportId: '00000000-0000-4000-8000-000000000099',
+      companyId: data.company.id,
+      includePasswords: false,
+      ...(requestedBy ? { requestedBy } : {}),
+    };
+
+    await worker['dispatch']({ id: 'job-1', name: 'export', data: payload } as never);
+
+    expect(exportData.gather).toHaveBeenCalledTimes(1);
+    expect(exportData.gather.mock.calls[0][1]).toStrictEqual({
+      includePasswords: false,
+      requestedBy,
+    });
+  });
+});

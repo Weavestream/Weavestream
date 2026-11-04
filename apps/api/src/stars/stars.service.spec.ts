@@ -25,6 +25,7 @@ const SUPER_ADMIN: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 
 const MEMBER: AuthedUser = {
@@ -207,5 +208,118 @@ describe('StarsService entity lookup tenant scope', () => {
     });
     expect(prisma.starredAsset.delete).toHaveBeenCalled();
     expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ companyId: null }));
+  });
+});
+
+/**
+ * Issue #110: a starred password entry the actor can no longer open
+ * (own allow-list or the global password access policy) must not keep
+ * showing its name, and a hidden entry cannot be starred.
+ */
+describe('StarsService password access', () => {
+  const COMPANY = '2ba00000-0000-4000-8000-00000000c110';
+  const PASSWORD = '2ba00000-0000-4000-8000-00000000d110';
+  const OUTSIDER: AuthedUser = {
+    ...SUPER_ADMIN,
+    role: 'OPERATOR',
+    globalAccess: 'FULL',
+    globalPasswordAccess: false,
+  };
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  it('filters starred passwords in the query, not after the load', async () => {
+    const prisma = makePrisma();
+    await svcWith(prisma).list(OUTSIDER);
+    expect(prisma.starredPassword.findMany.mock.calls[0]![0]!.where).toEqual({
+      userId: OUTSIDER.id,
+      password: { restrictedToUserIds: { has: OUTSIDER.id } },
+    });
+  });
+
+  it('keeps every starred password in scope for a super admin', async () => {
+    const prisma = makePrisma();
+    await svcWith(prisma).list(SUPER_ADMIN);
+    expect(prisma.starredPassword.findMany.mock.calls[0]![0]!.where).toEqual({
+      userId: SUPER_ADMIN.id,
+      password: {},
+    });
+  });
+
+  /**
+   * A company-only (membership-scoped) actor, with the real tenant
+   * middleware check on every password read. The row is visible only when
+   * the actor passes the policy filter in the query.
+   */
+  function setupMember(actor: AuthedUser, existingStar = false) {
+    const ctx: TenantContext = {
+      userId: actor.id,
+      role: 'OPERATOR',
+      email: actor.email,
+      allowedCompanyIds: [COMPANY],
+      isSuperAdmin: false,
+      globalAccess: 'NONE',
+      requestId: 'req-110',
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+    };
+    const createdAt = new Date('2026-11-04T08:00:00.000Z');
+    const prisma = {
+      password: {
+        findFirst: jest.fn(
+          async (args: {
+            where: { companyId?: { in?: string[] }; OR?: unknown; restrictedToUserIds?: unknown };
+          }) => {
+            assertTenantScope({ model: 'Password', action: 'findFirst', args }, ctx);
+            const inScope = args.where.companyId?.in?.includes(COMPANY) ?? false;
+            // The stored entry has no own list, so only the "global
+            // access" branch (`OR [isEmpty, has]`) can match it.
+            return inScope && args.where.OR ? { companyId: COMPANY } : null;
+          },
+        ),
+      },
+      membership: { findFirst: jest.fn().mockResolvedValue({ id: 'm-1' }) },
+      starredPassword: {
+        findUnique: jest.fn().mockResolvedValue(existingStar ? { createdAt } : null),
+        create: jest.fn().mockResolvedValue({ createdAt }),
+        delete: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const audit = makeAudit();
+    const svc = new StarsService(prisma as never, audit as never);
+    const run = <T>(fn: () => Promise<T>) => runWithTenantContext(ctx, fn);
+    return { svc, prisma, audit, run };
+  }
+
+  const MEMBER: AuthedUser = { ...OUTSIDER, globalAccess: 'NONE', globalPasswordAccess: true };
+  const MEMBER_OUTSIDER: AuthedUser = { ...MEMBER, globalPasswordAccess: false };
+
+  it('lets a company-only operator star and unstar a password entry they can open', async () => {
+    const { svc, prisma, audit, run } = setupMember(MEMBER);
+    await expect(run(() => svc.star(MEMBER, 'password', PASSWORD, meta))).resolves.toMatchObject({
+      starred: true,
+    });
+    expect(prisma.starredPassword.create).toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ companyId: COMPANY }));
+
+    const unstarring = setupMember(MEMBER, true);
+    await expect(
+      unstarring.run(() => unstarring.svc.unstar(MEMBER, 'password', PASSWORD, meta)),
+    ).resolves.toEqual({ starred: false });
+    expect(unstarring.audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ companyId: COMPANY }),
+    );
+  });
+
+  it('keeps the company scope at the top level of the password lookup', async () => {
+    const { svc, prisma, run } = setupMember(MEMBER_OUTSIDER);
+    await expect(
+      run(() => svc.star(MEMBER_OUTSIDER, 'password', PASSWORD, meta)),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    expect(prisma.password.findFirst.mock.calls[0]![0]!.where).toEqual({
+      id: PASSWORD,
+      companyId: { in: [COMPANY] },
+      restrictedToUserIds: { has: MEMBER_OUTSIDER.id },
+    });
+    expect(prisma.starredPassword.create).not.toHaveBeenCalled();
   });
 });

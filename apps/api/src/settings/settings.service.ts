@@ -1,16 +1,21 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import type {
   ArticleEditorMode,
   McpClientPolicy,
+  PasswordAccessMode,
   PasswordGeneratorDefaults,
+  PasswordPolicyUser,
+  UpdatePasswordAccessPolicyInput,
   UpdateSettingsInput,
 } from '@weavestream/shared';
 import {
   DEFAULT_PASSWORD_GENERATOR_DEFAULTS,
   articleEditorModeSchema,
   mcpClientPolicySchema,
+  passwordAccessModeSchema,
   passwordGeneratorDefaultsSchema,
 } from '@weavestream/shared';
+import type { GlobalPasswordPolicy } from '../passwords/password-access-policy.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
@@ -33,6 +38,8 @@ export interface SystemSettingsDTO {
   apiKeysEnabled: boolean;
   mcpRemoteEnabled: boolean;
   mcpClientPolicy: McpClientPolicy;
+  /** Mode only — the global user list never leaves `passwordAccessPolicy()`. */
+  passwordAccessMode: PasswordAccessMode;
   updatedAt: string;
 }
 
@@ -45,7 +52,11 @@ export class SettingsService {
   // enough to avoid stale UI after a PATCH, long enough to shave the
   // Postgres round-trip off the hot path under burst load.
   private static readonly CACHE_TTL_MS = 5_000;
-  private cache: { value: SystemSettingsDTO; expiresAt: number } | null = null;
+  private cache: {
+    value: SystemSettingsDTO;
+    passwordPolicy: GlobalPasswordPolicy;
+    expiresAt: number;
+  } | null = null;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -53,15 +64,22 @@ export class SettingsService {
   ) {}
 
   async get(): Promise<SystemSettingsDTO> {
+    return (await this.cached()).value;
+  }
+
+  private async cached() {
     const now = Date.now();
     if (this.cache && this.cache.expiresAt > now) {
-      return this.cache.value;
+      return this.cache;
     }
 
     const row = await this.loadOrSeed();
-    const value = toDto(row);
-    this.cache = { value, expiresAt: now + SettingsService.CACHE_TTL_MS };
-    return value;
+    this.cache = {
+      value: toDto(row),
+      passwordPolicy: readPasswordAccessPolicy(row),
+      expiresAt: now + SettingsService.CACHE_TTL_MS,
+    };
+    return this.cache;
   }
 
   /**
@@ -202,6 +220,111 @@ export class SettingsService {
   }
 
   /**
+   * The global password access policy (issue #110). Read by `AuthGuard` on
+   * every request through the same 5 s cache as `get()`: a change takes
+   * effect on this replica at once and on others within the TTL.
+   */
+  async passwordAccessPolicy(): Promise<GlobalPasswordPolicy> {
+    return (await this.cached()).passwordPolicy;
+  }
+
+  /**
+   * Users that can be picked for the global list: active super admins
+   * (always pass, shown checked, never stored) and active OPERATOR /
+   * CONTRACTOR users. Client users are never eligible.
+   */
+  async listPasswordAccessUsers(): Promise<PasswordPolicyUser[]> {
+    const users = await this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        role: { in: ['SUPER_ADMIN', 'OPERATOR', 'CONTRACTOR'] },
+      },
+      select: { id: true, name: true, email: true, role: true },
+      orderBy: [{ name: 'asc' }, { email: 'asc' }],
+    });
+    return users.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      role: u.role as PasswordPolicyUser['role'],
+      alwaysIncluded: u.role === 'SUPER_ADMIN',
+    }));
+  }
+
+  /**
+   * Change the global password access policy. Every listed user must be an
+   * active OPERATOR or CONTRACTOR; super admins always pass and are never
+   * stored. The write and its audit row commit in one transaction, the same
+   * as `setAccessSwitch`, and the cache is dropped in `finally`.
+   */
+  async setPasswordAccessPolicy(
+    actor: AuthedUser,
+    input: UpdatePasswordAccessPolicyInput,
+    meta: { ip: string; userAgent: string },
+  ): Promise<void> {
+    const userIds = Array.from(new Set(input.userIds)).sort();
+    if (userIds.length > 0) {
+      const eligible = await this.prisma.user.findMany({
+        where: {
+          id: { in: userIds },
+          isActive: true,
+          role: { in: ['OPERATOR', 'CONTRACTOR'] },
+        },
+        select: { id: true },
+      });
+      const eligibleIds = new Set(eligible.map((u) => u.id));
+      const invalid = userIds.filter((id) => !eligibleIds.has(id));
+      if (invalid.length > 0) {
+        throw new BadRequestException({
+          error: 'InvalidPasswordAccessUsers',
+          message:
+            'The password access list can only include active operators and contractors. Super admins always have access.',
+          userIds: invalid,
+        });
+      }
+    }
+
+    await this.loadOrSeed();
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const before = await tx.systemSetting.findUniqueOrThrow({
+          where: { id: SINGLETON_ID },
+          select: { passwordAccessMode: true, passwordAccessUserIds: true },
+        });
+        const row = await tx.systemSetting.update({
+          where: { id: SINGLETON_ID },
+          data: {
+            passwordAccessMode: input.mode,
+            passwordAccessUserIds: userIds,
+            updatedBy: actor.id,
+          },
+          select: { passwordAccessMode: true, passwordAccessUserIds: true },
+        });
+        // User ids only (never names or emails) — the same class as actorId.
+        await this.audit.logWithClient(tx, {
+          actorId: actor.id,
+          action: AUDIT_ACTIONS.settings.passwordAccessPolicyChange,
+          entityType: 'SystemSetting',
+          entityId: SINGLETON_ID,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+          before: {
+            mode: before.passwordAccessMode,
+            userIds: before.passwordAccessUserIds,
+          },
+          after: {
+            mode: row.passwordAccessMode,
+            userIds: row.passwordAccessUserIds,
+            sessionId: actor.sessionId,
+          },
+        });
+      });
+    } finally {
+      this.cache = null;
+    }
+  }
+
+  /**
    * Change one instance-wide access setting. The write and its audit row commit
    * in one transaction: a change to who can authenticate must never exist
    * without its record, and a failed audit must leave the policy as it was.
@@ -285,6 +408,8 @@ type SystemSettingRow = {
   apiKeysEnabled: boolean;
   mcpRemoteEnabled: boolean;
   mcpClientPolicy: string;
+  passwordAccessMode?: string;
+  passwordAccessUserIds?: string[];
   updatedAt: Date;
 };
 
@@ -307,6 +432,31 @@ function readDefaultEditorMode(value: string): ArticleEditorMode {
 function readMcpClientPolicy(value: string): McpClientPolicy {
   const parsed = mcpClientPolicySchema.safeParse(value);
   return parsed.success ? parsed.data : 'claude_chatgpt';
+}
+
+/**
+ * Same defence for the password access mode (CHECK constraint in migration
+ * 0090). An unknown value reads as `all_users`, which is the behaviour the
+ * product had before the policy existed — the per-entry lists still apply.
+ */
+function readPasswordAccessMode(value: string | undefined): PasswordAccessMode {
+  const parsed = passwordAccessModeSchema.safeParse(value);
+  return parsed.success ? parsed.data : 'all_users';
+}
+
+/**
+ * Read the global policy from a `system_settings` row. Exported so code
+ * that runs outside a request (the PDF export worker) reads the same
+ * rule from a fresh row.
+ */
+export function readPasswordAccessPolicy(row: {
+  passwordAccessMode?: string;
+  passwordAccessUserIds?: string[];
+}): GlobalPasswordPolicy {
+  return {
+    mode: readPasswordAccessMode(row.passwordAccessMode),
+    userIds: row.passwordAccessUserIds ?? [],
+  };
 }
 
 /**
@@ -336,6 +486,7 @@ function toDto(row: SystemSettingRow): SystemSettingsDTO {
     apiKeysEnabled: row.apiKeysEnabled,
     mcpRemoteEnabled: row.mcpRemoteEnabled,
     mcpClientPolicy: readMcpClientPolicy(row.mcpClientPolicy),
+    passwordAccessMode: readPasswordAccessMode(row.passwordAccessMode),
     updatedAt: row.updatedAt.toISOString(),
   };
 }

@@ -179,6 +179,7 @@ const OPERATOR: AuthedUser = {
   sessionId: 'sess-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 const CLIENT: AuthedUser = {
   id: 'user-2',
@@ -189,6 +190,7 @@ const CLIENT: AuthedUser = {
   sessionId: 'sess-2',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 
 describe('DomainsService — create', () => {

@@ -69,6 +69,7 @@ function actor(role: 'OPERATOR' | 'CLIENT_USER'): AuthedUser {
     sessionId: id('e002'),
     mfaEnforcementCompletedAt: null,
     mfaPending: false,
+    globalPasswordAccess: true,
   } as AuthedUser;
 }
 

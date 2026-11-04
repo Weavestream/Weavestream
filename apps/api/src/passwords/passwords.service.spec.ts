@@ -378,6 +378,7 @@ const OPERATOR: AuthedUser = {
   sessionId: 'sess-op',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 const OTHER_OPERATOR: AuthedUser = {
   ...OPERATOR,
@@ -473,6 +474,72 @@ describe('PasswordsService — list', () => {
 
     const list = await svc.list(SUPER, 'co-1', {});
     expect(list.map((p) => p.id).sort()).toEqual(['pwd-a', 'pwd-b']);
+  });
+});
+
+describe('PasswordsService — global password access policy (issue #110)', () => {
+  const OUTSIDER: AuthedUser = { ...OPERATOR, globalPasswordAccess: false };
+  const OUTSIDE_MANAGER: AuthedUser = { ...MEMBERSHIP_MANAGER, globalPasswordAccess: false };
+
+  function stubs() {
+    return makeStubs({
+      passwords: [
+        passwordRow({ id: 'pwd-open', restrictedToUserIds: [], passwordCiphertext: 'ENC(open)' }),
+        passwordRow({ id: 'pwd-mine', restrictedToUserIds: ['user-op'], passwordCiphertext: 'ENC(mine)' }),
+        passwordRow({ id: 'pwd-theirs', restrictedToUserIds: ['someone-else'] }),
+      ],
+      accessUsers: [
+        { id: 'user-op', email: 'op@acme.test', name: 'Operator', role: 'OPERATOR' },
+        { id: 'user-manager', email: 'manager@acme.test', name: 'Manager', role: 'OPERATOR' },
+      ],
+    });
+  }
+
+  it('lists only own-list entries for a user outside the policy', async () => {
+    const { svc } = stubs();
+    const list = await svc.list(OUTSIDER, 'co-1', {});
+    expect(list.map((p) => p.id)).toEqual(['pwd-mine']);
+  });
+
+  it('refuses detail and reveal of an entry without own list, but allows an own-list grant', async () => {
+    const { svc } = stubs();
+    await expect(svc.getDetail(OUTSIDER, 'co-1', 'pwd-open')).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    await expect(svc.reveal(OUTSIDER, 'co-1', 'pwd-open', {}, META)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    await expect(svc.reveal(OUTSIDER, 'co-1', 'pwd-mine', {}, META)).resolves.toEqual({
+      password: 'mine',
+    });
+  });
+
+  it('keeps today\'s behaviour for a user inside the policy', async () => {
+    const { svc } = stubs();
+    const list = await svc.list(OPERATOR, 'co-1', {});
+    expect(list.map((p) => p.id).sort()).toEqual(['pwd-mine', 'pwd-open']);
+  });
+
+  it('refuses to create an entry that would use the global policy', async () => {
+    const { svc } = stubs();
+    await expect(
+      svc.create(OUTSIDER, 'co-1', { name: 'New', password: 'x' }, META),
+    ).rejects.toThrow('You do not have password access');
+    await expect(
+      svc.create(OUTSIDE_MANAGER, 'co-1', { name: 'New', password: 'x', restrictedToUserIds: [] }, META),
+    ).rejects.toThrow('You do not have password access');
+  });
+
+  it('lets a manager outside the policy create an entry with its own list', async () => {
+    const { svc } = stubs();
+    await expect(
+      svc.create(
+        OUTSIDE_MANAGER,
+        'co-1',
+        { name: 'New', password: 'x', restrictedToUserIds: ['user-manager'] },
+        META,
+      ),
+    ).resolves.toMatchObject({ restrictedToUserIds: ['user-manager'] });
   });
 });
 

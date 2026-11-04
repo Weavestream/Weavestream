@@ -41,6 +41,7 @@ const OPERATOR: AuthedUser = {
   sessionId: '2ba00000-0000-4000-8000-00000000e001',
   mfaEnforcementCompletedAt: null,
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 
 describeIfDb('articles list cursor pagination (DB integration)', () => {

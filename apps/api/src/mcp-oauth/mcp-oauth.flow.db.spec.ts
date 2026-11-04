@@ -49,6 +49,7 @@ const actorOf = (id: string): AuthedUser => ({
   sessionId: `${id.slice(0, -4)}e001`,
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
+  globalPasswordAccess: true,
 });
 
 const b64url = (b: Buffer | string) => Buffer.from(b).toString('base64url');

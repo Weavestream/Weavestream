@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { RelationsService } from './relations.service.js';
 import type { UserRole } from '@weavestream/shared';
 
@@ -64,6 +64,21 @@ function makePrisma(fixtures: {
     articles: [...fixtures.articles],
     passwords: [...(fixtures.passwords ?? [])],
   };
+
+  // Evaluates the `passwordReadWhereFor` shapes (own list / global policy).
+  function matchPasswordAccess(p: PasswordRow, w: Record<string, unknown>): boolean {
+    const restricted = (clause: Record<string, unknown>) => {
+      const r = clause['restrictedToUserIds'] as { has?: string; isEmpty?: boolean } | undefined;
+      if (!r) return true;
+      if (r.isEmpty) return p.restrictedToUserIds.length === 0;
+      if (r.has) return p.restrictedToUserIds.includes(r.has);
+      return true;
+    };
+    if (!restricted(w)) return false;
+    const or = w['OR'] as Array<Record<string, unknown>> | undefined;
+    if (or && !or.some(restricted)) return false;
+    return true;
+  }
 
   function matchOrClause(r: RelationRow, or: Array<Record<string, unknown>>): boolean {
     return or.some((clause) =>
@@ -189,7 +204,7 @@ function makePrisma(fixtures: {
           if (ids && !ids.includes(p.id)) return false;
           if (w['archivedAt'] === null && p.archivedAt !== null) return false;
           if (w['visibleToClients'] === true && !p.visibleToClients) return false;
-          return true;
+          return matchPasswordAccess(p, w);
         });
       },
       async findFirst(args: { where: Record<string, unknown> }) {
@@ -199,7 +214,8 @@ function makePrisma(fixtures: {
             if (w['id'] && p.id !== w['id']) return false;
             if (w['companyId'] && p.companyId !== w['companyId']) return false;
             if (w['archivedAt'] === null && p.archivedAt !== null) return false;
-            return true;
+            if (w['visibleToClients'] === true && !p.visibleToClients) return false;
+            return matchPasswordAccess(p, w);
           }) ?? null
         );
       },
@@ -258,8 +274,8 @@ function relation(
   };
 }
 
-function actor(role: UserRole = 'OPERATOR') {
-  return { id: 'u-1', role };
+function actor(role: UserRole = 'OPERATOR', globalPasswordAccess = true) {
+  return { id: 'u-1', role, globalPasswordAccess };
 }
 
 describe('RelationsService.listRelated', () => {
@@ -541,6 +557,54 @@ describe('RelationsService.listRelated', () => {
       entityId: 'asset-root',
     });
     expect(sa.groups.password.map((i) => i.id)).toEqual(['pw-restricted']);
+  });
+
+  it('hides entries without an own list from a user outside the global policy (issue #110)', async () => {
+    const prisma = makePrisma({
+      relations: [
+        relation({ id: 'r-1', companyId: 'c-1', sourceType: 'Asset', sourceId: 'asset-root', targetType: 'Password', targetId: 'pw-open' }),
+        relation({ id: 'r-2', companyId: 'c-1', sourceType: 'Asset', sourceId: 'asset-root', targetType: 'Password', targetId: 'pw-own-list' }),
+      ],
+      assets: [asset({ id: 'asset-root', companyId: 'c-1', name: 'Root' })],
+      articles: [],
+      passwords: [
+        password({ id: 'pw-open', companyId: 'c-1', name: 'Open', restrictedToUserIds: [] }),
+        // An own list overrides the global policy and can grant access.
+        password({ id: 'pw-own-list', companyId: 'c-1', name: 'Granted', restrictedToUserIds: ['u-1'] }),
+      ],
+    });
+    const svc = new RelationsService(prisma as never);
+    const outsider = await svc.listRelated({
+      actor: actor('OPERATOR', false),
+      companyId: 'c-1',
+      entityType: 'asset',
+      entityId: 'asset-root',
+    });
+    expect(outsider.groups.password.map((i) => i.id)).toEqual(['pw-own-list']);
+  });
+
+  it('returns 404 for the links of a password entry the actor cannot open', async () => {
+    const prisma = makePrisma({
+      relations: [
+        relation({ id: 'r-1', companyId: 'c-1', sourceType: 'Password', sourceId: 'pw-hidden', targetType: 'Asset', targetId: 'asset-root' }),
+      ],
+      assets: [asset({ id: 'asset-root', companyId: 'c-1', name: 'Root' })],
+      articles: [],
+      passwords: [
+        password({ id: 'pw-hidden', companyId: 'c-1', name: 'Hidden', restrictedToUserIds: ['someone-else'] }),
+      ],
+    });
+    const svc = new RelationsService(prisma as never);
+    await expect(
+      svc.listRelated({ actor: actor('OPERATOR'), companyId: 'c-1', entityType: 'password', entityId: 'pw-hidden' }),
+    ).rejects.toBeInstanceOf(NotFoundException);
+    const sa = await svc.listRelated({
+      actor: actor('SUPER_ADMIN'),
+      companyId: 'c-1',
+      entityType: 'password',
+      entityId: 'pw-hidden',
+    });
+    expect(sa.groups.asset.map((i) => i.id)).toEqual(['asset-root']);
   });
 
   it('never leaks counterparts from other companies', async () => {

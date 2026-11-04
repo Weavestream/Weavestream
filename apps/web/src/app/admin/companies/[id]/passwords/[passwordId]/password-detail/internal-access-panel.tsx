@@ -1,8 +1,12 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { problemMessage, roleLabel } from '@weavestream/shared';
-import type { PasswordAccessUser, PasswordDetail } from '@weavestream/shared';
+import { problemMessage } from '@weavestream/shared';
+import type {
+  PasswordAccessMode,
+  PasswordAccessUser,
+  PasswordDetail,
+} from '@weavestream/shared';
 import { apiFetch } from '../../../../../../../lib/api';
 import { Btn, Dialog, Icon, Panel, Tag } from '../../../../../../../components/ui';
 import {
@@ -13,19 +17,40 @@ import {
   toggleSelection,
   unavailableSelection,
   withAlwaysIncluded,
-} from './internal-access-selection';
+} from '../../../../../../../components/passwords/internal-access-selection';
+import { InternalUserChecklist } from '../../../../../../../components/passwords/internal-user-checklist';
+
+/**
+ * Copy for an entry WITHOUT its own list: it follows the global password
+ * access policy (issue #110). UI text only — the API enforces the policy.
+ */
+const UNRESTRICTED_COPY: Record<PasswordAccessMode, { title: string; body: string; option: string }> = {
+  all_users: {
+    title: 'All internal users',
+    body: 'Any internal user with normal company access can see this credential.',
+    option: 'All internal users with company access',
+  },
+  selected_users: {
+    title: 'Global policy (selected users)',
+    body: 'Only the users in the global password access policy, and super admins, can see this credential.',
+    option: 'Use the global policy (selected users)',
+  },
+};
 
 export function InternalAccessPanel({
   password,
   canManage,
   currentUserId,
+  passwordAccessMode,
   onEdit,
 }: {
   password: PasswordDetail;
   canManage: boolean;
   currentUserId: string;
+  passwordAccessMode: PasswordAccessMode;
   onEdit: () => void;
 }) {
+  const unrestrictedCopy = UNRESTRICTED_COPY[passwordAccessMode];
   const restrictedCount = password.restrictedToUserIds.length;
   const restricted = restrictedCount > 0;
 
@@ -52,7 +77,7 @@ export function InternalAccessPanel({
                 fontWeight: 600,
               }}
             >
-              {restricted ? 'Restricted' : 'All internal users'}
+              {restricted ? 'Restricted' : unrestrictedCopy.title}
               {restricted && <Tag tone="warn">{restrictedCount} allowed</Tag>}
             </div>
             <p
@@ -65,7 +90,7 @@ export function InternalAccessPanel({
             >
               {restricted
                 ? 'Only selected internal users can see this credential.'
-                : 'Any internal user with normal company access can see this credential.'}
+                : unrestrictedCopy.body}
               {restricted && password.restrictedToUserIds.includes(currentUserId) && (
                 <> You&apos;re included.</>
               )}
@@ -85,11 +110,13 @@ export function InternalAccessPanel({
 export function InternalAccessDialog({
   companyId,
   password,
+  passwordAccessMode,
   onClose,
   onSaved,
 }: {
   companyId: string;
   password: PasswordDetail;
+  passwordAccessMode: PasswordAccessMode;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -175,7 +202,7 @@ export function InternalAccessDialog({
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         <label style={checkboxLabel}>
           <input type="radio" checked={!restricted} onChange={() => setRestricted(false)} />
-          All internal users with company access
+          {UNRESTRICTED_COPY[passwordAccessMode].option}
         </label>
         <label style={checkboxLabel}>
           <input type="radio" checked={restricted} onChange={() => setRestricted(true)} />
@@ -183,77 +210,14 @@ export function InternalAccessDialog({
         </label>
 
         {restricted && (
-          <div
-            style={{
-              border: '1px solid var(--line)',
-              borderRadius: 6,
-              maxHeight: 260,
-              overflow: 'auto',
-            }}
-          >
-            {loading ? (
-              <div style={{ padding: 12, fontSize: 13, color: 'var(--muted)' }}>
-                Loading internal users...
-              </div>
-            ) : users.length === 0 ? (
-              <div style={{ padding: 12, fontSize: 13, color: 'var(--muted)' }}>
-                No eligible internal users found.
-              </div>
-            ) : (
-              users.map((user) => (
-                <label
-                  key={user.id}
-                  style={{
-                    display: 'flex',
-                    gap: 10,
-                    alignItems: 'flex-start',
-                    padding: '9px 12px',
-                    borderBottom: '1px solid var(--line)',
-                    cursor: user.alwaysIncluded ? 'default' : 'pointer',
-                    opacity: user.alwaysIncluded ? 0.78 : 1,
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(user.id)}
-                    disabled={user.alwaysIncluded}
-                    onChange={() => toggleUser(user.id)}
-                    style={{ marginTop: 2 }}
-                  />
-                  <span style={{ minWidth: 0 }}>
-                    <span
-                      style={{
-                        display: 'block',
-                        fontSize: 13,
-                        color: 'var(--text)',
-                        fontWeight: 600,
-                      }}
-                    >
-                      {user.name}
-                      {user.alwaysIncluded && (
-                        <span style={{ color: 'var(--muted)', fontWeight: 400 }}>
-                          {' '}
-                          (always included)
-                        </span>
-                      )}
-                    </span>
-                    <span
-                      style={{
-                        display: 'block',
-                        fontSize: 12,
-                        color: 'var(--muted)',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {user.email} · {roleLabel(user.role)} · {accessSourceLabel(user.accessSource)}
-                    </span>
-                  </span>
-                </label>
-              ))
-            )}
-          </div>
+          <InternalUserChecklist
+            ariaLabel="Internal users with access"
+            users={users}
+            selectedIds={selectedIds}
+            onToggle={toggleUser}
+            loading={loading}
+            detail={(user) => accessSourceLabel(user.accessSource)}
+          />
         )}
 
         {restricted && unavailableIds.length > 0 && (

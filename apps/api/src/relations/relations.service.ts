@@ -1,6 +1,5 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import type { UserRole } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { hasEligibleNativeBinding } from '../integrations/reconstruction/native-binding-ownership.js';
@@ -8,7 +7,10 @@ import type {
   RelationPort,
   RelationReplaceCtx,
 } from '../field-types/field-type-strategy.js';
-import { canReadPassword } from '../passwords/password-access-policy.js';
+import {
+  passwordReadWhereFor,
+  type PasswordAccessActor,
+} from '../passwords/password-access-policy.js';
 
 export interface LinkInput {
   companyId: string;
@@ -116,7 +118,7 @@ export const RELATION_ENTITY_TYPE: Record<RelationEndpointKind, string> = {
 };
 
 export interface ListRelatedInput {
-  actor: { id: string; role: UserRole };
+  actor: PasswordAccessActor;
   companyId: string;
   entityType: RelationEndpointKind;
   entityId: string;
@@ -533,6 +535,21 @@ export class RelationsService implements RelationPort {
    * UI can render them.
    */
   async listRelated(input: ListRelatedInput): Promise<ListRelatedResult> {
+    // The links of a password entry the actor cannot open are hidden too:
+    // knowing the entry's id is not authorization (CLAUDE.md §1). 404, not
+    // 403, so the response does not confirm that the entry exists.
+    if (input.entityType === 'password') {
+      const source = await this.prisma.password.findFirst({
+        where: {
+          id: input.entityId,
+          companyId: input.companyId,
+          ...passwordReadWhereFor(input.actor),
+        },
+        select: { id: true },
+      });
+      if (!source) throw new NotFoundException();
+    }
+
     const entityTypeDb = RELATION_ENTITY_TYPE[input.entityType];
     const rows = await this.prisma.relation.findMany({
       where: {
@@ -596,7 +613,9 @@ export class RelationsService implements RelationPort {
               companyId: input.companyId,
               id: { in: passwordIds },
               archivedAt: null,
-              ...(input.actor.role === 'CLIENT_USER' ? { visibleToClients: true } : {}),
+              // Entries the actor cannot open never load, so the link can't
+              // even be enumerated. Client users: `visibleToClients` only.
+              ...passwordReadWhereFor(input.actor),
             },
             select: {
               id: true,
@@ -604,7 +623,6 @@ export class RelationsService implements RelationPort {
               name: true,
               username: true,
               color: true,
-              restrictedToUserIds: true,
             },
           })
         : [],
@@ -612,14 +630,7 @@ export class RelationsService implements RelationPort {
 
     const assetById = new Map(assetRows.map((a) => [a.id, a]));
     const articleById = new Map(articleRows.map((a) => [a.id, a]));
-    // Restricted internal credentials are hidden from non-allowlisted
-    // internal users so the link can't even be enumerated. Client portal
-    // users are governed only by visibleToClients.
-    const passwordById = new Map(
-      passwordRows
-        .filter((p) => canReadPassword(input.actor, { ...p, visibleToClients: true }))
-        .map((p) => [p.id, p]),
-    );
+    const passwordById = new Map(passwordRows.map((p) => [p.id, p]));
 
     const items: LinkedItem[] = [];
     for (const { row, counterpart } of counterparts) {

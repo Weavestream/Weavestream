@@ -17,6 +17,7 @@ const USER: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: true,
+  globalPasswordAccess: true,
 };
 
 function makeService(backupOk: boolean) {

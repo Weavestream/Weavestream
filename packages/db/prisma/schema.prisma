@@ -1077,6 +1077,16 @@ model SystemSetting {
   // and loopback redirects). Free-form text guarded by a CHECK constraint
   // (migration 0086) and read through `mcpClientPolicySchema`.
   mcpClientPolicy           String   @default("claude_chatgpt") @map("mcp_client_policy")
+  // Global password access policy (issue #110). `all_users` (default,
+  // the original behaviour) or `selected_users`. It decides who can open
+  // a password entry that has no own allow-list; an entry with its own
+  // `restrictedToUserIds` ignores it. CHECK constraint in migration 0090,
+  // read through `passwordAccessModeSchema`. Checked at read time — no
+  // password row changes when it changes.
+  passwordAccessMode        String   @default("all_users") @map("password_access_mode")
+  // Internal users (OPERATOR / CONTRACTOR) allowed by `selected_users`.
+  // Super admins always pass and are never stored here.
+  passwordAccessUserIds     String[] @default([]) @map("password_access_user_ids") @db.Uuid
   // Which integration's values win when several are bound to one asset:
   // driver keys, highest priority first. NULL = the shared default order
   // (DEFAULT_INTEGRATION_PRIORITY); read through resolveIntegrationPriority.

@@ -179,6 +179,7 @@ function makeActor(role: AuthedUser['role']): AuthedUser {
     sessionId: 'session-1',
     mfaEnforcementCompletedAt: null,
     mfaPending: false,
+    globalPasswordAccess: true,
   } as AuthedUser;
 }
 
@@ -252,6 +253,34 @@ describe('SearchService password allow-list filter', () => {
     const { sql } = await runSearch(actor);
     expect(sql).not.toContain('restricted_to_user_ids');
     expect(sql).toContain('si.visible_to_clients = true');
+  });
+
+  it('binds the global password policy result as a parameter (issue #110)', async () => {
+    const inside = await runSearch(makeActor('OPERATOR'));
+    expect(inside.sql).toContain("si.restricted_to_user_ids = '{}'::uuid[] AND");
+    expect(inside.sql).toContain('::boolean');
+    expect(inside.values).toContain(true);
+    expect(inside.values).not.toContain(false);
+
+    const outsider = { ...makeActor('OPERATOR'), globalPasswordAccess: false };
+    const out = await runSearch(outsider);
+    expect(out.values).toContain(false);
+    // Never string-built into the SQL text.
+    expect(out.sql).not.toMatch(/\b(true|false)::boolean/);
+  });
+
+  it('hides files attached to a password entry the actor cannot open', async () => {
+    const actor = makeActor('OPERATOR');
+    const { sql, values } = await runSearch(actor);
+    expect(sql).toContain("si.entity_type <> 'upload' OR NOT EXISTS");
+    expect(sql).toContain("u.attached_to_type = 'password'");
+    expect(sql).toContain('JOIN passwords p ON p.id = u.attached_to_id');
+    expect(values.filter((v) => v === actor.id).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('does not add the upload filter for super admins', async () => {
+    const { sql } = await runSearch(makeActor('SUPER_ADMIN'));
+    expect(sql).not.toContain('attached_to_type');
   });
 
   it('mentions() delegates through search() with the predicate for operators', async () => {

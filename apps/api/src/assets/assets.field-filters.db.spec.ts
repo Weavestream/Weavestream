@@ -47,6 +47,7 @@ const OPERATOR: AuthedUser = {
   sessionId: id('e001'),
   mfaEnforcementCompletedAt: null,
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 
 describeIfDb('assets list field filters (DB integration)', () => {

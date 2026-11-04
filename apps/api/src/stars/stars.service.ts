@@ -6,6 +6,7 @@ import { AuditLogService } from '../audit/audit.service.js';
 import { allowedCompanyIds } from '../rbac/permission.service.js';
 import { scopedCompanyLookupWhere } from '../ai-tools/entity-scope.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { passwordReadWhereFor } from '../passwords/password-access-policy.js';
 
 /**
  * Phase 9b.3 — per-user "Starred" entities (companies, passwords, assets, articles).
@@ -102,7 +103,10 @@ export class StarsService {
         },
       }),
       this.prisma.starredPassword.findMany({
-        where: { userId: actor.id },
+        // Entries the actor can no longer open (own allow-list or the global
+        // password access policy) never load, so a star made earlier cannot
+        // keep showing the name (CLAUDE.md §1: filter in the query).
+        where: { userId: actor.id, password: passwordReadWhereFor(actor) },
         orderBy: { createdAt: 'desc' },
         select: {
           createdAt: true,
@@ -346,7 +350,7 @@ export class StarsService {
     // Retrieve companyId for audit before deleting. After a lost
     // membership the scoped lookup cannot see the entity, so the audit
     // row records no company rather than blocking the cleanup.
-    const companyId = await this.getCompanyIdForEntity(entityType, entityId).catch(
+    const companyId = await this.getCompanyIdForEntity(actor, entityType, entityId).catch(
       (error: unknown) => {
         if (error instanceof NotFoundException) return null;
         throw error;
@@ -395,12 +399,12 @@ export class StarsService {
 
     // SUPER_ADMIN can star any entity
     if (actor.role === 'SUPER_ADMIN') {
-      const companyId = await this.getCompanyIdForEntity(entityType, entityId);
+      const companyId = await this.getCompanyIdForEntity(actor, entityType, entityId);
       return { companyId };
     }
 
     // For other roles, verify entity exists and actor has membership on its company
-    const companyId = await this.getCompanyIdForEntity(entityType, entityId);
+    const companyId = await this.getCompanyIdForEntity(actor, entityType, entityId);
 
     const membership = await this.prisma.membership.findFirst({
       where: { userId: actor.id, companyId, revokedAt: null },
@@ -426,7 +430,11 @@ export class StarsService {
    * satisfies the tenant middleware for membership-scoped operators and
    * an out-of-scope id resolves to 404 (issue #109 follow-up).
    */
-  private async getCompanyIdForEntity(entityType: EntityType, entityId: string): Promise<string> {
+  private async getCompanyIdForEntity(
+    actor: AuthedUser,
+    entityType: EntityType,
+    entityId: string,
+  ): Promise<string> {
     if (entityType === 'company') {
       const company = await this.prisma.company.findUnique({
         where: { id: entityId },
@@ -442,7 +450,15 @@ export class StarsService {
     let row: { companyId: string } | null;
     switch (entityType) {
       case 'password':
-        row = await this.prisma.password.findFirst({ where, select });
+        // An entry the actor cannot open (own allow-list or the global
+        // password access policy) cannot be starred: 404, so the response
+        // does not confirm that it exists. Spread, not `AND`: the tenant
+        // middleware reads only a top-level `companyId`. The policy filter
+        // never sets `id` or `companyId`, so it cannot widen the scope.
+        row = await this.prisma.password.findFirst({
+          where: { ...where, ...passwordReadWhereFor(actor) },
+          select,
+        });
         break;
       case 'asset':
         row = await this.prisma.asset.findFirst({ where, select });

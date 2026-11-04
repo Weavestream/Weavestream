@@ -64,6 +64,9 @@ export class ExportsService {
       exportId,
       companyId,
       includePasswords: opts.includePasswords,
+      // Who asked. The worker applies this user's password access, and only
+      // this user (or a super admin) can read the job's status and file.
+      requestedBy: actor.id,
       ...(pdfPasswordCiphertext ? { pdfPasswordCiphertext } : {}),
     };
     const jobId = await this.queues.enqueueCompanyExport(payload);
@@ -88,10 +91,11 @@ export class ExportsService {
     return { jobId, exportId };
   }
 
-  async getJobStatus(jobId: string): Promise<ExportJobStatus> {
+  async getJobStatus(actor: AuthedUser, jobId: string): Promise<ExportJobStatus> {
     const queue = this.queues.get(QueueNames.companyExport);
     const job = await queue.getJob(jobId);
-    if (!job) return { status: 'unknown' };
+    // A job the actor may not read looks exactly like a missing one.
+    if (!job || !mayReadExportJob(actor, job.data)) return { status: 'unknown' };
 
     const state = await job.getState();
 
@@ -136,11 +140,12 @@ export class ExportsService {
    * authorize and locate the blob.
    */
   async resolveCompletedExport(
+    actor: AuthedUser,
     jobId: string,
   ): Promise<{ companyId: string; storageKey: string } | null> {
     const queue = this.queues.get(QueueNames.companyExport);
     const job = await queue.getJob(jobId);
-    if (!job) return null;
+    if (!job || !mayReadExportJob(actor, job.data)) return null;
     const state = await job.getState();
     if (state !== 'completed') return null;
     const result = job.returnvalue as ExportJobResult | undefined;
@@ -158,4 +163,23 @@ export class ExportsService {
   async getExportObjectStream(companyId: string, storageKey: string) {
     return this.storage.getObjectStream(companyId, storageKey);
   }
+}
+
+/**
+ * An export job and its PDF belong to the user who started it. Job ids are
+ * sequential, and `export.create` can be delegated, so without this check
+ * any exporter could read another user's PDF (with plaintext credentials)
+ * by guessing an id. Super admins may read every job. A job queued before
+ * `requestedBy` existed has no owner: only super admins may read it.
+ */
+export function mayReadExportJob(
+  actor: Pick<AuthedUser, 'id' | 'role'>,
+  data: unknown,
+): boolean {
+  if (actor.role === 'SUPER_ADMIN') return true;
+  const requestedBy =
+    data && typeof data === 'object' && 'requestedBy' in data
+      ? (data as { requestedBy?: unknown }).requestedBy
+      : undefined;
+  return typeof requestedBy === 'string' && requestedBy === actor.id;
 }

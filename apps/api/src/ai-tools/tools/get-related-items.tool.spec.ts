@@ -38,6 +38,7 @@ function relatedResult() {
 
 function makeTool(overrides: {
   role?: string;
+  globalPasswordAccess?: boolean;
   allowedActions?: string[];
   sourceRow?: { id: string; name?: string; title?: string } | null;
 } = {}) {
@@ -79,7 +80,11 @@ function makeTool(overrides: {
     entityScope as any,
   );
   const ctx: AiToolExecutionContext = {
-    actor: { id: 'u-1', role: overrides.role ?? 'OPERATOR' } as AuthedUser,
+    actor: {
+      id: 'u-1',
+      role: overrides.role ?? 'OPERATOR',
+      globalPasswordAccess: overrides.globalPasswordAccess ?? true,
+    } as AuthedUser,
     tenant: {} as never,
     correlationId: 'req-1',
     ip: '127.0.0.1',

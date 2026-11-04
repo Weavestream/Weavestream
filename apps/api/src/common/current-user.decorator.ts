@@ -18,6 +18,14 @@ export interface AuthedUser {
   mfaEnforcementCompletedAt: Date | null;
   mfaPending: boolean;
   /**
+   * Whether the global password access policy lets this user open password
+   * entries that have no own allow-list. Resolved once per request in
+   * `AuthGuard` (`passesGlobalPasswordPolicy`) so the policy functions in
+   * `passwords/password-access-policy.ts` stay synchronous. API keys and MCP
+   * connections inherit their owner's value.
+   */
+  globalPasswordAccess: boolean;
+  /**
    * Set when the principal authenticated with an API key rather than a
    * browser session. Presence — not absence — is the signal: guards that
    * must treat programmatic callers differently check this, so a new cookie

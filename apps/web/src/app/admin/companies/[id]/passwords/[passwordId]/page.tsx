@@ -179,6 +179,7 @@ export default async function PasswordDetailPage({
           versions={versions}
           canManage={manage}
           canManageInternalAccess={manageInternalAccess}
+          passwordAccessMode={settings.passwordAccessMode}
           folderName={folder?.name ?? null}
           assetName={linkedAsset?.name ?? null}
           me={{ id: me.id, role: me.role }}

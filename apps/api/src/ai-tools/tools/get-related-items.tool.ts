@@ -94,7 +94,11 @@ export class GetRelatedItemsAiTool implements AiReadTool {
 
     // 3. Traverse, then gate every returned kind independently.
     const related = await this.relations.listRelated({
-      actor: { id: ctx.actor.id, role: ctx.actor.role },
+      actor: {
+        id: ctx.actor.id,
+        role: ctx.actor.role,
+        globalPasswordAccess: ctx.actor.globalPasswordAccess,
+      },
       companyId,
       entityType: input.entity_type,
       entityId: input.entity_id,

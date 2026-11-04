@@ -154,6 +154,7 @@ export default async function AssetDetailPage({
               companyId={companyId}
               assetId={asset.id}
               mode="admin"
+              canCreate={me.hasPasswordAccess}
             />
 
             <AttachmentsPanel

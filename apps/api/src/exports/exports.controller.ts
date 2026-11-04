@@ -72,8 +72,18 @@ export class ExportsController {
 
   @Get('job/:jobId')
   @RequirePermission('export.create')
-  async status(@Param('jobId', new ZodParam(jobIdSchema)) jobId: string) {
-    return this.exports.getJobStatus(jobId);
+  async status(
+    @CurrentUser() actor: AuthedUser,
+    @Param('jobId', new ZodParam(jobIdSchema)) jobId: string,
+  ) {
+    // A missing job and another user's job (or an ownerless legacy job for
+    // a non super admin) both give the same 404, so the response does not
+    // confirm that the job id exists.
+    const status = await this.exports.getJobStatus(actor, jobId);
+    if (status.status === 'unknown') {
+      throw new NotFoundException({ error: 'ExportUnavailable' });
+    }
+    return status;
   }
 
   /**
@@ -88,10 +98,12 @@ export class ExportsController {
   @RequirePermission('export.create')
   @RequireStepUp()
   async download(
+    @CurrentUser() actor: AuthedUser,
     @Param('jobId', new ZodParam(jobIdSchema)) jobId: string,
     @Res({ passthrough: true }) res: Response,
   ): Promise<StreamableFile> {
-    const located = await this.exports.resolveCompletedExport(jobId);
+    // Only the requester (or a super admin) — see `mayReadExportJob`.
+    const located = await this.exports.resolveCompletedExport(actor, jobId);
     if (!located) {
       throw new NotFoundException({ error: 'ExportUnavailable' });
     }

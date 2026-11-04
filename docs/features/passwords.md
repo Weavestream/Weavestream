@@ -103,6 +103,26 @@ The restriction governs **visibility**, not just reveal: users who are not on th
 
 Managing internal access requires write access to the company plus the membership-management permission; the API rejects any attempt to add a user who is not an eligible internal user for that company.
 
+### Global Password Access Policy
+
+A workspace-wide policy (**Settings → Passwords → Password access**) decides who can open credentials that have **no** own internal-access list:
+
+| Mode | Effect on credentials without their own list |
+|---|---|
+| **All internal users** (default) | Every internal user with company access can see them (the behaviour before the policy existed) |
+| **Selected users only** | Only the selected operators and contractors, plus super admins, can see them |
+
+Rules:
+
+- A credential with its own internal-access list uses **only** that list. The global policy does not apply to it, so the list can give access to a user who is not in the global list.
+- Super admins always have access. Client users are governed only by **Visible to clients**.
+- The policy never gives company access. A selected user still needs a membership or global access for the company.
+- The server checks the policy when a credential is read. Changing it does not change any credential.
+- A user without access does not see the credential anywhere: lists, detail pages, search (including file names of its attachments), stars, related items, PDF exports, and MCP or API-key access, which act as their owner.
+- A user outside the policy cannot create a credential without its own list.
+
+Changing the policy requires the settings-management permission, step-up authentication, and an interactive session. Each change is audited as `settings.password_access_policy.change`, with the before and after user IDs.
+
 ## Reveal Audit Trail
 
 Every time a credential's secret is decrypted and displayed, an entry is written to the audit log with the actor, timestamp, and IP address. This creates a tamper-resistant record of who accessed each credential and when.

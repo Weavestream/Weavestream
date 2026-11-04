@@ -140,6 +140,8 @@ export class AuthController {
       sessionId: payload.sid,
       mfaEnforcementCompletedAt: null,
       mfaPending: true,
+      // Deny by default: this stub never reaches a password read path.
+      globalPasswordAccess: false,
     };
     // AuthService.verifyMfa re-fetches the user row; we only need id/sessionId here.
     const result = await this.auth.verifyMfa(asUser, dto.token, ipOf(req), userAgentOf(req));

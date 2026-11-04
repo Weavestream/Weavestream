@@ -67,6 +67,9 @@ export const AUDIT_ACTIONS = {
     // Which AI apps may connect (`PUT /settings/mcp-client-policy`).
     // `before` and `after` carry `{ mcpClientPolicy }`.
     mcpClientPolicyChange: 'settings.mcp_client_policy.change',
+    // Global password access policy (`PUT /settings/password-access-policy`).
+    // `before` and `after` carry `{ mode, userIds }` (user ids only).
+    passwordAccessPolicyChange: 'settings.password_access_policy.change',
     // Pre-connections instance OAuth app (`PUT /settings/integration-oauth-apps/:provider`,
     // removed). Kept so older audit rows still resolve; new rows use
     // `integration.oauthAppUpdate`.

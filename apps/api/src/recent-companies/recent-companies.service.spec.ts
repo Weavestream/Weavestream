@@ -25,6 +25,7 @@ const SUPER_ADMIN: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
+  globalPasswordAccess: true,
 };
 
 const MEMBER: AuthedUser = {

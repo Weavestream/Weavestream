@@ -38,7 +38,10 @@ export class MeController {
 
   @Get()
   async profile(@CurrentUser() user: AuthedUser) {
-    return this.me.profile(user.id);
+    // `hasPasswordAccess` is a UI hint only (hide "New password"). Every
+    // password read and create re-checks the policy server-side.
+    const profile = await this.me.profile(user.id);
+    return { ...profile, hasPasswordAccess: user.globalPasswordAccess };
   }
 
   @Get('sessions')

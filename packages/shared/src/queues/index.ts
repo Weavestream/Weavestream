@@ -179,6 +179,14 @@ export const companyExportJobSchema = z.discriminatedUnion('kind', [
      * memory for milliseconds and is never logged.
      */
     pdfPasswordCiphertext: z.string().optional(),
+    /**
+     * The user who started the export. The worker exports only the password
+     * entries (and their attachments) this user can open, and only this user
+     * or a super admin can read the job. Optional on purpose: a job queued
+     * before this field existed must still parse, so the worker can fail
+     * closed on it (no entries, no password attachments) instead of erroring.
+     */
+    requestedBy: z.guid().optional(),
   }),
   z.object({
     kind: z.literal('cleanup'),

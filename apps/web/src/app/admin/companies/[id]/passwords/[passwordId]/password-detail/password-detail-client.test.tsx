@@ -204,6 +204,7 @@ function renderDetail(url: string | null) {
       versions={[]}
       canManage={false}
       canManageInternalAccess={false}
+      passwordAccessMode="all_users"
       folderName={null}
       assetName={null}
       me={{ id: 'u-1', role: 'OPERATOR' }}
@@ -259,6 +260,7 @@ function renderWith(
       versions={versions}
       canManage={false}
       canManageInternalAccess={false}
+      passwordAccessMode="all_users"
       folderName={null}
       assetName={null}
       me={{ id: 'u-1', role: 'OPERATOR' }}
@@ -499,6 +501,7 @@ describe('PasswordDetailClient internal access dialog', () => {
         versions={[]}
         canManage
         canManageInternalAccess
+        passwordAccessMode="all_users"
         folderName={null}
         assetName={null}
         me={{ id: 'u-1', role: 'SUPER_ADMIN' }}

@@ -31,6 +31,19 @@ interface JobStatusResponse {
   error?: string;
 }
 
+/**
+ * The API answers 404 for a job that is gone or that belongs to another
+ * user (it does not say which), so read 404 as `unknown`: the row shows
+ * as expired instead of polling forever.
+ */
+async function fetchJobStatus(jobId: string) {
+  const poll = await apiFetch<JobStatusResponse>(`/export/job/${jobId}`);
+  if (poll.status === 404) {
+    return { ok: true, data: { status: 'unknown' } as JobStatusResponse };
+  }
+  return poll;
+}
+
 interface TriggerResponse {
   jobId: string;
   exportId: string;
@@ -153,9 +166,7 @@ function VaultArchiveWizard() {
 
     const updates = await Promise.all(
       working.map(async (rec) => {
-        const poll = await apiFetch<JobStatusResponse>(
-          `/export/job/${rec.jobId}`,
-        );
+        const poll = await fetchJobStatus(rec.jobId);
         if (!poll.ok || !poll.data) return null;
         return { jobId: rec.jobId, ...poll.data };
       }),
@@ -247,7 +258,7 @@ function VaultArchiveWizard() {
   // ---- Download (always re-fetch a fresh URL) ----
   async function download(rec: ExportRecord) {
     setDownloadingId(rec.jobId);
-    const poll = await apiFetch<JobStatusResponse>(`/export/job/${rec.jobId}`);
+    const poll = await fetchJobStatus(rec.jobId);
     setDownloadingId(null);
     if (!poll.ok || !poll.data) {
       setRecords((prev) =>

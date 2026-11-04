@@ -4,6 +4,7 @@ import {
   getAiSettings,
   getEmailSettings,
   getIntegrationPriority,
+  getPasswordAccessPolicy,
   getSettings,
 } from '../../../../lib/server-api/settings';
 import { hasCapability } from '../../../../lib/roles';
@@ -27,12 +28,14 @@ export default async function SettingsPage({
   const me = await requireMe();
   if (!hasCapability(me, 'SETTINGS_MANAGE')) redirect('/admin');
 
-  const [settings, emailSettings, aiSettings, integrationPriority] = await Promise.all([
-    getSettings(),
-    getEmailSettings(),
-    getAiSettings(),
-    getIntegrationPriority(),
-  ]);
+  const [settings, emailSettings, aiSettings, integrationPriority, passwordAccessPolicy] =
+    await Promise.all([
+      getSettings(),
+      getEmailSettings(),
+      getAiSettings(),
+      getIntegrationPriority(),
+      getPasswordAccessPolicy(),
+    ]);
 
   return (
     <>
@@ -42,7 +45,7 @@ export default async function SettingsPage({
           { label: 'Settings' },
         ]}
         title="Workspace settings"
-        description="Manage workspace defaults, password generator defaults, SMTP email delivery, integration priority, and API access."
+        description="Manage workspace defaults, password access and generator defaults, SMTP email delivery, integration priority, and API access."
       />
       <PageBody>
         <Panel noPad fillHeight>
@@ -52,6 +55,7 @@ export default async function SettingsPage({
             emailSettings={emailSettings}
             aiSettings={aiSettings}
             integrationPriority={integrationPriority}
+            passwordAccessPolicy={passwordAccessPolicy}
             currentUserEmail={me.email}
           />
         </Panel>
