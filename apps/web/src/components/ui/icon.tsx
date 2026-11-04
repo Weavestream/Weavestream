@@ -413,6 +413,11 @@ export const Icon = {
       <path d="M8 10.5V2.5M5 5.5l3-3 3 3M2.5 10v2.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V10" />
     </IconBase>
   ),
+  download: (p: IconProps) => (
+    <IconBase {...p}>
+      <path d="M8 2.5v8M5 7.5l3 3 3-3M2.5 10v2.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V10" />
+    </IconBase>
+  ),
 };
 
 export type IconName = keyof typeof Icon;

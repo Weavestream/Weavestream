@@ -148,6 +148,7 @@ export default async function LayoutAssetsPage({
             searchTerms={searchTerms}
             includeArchived={includeArchived}
             canManage={manage}
+            exportCompanyId={companyId}
           />
         </Panel>
       </PageBody>

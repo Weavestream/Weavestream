@@ -1,9 +1,11 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   ForbiddenException,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   Param,
@@ -12,9 +14,15 @@ import {
   Post,
   Query,
   Req,
+  Res,
+  StreamableFile,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import { Throttle } from '@nestjs/throttler';
+import type { Request, Response } from 'express';
+import { z } from 'zod';
+import { contentDispositionFor } from '../common/content-disposition.js';
 import {
+  assetExportColumnsSchema,
   bulkAssetIdsSchema,
   bulkCloneAssetsSchema,
   cloneAssetSchema,
@@ -214,6 +222,62 @@ export class AssetsController {
     @Req() req: Request,
   ) {
     return this.assets.purgeMany(actor, companyId, dto.ids, meta(req));
+  }
+
+  /**
+   * CSV export of one layout's list. Same filters as `GET /` (`layout`
+   * required, stacked `q`, `includeArchived=true`) plus `tag=<uuid>` —
+   * the per-layout table's client-side tag filter — and
+   * `columns=table|all`. See `AssetsService.exportCsv` for the row and
+   * column rules. No `.csv` in the path: the edge blocks file-extension
+   * probes. Routed before `:id` so `export` is not read as an id.
+   */
+  @Get('export')
+  @RequirePermission('asset.read', { companyIdFrom: 'params.companyId' })
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
+  @Header('Cache-Control', 'private, no-store')
+  async exportCsv(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Query() query: Record<string, string | string[] | undefined>,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<StreamableFile> {
+    const single = (key: string): string | undefined => {
+      const value = query[key];
+      return typeof value === 'string' ? value : undefined;
+    };
+    const layoutId = z.guid().safeParse(single('layout'));
+    if (!layoutId.success) {
+      throw new BadRequestException({ error: 'InvalidLayout', message: 'Pick a layout to export.' });
+    }
+    const rawTag = single('tag');
+    const tagId = rawTag === undefined ? undefined : z.guid().safeParse(rawTag);
+    if (tagId && !tagId.success) {
+      throw new BadRequestException({ error: 'InvalidTag', message: 'The tag filter is not valid.' });
+    }
+    const columns = assetExportColumnsSchema.safeParse(single('columns') ?? 'table');
+    if (!columns.success) {
+      throw new BadRequestException({ error: 'InvalidColumns', message: 'Use columns=table or columns=all.' });
+    }
+    const q = query['q'];
+    const result = await this.assets.exportCsv(
+      actor,
+      companyId,
+      {
+        layoutId: layoutId.data,
+        q: Array.isArray(q) ? q.filter((t): t is string => typeof t === 'string') : q,
+        includeArchived: single('includeArchived') === 'true',
+        tagId: tagId?.data,
+        columns: columns.data,
+      },
+      meta(req),
+    );
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', contentDispositionFor(result.filename, 'attachment'));
+    if (result.truncated) res.setHeader('X-Export-Truncated', 'true');
+    return new StreamableFile(Buffer.from(result.csv, 'utf8'));
   }
 
   @Get(':id')

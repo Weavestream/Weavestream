@@ -1,6 +1,6 @@
 /** @jest-environment jsdom */
 import '@testing-library/jest-dom';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type {
   AssetSummary,
   LayoutFieldSummary,
@@ -8,6 +8,12 @@ import type {
 } from '@weavestream/shared';
 import { LayoutAssetsTable } from './layout-assets-table';
 import { TimezoneProvider } from '../../lib/timezone-context';
+import { ToastProvider } from '../ui';
+import { downloadApiFile } from '../../lib/api';
+
+jest.mock('../../lib/api', () => ({
+  downloadApiFile: jest.fn(async () => ({ ok: true, truncated: false })),
+}));
 
 const push = jest.fn();
 const replace = jest.fn();
@@ -118,19 +124,22 @@ function renderTable(
   overrides: Partial<
     Pick<
       React.ComponentProps<typeof LayoutAssetsTable>,
-      'searchTerms' | 'includeArchived' | 'canManage'
+      'searchTerms' | 'includeArchived' | 'canManage' | 'exportCompanyId'
     >
   > = {},
 ) {
   return render(
-    <LayoutAssetsTable
-      basePath="/admin/companies/co-1"
-      layout={layout}
-      rows={rows}
-      searchTerms={overrides.searchTerms ?? []}
-      includeArchived={overrides.includeArchived ?? false}
-      canManage={overrides.canManage ?? false}
-    />,
+    <ToastProvider>
+      <LayoutAssetsTable
+        basePath="/admin/companies/co-1"
+        layout={layout}
+        rows={rows}
+        searchTerms={overrides.searchTerms ?? []}
+        includeArchived={overrides.includeArchived ?? false}
+        canManage={overrides.canManage ?? false}
+        exportCompanyId={overrides.exportCompanyId}
+      />
+    </ToastProvider>,
   );
 }
 
@@ -381,5 +390,89 @@ describe('LayoutAssetsTable DATETIME sorting', () => {
       'Jul 1, 2026, 02:59 PM',
       'Jul 1, 2026, 01:00 PM',
     ]);
+  });
+});
+
+describe('LayoutAssetsTable CSV export', () => {
+  const download = downloadApiFile as jest.MockedFunction<typeof downloadApiFile>;
+  beforeEach(() => download.mockClear());
+
+  it('shows no Export control without exportCompanyId (the portal)', () => {
+    renderTable([makeRow('a-1', 'Alpha', 'example.com')]);
+    expect(screen.queryByRole('button', { name: 'Export' })).toBeNull();
+  });
+
+  it('puts Export right after Show archived', () => {
+    renderTable([makeRow('a-1', 'Alpha', 'example.com')], { exportCompanyId: 'co-1' });
+    const archived = screen.getByRole('button', { name: 'Show archived' });
+    const exportBtn = screen.getByRole('button', { name: 'Export' });
+    expect(archived.nextElementSibling).toBe(exportBtn);
+  });
+
+  it.each([
+    ['Visible columns (CSV)', 'table'],
+    ['All fields (CSV)', 'all'],
+  ])('%s requests the export with the active filters', async (label, mode) => {
+    renderTable([makeRow('a-1', 'Alpha', 'example.com')], {
+      exportCompanyId: 'co-1',
+      searchTerms: ['dell', '10.2'],
+      includeArchived: true,
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: label }));
+    });
+
+    expect(download).toHaveBeenCalledTimes(1);
+    const [path, filename] = download.mock.calls[0]!;
+    const url = new URL(path, 'http://x');
+    expect(url.pathname).toBe('/companies/co-1/assets/export');
+    expect(url.searchParams.get('layout')).toBe('l-1');
+    expect(url.searchParams.get('columns')).toBe(mode);
+    expect(url.searchParams.getAll('q')).toEqual(['dell', '10.2']);
+    expect(url.searchParams.get('includeArchived')).toBe('true');
+    expect(url.searchParams.has('tag')).toBe(false);
+    expect(filename).toMatch(/^devices-\d{4}-\d{2}-\d{2}\.csv$/);
+  });
+
+  it('passes the active tag filter', async () => {
+    const tagField: LayoutFieldSummary = {
+      ...urlField,
+      id: 'f-tags',
+      name: 'Tags',
+      slug: 'tags',
+      fieldType: 'TAGS',
+      position: 2,
+      showInTable: false,
+    };
+    const row = makeRow('a-1', 'Alpha', 'example.com');
+    row.fieldValues = { ...row.fieldValues, tags: [{ id: 't-1', name: 'Prod' }] };
+    render(
+      <ToastProvider>
+        <LayoutAssetsTable
+          basePath="/admin/companies/co-1"
+          layout={{ ...layout, fields: [urlField, tagField] }}
+          rows={[row]}
+          searchTerms={[]}
+          includeArchived={false}
+          canManage={false}
+          exportCompanyId="co-1"
+        />
+      </ToastProvider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Filter by tag/ }));
+    fireEvent.click(screen.getByRole('option', { name: 'Prod' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Visible columns (CSV)' }));
+    });
+    const url = new URL(download.mock.calls[0]![0], 'http://x');
+    expect(url.searchParams.get('tag')).toBe('t-1');
+  });
+
+  it('disables the export rows when no rows show', () => {
+    renderTable([], { exportCompanyId: 'co-1', searchTerms: ['missing'] });
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+    expect(screen.getByRole('menuitem', { name: 'Visible columns (CSV)' })).toBeDisabled();
   });
 });

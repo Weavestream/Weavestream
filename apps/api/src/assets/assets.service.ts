@@ -15,11 +15,14 @@ import {
   type AssetLayout,
 } from '@prisma/client';
 import type {
+  AssetExportColumns,
   BulkAssetResult,
   CreateAssetInput,
   UpdateAssetInput,
   UserRole,
 } from '@weavestream/shared';
+import { ASSET_EXPORT_MAX_ROWS } from '@weavestream/shared';
+import { toCsv } from '../common/csv.js';
 import type { FieldType, IntegrationTargetProvenance } from '@weavestream/shared';
 import { readTargetProvenance } from '../integrations/reconstruction/integration-provenance.service.js';
 import { FILTERABLE_FIELD_TYPES, integrationSectionSchema } from '@weavestream/shared';
@@ -389,6 +392,102 @@ export interface SerializedAsset {
 
 type LayoutWithFields = AssetLayout & { fields: AssetField[] };
 
+export interface AssetExportOptions {
+  layoutId: string;
+  q?: string | string[];
+  includeArchived?: boolean;
+  /** Tag-table id; applied in memory after the row cap (see `exportCsv`). */
+  tagId?: string;
+  columns: AssetExportColumns;
+}
+
+/**
+ * Field types that never appear in a CSV export, in either column mode.
+ * A Vaultwarden link points at a vault item; it is not inventory data.
+ */
+export const EXPORT_EXCLUDED_FIELD_TYPES: ReadonlySet<FieldType> = new Set<FieldType>([
+  'VAULTWARDEN_LINK',
+]);
+
+/** Non-archived fields the role may read — the single visibility rule. */
+function fieldsVisibleTo(fields: AssetField[], role: UserRole): AssetField[] {
+  return fields.filter(
+    (f) => f.archivedAt === null && (role !== 'CLIENT_USER' || f.visibleToClients),
+  );
+}
+
+/**
+ * True when any of `tagFieldSlugs` holds a hydrated `{ id }` chip equal
+ * to `tagId` — the same match the per-layout table's tag filter uses.
+ */
+export function rowHasTag(
+  fieldValues: Record<string, unknown>,
+  tagFieldSlugs: readonly string[],
+  tagId: string,
+): boolean {
+  return tagFieldSlugs.some((slug) => {
+    const v = fieldValues[slug];
+    if (!Array.isArray(v)) return false;
+    return v.some(
+      (entry: unknown) =>
+        !!entry && typeof entry === 'object' && (entry as { id?: unknown }).id === tagId,
+    );
+  });
+}
+
+/**
+ * Plain-text CSV cell for one hydrated field value. Absent and null
+ * values are empty cells; `0` and `false` keep their meaning.
+ */
+export function exportCellText(
+  fieldType: FieldType,
+  value: unknown,
+  options: Record<string, unknown>,
+  references: SerializedAsset['references'],
+  registry: Pick<FieldTypesRegistry, 'get'>,
+): string {
+  if (value === null || value === undefined) return '';
+  switch (fieldType) {
+    case 'TAGS':
+      return (Array.isArray(value) ? value : [])
+        .map((v: unknown) =>
+          v && typeof v === 'object' && typeof (v as { name?: unknown }).name === 'string'
+            ? (v as { name: string }).name
+            : typeof v === 'string'
+              ? v
+              : '',
+        )
+        .filter(Boolean)
+        .join(', ');
+    case 'ASSET_REFERENCE':
+      // Stored as an array even for single-target fields.
+      return (Array.isArray(value) ? value : [value])
+        .map((v: unknown) => {
+          const id = String(v);
+          return references[id]?.name ?? id;
+        })
+        .join(', ');
+    case 'FILE':
+      // File names only: hydrated entries also carry download URLs.
+      return (Array.isArray(value) ? value : [])
+        .map((e: unknown) =>
+          e && typeof e === 'object' && typeof (e as { filename?: unknown }).filename === 'string'
+            ? (e as { filename: string }).filename
+            : '',
+        )
+        .filter(Boolean)
+        .join(', ');
+    case 'RICH_TEXT':
+    case 'DROPDOWN':
+    case 'MULTISELECT':
+    case 'BOOLEAN':
+      return registry.get(fieldType).toPlaintext(value, options);
+    default:
+      if (typeof value === 'object') return JSON.stringify(value);
+      return String(value);
+  }
+}
+
 /**
  * The distinct, non-blank search terms in a `q` value. A term repeated
  * in another letter case counts once.
@@ -444,40 +543,7 @@ export class AssetsService {
     options: AssetListOptions = {},
   ): Promise<{ items: SerializedAsset[]; nextCursor: string | null }> {
     const limit = Math.min(Math.max(options.limit ?? 50, 1), 200);
-
-    const where: Prisma.AssetWhereInput = { companyId };
-    if (!options.includeArchived) where.archivedAt = null;
-    if (options.layoutId) where.assetLayoutId = options.layoutId;
-    const terms = searchTerms(options.q);
-    if (terms.length > MAX_ASSET_SEARCH_TERMS) {
-      throw new BadRequestException({
-        error: 'TooManySearchTerms',
-        message: `Use at most ${MAX_ASSET_SEARCH_TERMS} search terms.`,
-      });
-    }
-    // Check every term first, so a bad last term costs no search queries.
-    for (const term of terms) assetSearchWords(term);
-    const searchClauses: Prisma.AssetWhereInput[] = [];
-    for (const term of terms) {
-      const matched = await this.searchIndex.matchAssetIds(companyId, term, {
-        clientVisibleOnly: actor.role === 'CLIENT_USER',
-      });
-      searchClauses.push({
-        OR: [
-          { name: { contains: escapeLikePattern(term), mode: 'insensitive' } },
-          { id: { in: matched } },
-        ],
-      });
-    }
-
-    const filterClauses = [
-      ...searchClauses,
-      ...(await this.resolveFieldFilters(companyId, options.layoutId, options.fieldFilters ?? {})),
-    ];
-
-    if (filterClauses.length > 0) {
-      where.AND = filterClauses;
-    }
+    const where = await this.buildListWhere(actor, companyId, options);
 
     const items = await this.prisma.asset.findMany({
       where,
@@ -532,6 +598,193 @@ export class AssetsService {
     return {
       items: serialized,
       nextCursor: hasMore ? slice[slice.length - 1]!.id : null,
+    };
+  }
+
+  /**
+   * The `WHERE` shared by `list` and `exportCsv`: tenant scope, archive
+   * toggle, layout, stacked search terms, and `field.<slug>=` filters.
+   */
+  private async buildListWhere(
+    actor: AuthedUser,
+    companyId: string,
+    options: Pick<AssetListOptions, 'layoutId' | 'q' | 'includeArchived' | 'fieldFilters'>,
+  ): Promise<Prisma.AssetWhereInput> {
+    const where: Prisma.AssetWhereInput = { companyId };
+    if (!options.includeArchived) where.archivedAt = null;
+    if (options.layoutId) where.assetLayoutId = options.layoutId;
+    const terms = searchTerms(options.q);
+    if (terms.length > MAX_ASSET_SEARCH_TERMS) {
+      throw new BadRequestException({
+        error: 'TooManySearchTerms',
+        message: `Use at most ${MAX_ASSET_SEARCH_TERMS} search terms.`,
+      });
+    }
+    // Check every term first, so a bad last term costs no search queries.
+    for (const term of terms) assetSearchWords(term);
+    const searchClauses: Prisma.AssetWhereInput[] = [];
+    for (const term of terms) {
+      const matched = await this.searchIndex.matchAssetIds(companyId, term, {
+        clientVisibleOnly: actor.role === 'CLIENT_USER',
+      });
+      searchClauses.push({
+        OR: [
+          { name: { contains: escapeLikePattern(term), mode: 'insensitive' } },
+          { id: { in: matched } },
+        ],
+      });
+    }
+
+    const filterClauses = [
+      ...searchClauses,
+      ...(await this.resolveFieldFilters(companyId, options.layoutId, options.fieldFilters ?? {})),
+    ];
+
+    if (filterClauses.length > 0) {
+      where.AND = filterClauses;
+    }
+    return where;
+  }
+
+  /**
+   * CSV export of one layout's list, with the same rows the per-layout
+   * table shows: the base list (search + archive toggle) capped at
+   * `ASSET_EXPORT_MAX_ROWS` first, then the tag filter in memory — the
+   * page loads, caps, and tag-filters in that same order.
+   *
+   * Field visibility follows `serialize` (CLIENT_USER sees
+   * `visibleToClients` fields only); `EXPORT_EXCLUDED_FIELD_TYPES` drop
+   * out of both column modes. One `asset.export` audit row per call,
+   * awaited and not caught: no file leaves without its audit row.
+   */
+  async exportCsv(
+    actor: AuthedUser,
+    companyId: string,
+    options: AssetExportOptions,
+    meta: AuditMeta,
+  ): Promise<{ filename: string; csv: string; rowCount: number; truncated: boolean }> {
+    const layout = await this.loadLayout(options.layoutId);
+    if (layout.archivedAt) throw new NotFoundException(`Layout ${options.layoutId} not found`);
+    const company = await this.prisma.company.findUnique({
+      where: { id: companyId },
+      select: { slug: true },
+    });
+    if (!company) throw new NotFoundException(`Company ${companyId} not found`);
+
+    const fields = fieldsVisibleTo(layout.fields, actor.role)
+      .filter((f) => !EXPORT_EXCLUDED_FIELD_TYPES.has(f.fieldType))
+      .sort((a, b) => a.position - b.position);
+    const fieldColumns =
+      options.columns === 'all'
+        ? fields.filter((f) => !f.isPrimary)
+        : fields.filter((f) => f.showInTable && !f.isPrimary);
+
+    const where = await this.buildListWhere(actor, companyId, {
+      layoutId: layout.id,
+      q: options.q,
+      includeArchived: options.includeArchived,
+    });
+    const fieldIds = fieldColumns.map((f) => f.id);
+    const rows: Array<Asset & { fieldValues: AssetFieldValue[] }> = [];
+    let cursor: string | undefined;
+    const BATCH = 500;
+    while (rows.length <= ASSET_EXPORT_MAX_ROWS) {
+      const batch = await this.prisma.asset.findMany({
+        where,
+        // Same order as `list`, so the cap keeps the rows the page keeps.
+        orderBy: [{ archivedAt: 'asc' }, { name: 'asc' }, { id: 'asc' }],
+        take: Math.min(BATCH, ASSET_EXPORT_MAX_ROWS + 1 - rows.length),
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        include: {
+          fieldValues: {
+            where: {
+              assetField: {
+                archivedAt: null,
+                OR: [{ id: { in: fieldIds } }, { fieldType: 'TAGS' }],
+              },
+            },
+          },
+        },
+      });
+      rows.push(...batch);
+      if (batch.length === 0 || rows.length > ASSET_EXPORT_MAX_ROWS) break;
+      cursor = batch[batch.length - 1]!.id;
+    }
+    const truncated = rows.length > ASSET_EXPORT_MAX_ROWS;
+    const capped = truncated ? rows.slice(0, ASSET_EXPORT_MAX_ROWS) : rows;
+
+    let serialized = capped.map((a) => this.serialize(a, layout, a.fieldValues, actor.role));
+    await this.hydrateFileFields(companyId, serialized);
+    await this.hydrateAssetReferences(companyId, serialized);
+    await this.hydrateTagFields(serialized);
+
+    if (options.tagId) {
+      const tagFieldSlugs = fields.filter((f) => f.fieldType === 'TAGS').map((f) => f.slug);
+      const tagId = options.tagId;
+      serialized = serialized.filter((a) => rowHasTag(a.fieldValues, tagFieldSlugs, tagId));
+    }
+
+    const iso = (d: Date | null) => (d ? d.toISOString() : '');
+    const columns: Array<{ header: string; cell: (a: SerializedAsset) => string }> = [
+      { header: 'Name', cell: (a) => a.name },
+      ...fieldColumns.map((f) => ({
+        header: f.name,
+        cell: (a: SerializedAsset) =>
+          exportCellText(
+            f.fieldType,
+            a.fieldValues[f.slug],
+            (f.options ?? {}) as Record<string, unknown>,
+            a.references,
+            this.registry,
+          ),
+      })),
+      ...(options.columns === 'all'
+        ? [
+            { header: 'ID', cell: (a: SerializedAsset) => a.id },
+            { header: 'Created', cell: (a: SerializedAsset) => iso(a.createdAt) },
+            { header: 'Updated', cell: (a: SerializedAsset) => iso(a.updatedAt) },
+            { header: 'Archived at', cell: (a: SerializedAsset) => iso(a.archivedAt) },
+          ]
+        : [
+            { header: 'Updated', cell: (a: SerializedAsset) => iso(a.updatedAt) },
+            ...(options.includeArchived
+              ? [{ header: 'Archived at', cell: (a: SerializedAsset) => iso(a.archivedAt) }]
+              : []),
+          ]),
+    ];
+    const csv = toCsv(
+      columns.map((c) => c.header),
+      serialized.map((a) => columns.map((c) => c.cell(a))),
+    );
+
+    await this.audit.log({
+      actorId: actor.id,
+      action: AUDIT_ACTIONS.asset.export,
+      entityType: 'AssetLayout',
+      entityId: layout.id,
+      companyId,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      before: null,
+      after: {
+        columns: options.columns,
+        fieldSlugs: fieldColumns.map((f) => f.slug),
+        rowCount: serialized.length,
+        truncated,
+        filters: {
+          searchTermCount: searchTerms(options.q).length,
+          includeArchived: options.includeArchived === true,
+          tagId: options.tagId ?? null,
+        },
+      },
+    });
+
+    const date = new Date().toISOString().slice(0, 10);
+    return {
+      filename: `${company.slug}-${layout.slug}-${date}.csv`,
+      csv,
+      rowCount: serialized.length,
+      truncated,
     };
   }
 
@@ -3138,9 +3391,7 @@ export class AssetsService {
     rows: AssetFieldValue[],
     role: UserRole,
   ): SerializedAsset {
-    const visibleFields = layout.fields.filter(
-      (f) => f.archivedAt === null && (role !== 'CLIENT_USER' || f.visibleToClients),
-    );
+    const visibleFields = fieldsVisibleTo(layout.fields, role);
     const fieldById = new Map(visibleFields.map((f) => [f.id, f]));
     const fieldValues: Record<string, unknown> = {};
     for (const row of rows) {

@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { parseFieldDateTime, safeExternalHref } from '@weavestream/shared';
+import { parseFieldDateTime, problemMessage, safeExternalHref } from '@weavestream/shared';
 import type {
+  AssetExportColumns,
   AssetSummary,
   FieldType,
   LayoutFieldSummary,
@@ -25,9 +26,13 @@ import {
   Icon,
   LayoutSwatch,
   LinkBtn,
+  MenuItem,
   MobileCardRow,
+  OverflowMenu,
   Tag,
+  useToast,
 } from '../ui';
+import { downloadApiFile } from '../../lib/api';
 import { TagFilterMenu } from './tag-filter-menu';
 import { compactRelative as relative } from '../../lib/relative-time';
 import { editsActiveSearch, withSearchTerm } from '../../lib/search-terms';
@@ -63,6 +68,7 @@ export function LayoutAssetsTable({
   searchTerms,
   includeArchived,
   canManage,
+  exportCompanyId,
 }: {
   /** URL prefix for every outbound link (e.g. `/admin/companies/<id>`). */
   basePath: string;
@@ -72,6 +78,11 @@ export function LayoutAssetsTable({
   searchTerms: string[];
   includeArchived: boolean;
   canManage: boolean;
+  /**
+   * Company id for the CSV export. Only the admin page passes it, so the
+   * portal shows no Export control.
+   */
+  exportCompanyId?: string;
 }) {
   const router = useRouter();
   const timeZone = useTimezone();
@@ -357,6 +368,17 @@ export function LayoutAssetsTable({
           {includeArchived ? 'Hide archived' : 'Show archived'}
         </button>
 
+        {exportCompanyId && (
+          <LayoutExportMenu
+            companyId={exportCompanyId}
+            layout={layout}
+            terms={terms}
+            includeArchived={includeArchived}
+            tagFilter={tagFilter}
+            disabled={visibleRows.length === 0}
+          />
+        )}
+
       </div>
 
       <FilterChipRow chips={chips} onClearAll={clearAll} />
@@ -411,6 +433,115 @@ export function LayoutAssetsTable({
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * "Export" next to "Show archived": a CSV of this table, built by the
+ * server from the same filters (search, archive toggle, and the tag
+ * filter after the row cap), so the file holds the rows shown here.
+ */
+function LayoutExportMenu({
+  companyId,
+  layout,
+  terms,
+  includeArchived,
+  tagFilter,
+  disabled,
+}: {
+  companyId: string;
+  layout: LayoutSummary;
+  terms: readonly string[];
+  includeArchived: boolean;
+  tagFilter: string | null;
+  disabled: boolean;
+}) {
+  const toast = useToast();
+  const [exporting, setExporting] = useState(false);
+
+  async function exportCsv(mode: AssetExportColumns) {
+    const params = new URLSearchParams({ layout: layout.id, columns: mode });
+    for (const term of terms) params.append('q', term);
+    if (includeArchived) params.set('includeArchived', 'true');
+    if (tagFilter) params.set('tag', tagFilter);
+    setExporting(true);
+    try {
+      const date = new Date().toISOString().slice(0, 10);
+      const res = await downloadApiFile(
+        `/companies/${companyId}/assets/export?${params.toString()}`,
+        `${layout.slug}-${date}.csv`,
+      );
+      if (!res.ok) {
+        toast.push(
+          res.status === 429
+            ? 'Too many exports. Wait a minute and try again.'
+            : problemMessage(res.problem) ?? 'Export failed.',
+          'danger',
+        );
+      } else if (res.truncated) {
+        toast.push(
+          'Exported the first 5,000 rows only. Narrow the search to export the rest.',
+          'warn',
+        );
+      } else {
+        toast.push('Export downloaded.', 'ok');
+      }
+    } catch {
+      // Network failure: fetch rejected before any response arrived.
+      toast.push('Export failed. Check your connection and try again.', 'danger');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const rowDisabled = exporting || disabled;
+  return (
+    <OverflowMenu
+      label="Export to CSV"
+      trigger={
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            height: 28,
+            padding: '0 10px',
+            border: '1px solid var(--line-2)',
+            borderRadius: 5,
+            fontSize: 12,
+            color: 'var(--text-2)',
+          }}
+        >
+          <Icon.download size={12} />
+          {exporting ? 'Exporting…' : 'Export'}
+        </span>
+      }
+    >
+      {(close) => (
+        <>
+          <MenuItem
+            icon={Icon.list}
+            disabled={rowDisabled}
+            onClick={() => {
+              close();
+              void exportCsv('table');
+            }}
+          >
+            Visible columns (CSV)
+          </MenuItem>
+          <MenuItem
+            icon={Icon.grid}
+            disabled={rowDisabled}
+            onClick={() => {
+              close();
+              void exportCsv('all');
+            }}
+          >
+            All fields (CSV)
+          </MenuItem>
+        </>
+      )}
+    </OverflowMenu>
   );
 }
 

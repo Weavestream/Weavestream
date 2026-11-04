@@ -152,6 +152,9 @@ export const AUDIT_ACTIONS = {
     restore: 'asset.restore',
     // Copy into a company (entityId = the copy; after.sourceAssetId).
     clone: 'asset.clone',
+    // CSV export of one layout's list (entityId = the layout; after
+    // carries counts, field slugs, and filter shape — never cell values).
+    export: 'asset.export',
   },
   article: {
     create: 'article.create',

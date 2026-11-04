@@ -1,5 +1,11 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
-import { AssetsService, classifyIntegrationAssetChange } from './assets.service.js';
+import {
+  AssetsService,
+  classifyIntegrationAssetChange,
+  exportCellText,
+  rowHasTag,
+} from './assets.service.js';
+import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 
 /**
  * Focused unit test for the FILE-field upload backfill that runs
@@ -663,5 +669,59 @@ describe('AssetsService.get integration sections', () => {
     expect(findMany).not.toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ sectionData: expect.anything() }),
     }));
+  });
+});
+
+describe('rowHasTag', () => {
+  const TAG = 'tag-1';
+
+  it('matches a hydrated chip in any TAGS field', () => {
+    expect(rowHasTag({ a: [], b: [{ id: TAG, name: 'Prod' }] }, ['a', 'b'], TAG)).toBe(true);
+  });
+
+  it('ignores other tags, non-TAGS slugs, and legacy string values', () => {
+    expect(rowHasTag({ a: [{ id: 'tag-2', name: 'Dev' }] }, ['a'], TAG)).toBe(false);
+    expect(rowHasTag({ other: [{ id: TAG }] }, ['a'], TAG)).toBe(false);
+    expect(rowHasTag({ a: [TAG] }, ['a'], TAG)).toBe(false);
+    expect(rowHasTag({ a: null }, ['a'], TAG)).toBe(false);
+  });
+});
+
+describe('exportCellText', () => {
+  const registry = new FieldTypesRegistry();
+  const refs = { r1: { id: 'r1', name: 'Core switch', archivedAt: null } };
+  const cell = (type: Parameters<typeof exportCellText>[0], value: unknown, options = {}) =>
+    exportCellText(type, value, options, refs, registry);
+
+  it('returns an empty cell for absent and null values', () => {
+    expect(cell('TEXT', undefined)).toBe('');
+    expect(cell('TEXT', null)).toBe('');
+    expect(cell('ASSET_REFERENCE', null)).toBe('');
+  });
+
+  it('keeps 0 and false', () => {
+    expect(cell('NUMBER', 0)).toBe('0');
+    expect(cell('BOOLEAN', false)).toBe('no');
+    expect(cell('BOOLEAN', true)).toBe('yes');
+  });
+
+  it('resolves references as an array, keeping unresolved ids', () => {
+    expect(cell('ASSET_REFERENCE', ['r1'])).toBe('Core switch');
+    expect(cell('ASSET_REFERENCE', ['r1', 'gone'])).toBe('Core switch, gone');
+    expect(cell('ASSET_REFERENCE', [])).toBe('');
+    expect(cell('ASSET_REFERENCE', 'r1')).toBe('Core switch');
+  });
+
+  it('exports tag names and file names only', () => {
+    expect(cell('TAGS', [{ id: 't', name: 'Prod' }, { id: 'u', name: 'Edge' }])).toBe('Prod, Edge');
+    expect(
+      cell('FILE', [{ uploadId: 'x', filename: 'a.pdf', downloadUrl: '/api/v1/uploads/x/download' }]),
+    ).toBe('a.pdf');
+  });
+
+  it('uses choice labels and flat rich text', () => {
+    const options = { choices: [{ slug: 'dell', label: 'Dell Technologies' }] };
+    expect(cell('DROPDOWN', 'dell', options)).toBe('Dell Technologies');
+    expect(cell('RICH_TEXT', { v: null, plain: 'Rack four' })).toBe('Rack four');
   });
 });

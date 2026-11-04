@@ -103,3 +103,70 @@ export async function apiFetch<T>(
     throw err;
   }
 }
+
+/**
+ * Download a file from a same-origin GET endpoint without leaving the
+ * page. A native navigation (see `downloadWithStepUp`) would replace the
+ * page with raw problem JSON on a 400 or 429; this reads the response
+ * first, so the caller can show an error instead. Holds the whole file
+ * in memory — fine for bounded payloads such as a capped CSV export,
+ * not for DB dumps. No 401 retry: a 401 means the session is gone.
+ */
+export async function downloadApiFile(
+  path: string,
+  fallbackName: string,
+): Promise<
+  | { ok: true; truncated: boolean }
+  | { ok: false; status: number; problem?: unknown }
+> {
+  const res = await fetch(`/api/v1${path}`, { credentials: 'include' });
+  if (!res.ok) {
+    const contentType = res.headers.get('content-type') ?? '';
+    const problem = contentType.includes('json')
+      ? await res.json().catch(() => null)
+      : undefined;
+    return { ok: false, status: res.status, problem };
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download =
+      filenameFromContentDisposition(res.headers.get('content-disposition')) ?? fallbackName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    // Revoke after the click has queued the download.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+  return { ok: true, truncated: res.headers.get('x-export-truncated') === 'true' };
+}
+
+/**
+ * The file name in a `Content-Disposition` header, preferring the RFC
+ * 5987 `filename*` (exact UTF-8 name) over the ASCII `filename`
+ * fallback — the pair `contentDispositionFor` writes on the API. Path
+ * separators are replaced, so a name can never point outside the
+ * download folder. `null` when the header carries no usable name.
+ */
+export function filenameFromContentDisposition(header: string | null): string | null {
+  if (!header) return null;
+  const clean = (name: string) => {
+    const safe = name.replace(/[/\\]/g, '_').trim();
+    return safe.length > 0 ? safe : null;
+  };
+  const extended = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(header);
+  if (extended) {
+    try {
+      const name = clean(decodeURIComponent(extended[1]!.trim()));
+      if (name) return name;
+    } catch {
+      // Malformed percent-encoding: fall through to the plain parameter.
+    }
+  }
+  const plain = /filename\s*=\s*(?:"([^"]*)"|([^;]+))/.exec(header);
+  const value = plain ? (plain[1] ?? plain[2] ?? '') : '';
+  return clean(value);
+}

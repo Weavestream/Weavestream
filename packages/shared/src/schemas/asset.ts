@@ -73,6 +73,21 @@ export const bulkAssetIdsSchema = z.object({
 export type BulkAssetIdsInput = z.infer<typeof bulkAssetIdsSchema>;
 
 /**
+ * Row ceiling for `GET /companies/:companyId/assets/export`. Matches the
+ * per-layout page's own ceiling (`listAllAssets`: 25 pages x 200), so the
+ * CSV holds the same rows as the table the operator is looking at.
+ */
+export const ASSET_EXPORT_MAX_ROWS = 5000;
+
+/**
+ * `table` exports the columns the per-layout table shows; `all` exports
+ * every field the caller can see on that layout.
+ */
+export const assetExportColumnsSchema = z.enum(['table', 'all']);
+
+export type AssetExportColumns = z.infer<typeof assetExportColumnsSchema>;
+
+/**
  * Copy an asset into a company (the same one, or another). Layouts are
  * global, so the copy keeps its layout. `archiveOriginal` turns the copy
  * into a move: the source is archived (recoverable), never purged.
