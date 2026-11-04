@@ -24,6 +24,8 @@ export function InternalUserChecklist<U extends ChecklistUser>({
   loading = false,
   detail,
   ariaLabel,
+  emptyMessage = 'No eligible internal users found.',
+  maxHeight = 260,
 }: {
   users: readonly U[];
   selectedIds: ReadonlySet<string>;
@@ -32,6 +34,9 @@ export function InternalUserChecklist<U extends ChecklistUser>({
   /** Extra text after "email · role", e.g. how the user has access. */
   detail?: (user: U) => string | null;
   ariaLabel: string;
+  /** Shown when `users` is empty, e.g. when a search matches nobody. */
+  emptyMessage?: string;
+  maxHeight?: number | string;
 }) {
   return (
     <div
@@ -40,7 +45,7 @@ export function InternalUserChecklist<U extends ChecklistUser>({
       style={{
         border: '1px solid var(--line)',
         borderRadius: 6,
-        maxHeight: 260,
+        maxHeight,
         overflow: 'auto',
       }}
     >
@@ -50,7 +55,7 @@ export function InternalUserChecklist<U extends ChecklistUser>({
         </div>
       ) : users.length === 0 ? (
         <div style={{ padding: 12, fontSize: 13, color: 'var(--muted)' }}>
-          No eligible internal users found.
+          {emptyMessage}
         </div>
       ) : (
         users.map((user) => {

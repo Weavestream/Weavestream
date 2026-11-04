@@ -9,15 +9,14 @@ import {
   type PasswordAccessPolicy,
 } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
-import { Btn, RadioOption, Tag, useToast } from '../../../../components/ui';
+import { Btn, Icon, RadioOption, Tag, useToast } from '../../../../components/ui';
 import {
   accessUserIds,
   globalPolicyIdsToSave,
   pruneUnavailable,
-  toggleSelection,
   unavailableSelection,
 } from '../../../../components/passwords/internal-access-selection';
-import { InternalUserChecklist } from '../../../../components/passwords/internal-user-checklist';
+import { PasswordAccessUsersDialog } from './password-access-users-dialog';
 import { SectionHeader } from './settings-form';
 
 const MODE_HELP: Record<PasswordAccessMode, string> = {
@@ -53,6 +52,7 @@ export function PasswordAccessPolicySection({ initial }: { initial: PasswordAcce
     userIds: [...(initial?.userIds ?? [])].sort(),
   }));
   const [pending, setPending] = useState(false);
+  const [managing, setManaging] = useState(false);
 
   const users = useMemo(() => initial?.users ?? [], [initial]);
   const { selectable, alwaysIncluded } = useMemo(() => accessUserIds(users), [users]);
@@ -65,6 +65,9 @@ export function PasswordAccessPolicySection({ initial }: { initial: PasswordAcce
   const dirty =
     mode !== saved.mode ||
     (mode === 'selected_users' && userIds.join(',') !== saved.userIds.join(','));
+  // Active selected users, for the summary. Unavailable ids are not in
+  // `users`, so they drop out here and get their own warning below.
+  const selectedUsers = users.filter((u) => !u.alwaysIncluded && selectedIds.has(u.id));
 
   if (!initial) {
     return (
@@ -146,12 +149,40 @@ export function PasswordAccessPolicySection({ initial }: { initial: PasswordAcce
 
       {mode === 'selected_users' && (
         <>
-          <InternalUserChecklist
-            ariaLabel="Users with password access"
-            users={users}
-            selectedIds={selectedIds}
-            onToggle={(id) => setSelectedIds((prev) => toggleSelection(prev, id, alwaysIncluded))}
-          />
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              flexWrap: 'wrap',
+              border: '1px solid var(--line)',
+              borderRadius: 6,
+              padding: '10px 12px',
+            }}
+          >
+            <div style={{ minWidth: 0, flex: '1 1 240px' }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text)' }}>
+                {selectedUsers.length} selected user{selectedUsers.length === 1 ? '' : 's'}
+              </div>
+              <div
+                style={{
+                  fontSize: 12,
+                  color: 'var(--muted)',
+                  marginTop: 2,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {selectedUserPreview(selectedUsers.map((u) => u.name))}
+                {alwaysIncluded.size > 0 && ' · Super admins always have access.'}
+              </div>
+            </div>
+            <Btn size="sm" icon={Icon.users} onClick={() => setManaging(true)} disabled={pending}>
+              Manage users
+            </Btn>
+          </div>
           {unavailableIds.length > 0 && (
             <Tag tone="warn">
               {unavailableIds.length} selected user{unavailableIds.length === 1 ? ' is' : 's are'} no
@@ -177,11 +208,32 @@ export function PasswordAccessPolicySection({ initial }: { initial: PasswordAcce
         </>
       )}
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <Btn kind="primary" onClick={() => void save()} disabled={!dirty || pending || blockedByUnavailable}>
           Save password access
         </Btn>
+        {dirty && <span style={{ fontSize: 12, color: 'var(--muted)' }}>Unsaved changes</span>}
       </div>
+
+      {managing && (
+        <PasswordAccessUsersDialog
+          users={users}
+          selectedIds={selectedIds}
+          alwaysIncluded={alwaysIncluded}
+          onClose={() => setManaging(false)}
+          onApply={(next) => {
+            setSelectedIds(next);
+            setManaging(false);
+          }}
+        />
+      )}
     </section>
   );
+}
+
+/** "Ana, Ben, Cy and 4 more", or a prompt when nobody is selected. */
+function selectedUserPreview(names: readonly string[]): string {
+  if (names.length === 0) return 'No users selected.';
+  const shown = names.slice(0, 3).join(', ');
+  return names.length > 3 ? `${shown} and ${names.length - 3} more` : shown;
 }

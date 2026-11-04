@@ -39,6 +39,13 @@ function renderSection(initial: PasswordAccessPolicy) {
 
 const saveButton = () => screen.getByRole('button', { name: 'Save password access' });
 
+/** Ticks or unticks one user through the "Manage users" modal. */
+function toggleInModal(name: RegExp) {
+  fireEvent.click(screen.getByRole('button', { name: 'Manage users' }));
+  fireEvent.click(screen.getByRole('checkbox', { name }));
+  fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+}
+
 function sentBody() {
   const [path, init] = apiFetch.mock.calls[0] as [string, { method: string; body: string }];
   expect(path).toBe('/settings/password-access-policy');
@@ -54,7 +61,7 @@ beforeEach(() => {
 describe('PasswordAccessPolicySection unavailable users', () => {
   it('blocks the save until unavailable users are removed, then sends only active ids', async () => {
     renderSection(policy('selected_users'));
-    fireEvent.click(screen.getByRole('checkbox', { name: /Other/ }));
+    toggleInModal(/Other/);
 
     expect(screen.getByText(/no\s+longer active internal users/)).toBeInTheDocument();
     expect(saveButton()).toBeDisabled();
@@ -96,10 +103,42 @@ describe('PasswordAccessPolicySection unavailable users', () => {
 
     apiFetch.mockClear();
     fireEvent.click(screen.getByRole('radio', { name: /Selected users only/ }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /Other/ }));
+    toggleInModal(/Other/);
     await act(async () => {
       fireEvent.click(saveButton());
     });
     expect(sentBody()).toEqual({ mode: 'selected_users', userIds: [OTHER] });
+  });
+});
+
+describe('PasswordAccessPolicySection user modal', () => {
+  it('keeps the user list out of the page and summarises the selection', () => {
+    renderSection(policy('selected_users'));
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(screen.getByText('1 selected user')).toBeInTheDocument();
+    expect(screen.getByText(/^Active/)).toBeInTheDocument();
+  });
+
+  it('filters by name or email, and Cancel drops the draft', () => {
+    renderSection(policy('selected_users'));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage users' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search users' }), {
+      target: { value: 'other@' },
+    });
+    expect(screen.queryByRole('checkbox', { name: /Active/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Other/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByText('1 selected user')).toBeInTheDocument();
+  });
+
+  it('applies the draft to the section without saving it', () => {
+    renderSection(policy('selected_users'));
+    toggleInModal(/Other/);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByText('2 selected users')).toBeInTheDocument();
+    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
+    expect(apiFetch).not.toHaveBeenCalled();
   });
 });
