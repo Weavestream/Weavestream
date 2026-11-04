@@ -2,14 +2,14 @@
 label: Workspace Settings
 icon: paintbrush
 order: 800
-description: UI-level workspace branding and terminology configuration.
+description: Workspace branding, terminology, password access, and generator defaults.
 ---
 
 # Workspace Settings
 
-Workspace settings are managed from **Admin → Settings** by a `SUPER_ADMIN`. These settings control the name and vocabulary used throughout the UI — no code changes or container restarts are required.
+Workspace settings are managed from **Admin → Settings** by a `SUPER_ADMIN` or an operator with `SETTINGS_MANAGE`. They include branding, terminology, password access, and generator defaults — no code changes or container restarts are required.
 
-The values are stored in a singleton `system_settings` row. They affect UI copy only; they do not rename routes, API paths, database columns, or RBAC keys.
+The values are stored in a singleton `system_settings` row. Branding and terminology affect UI copy only; the password access policy controls credential visibility.
 
 ## Workspace Name
 
@@ -77,6 +77,12 @@ Workspace-wide defaults for the [password generator](/features/passwords/#passwo
 
 These defaults are used when the generator is opened without user-specific preferences. Users can override them per-session.
 
+## Password Access Policy
+
+Under **Passwords → Password access**, choose **All internal users** (the default) or **Selected users only** for credentials without their own internal-access list. Use **Manage users → Apply** to edit the selected-user list, then **Save password access** to persist it with step-up authentication. Super admins always have access; selected users still need company access. Active membership overrides can allow or deny one user's access in one company.
+
+See [Managing Passwords](/guides/managing-passwords/#setting-a-global-password-access-policy) for the workflow and [Password access restrictions](/features/passwords/#access-restrictions) for the full rule order. This policy applies to lists, search, attachments, stars, related items, PDF exports, and programmatic access as the user.
+
 ## Integrations
 
 **Admin > Settings > Integrations** holds the integration priority order: which integration's values win when several sync the same asset. See [Several integrations on one asset](/integrations/#several-integrations-on-one-asset).
@@ -93,7 +99,7 @@ The client secret is write-only: it is stored AES-256-GCM encrypted under `INTEG
 
 ## What Settings Don't Change
 
-Workspace settings are **cosmetic only**. The following always remain as-is regardless of configuration:
+The **branding and terminology settings** are cosmetic. Changing them preserves:
 
 - URL paths (`/admin/companies/...` — not `/admin/clients/...`)
 - API endpoints (`/api/companies/...`)

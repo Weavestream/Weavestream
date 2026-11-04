@@ -15,7 +15,7 @@ This page is for maintainers cutting a Weavestream release. Weavestream uses **S
 - **MINOR** (`1.0.0` -> `1.1.0`) - backwards-compatible feature additions. New environment variables are allowed when they have safe defaults.
 - **MAJOR** (`1.0.0` -> `2.0.0`) - breaking changes such as removed endpoints, renamed environment variables without fallback, or migrations requiring manual operator steps.
 
-Any release that requires an operator action must call it out in `CHANGELOG.md` under the release's `### Upgrade notes` subsection.
+Any release that requires an operator action must call it out in `docs/overview/changelog.md` under the release's `### Upgrade notes` subsection.
 
 ## Release Checklist
 
@@ -28,7 +28,7 @@ pnpm install
 pnpm lint && pnpm typecheck && pnpm test
 ```
 
-2. Move `## Unreleased` to `## [X.Y.Z] - YYYY-MM-DD` in [CHANGELOG.md](https://github.com/Weavestream/Weavestream/blob/main/CHANGELOG.md). Add a fresh empty `## Unreleased` section above it.
+2. Move the contents of `## [Unreleased]` into `## [X.Y.Z] - YYYY-MM-DD` in [docs/overview/changelog.md](https://github.com/Weavestream/Weavestream/blob/main/docs/overview/changelog.md). Keep a fresh empty `## [Unreleased]` section above it.
 
 3. Commit and open a PR titled `Release vX.Y.Z`. Merge once CI is green.
 
@@ -80,6 +80,6 @@ The version string flows through three places:
 
 1. **Git tag** (`vX.Y.Z`) - source of truth.
 2. **Docker image tag and `WEAVESTREAM_VERSION` build arg** - baked into each image by the release workflow. It surfaces in authenticated readiness output and the web login page footer.
-3. **`CHANGELOG.md`** - the human-readable release notes.
+3. **`docs/overview/changelog.md`** - the human-readable release notes.
 
 There is intentionally no application version in `package.json`; the project does not publish npm packages, and one version source is safer than several that can drift.

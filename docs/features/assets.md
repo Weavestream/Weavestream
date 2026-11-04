@@ -115,4 +115,25 @@ Use **Show dismissed** to see dismissed items with their note, and **Restore** t
 
 ## Search
 
-All asset field values are indexed in the `SearchIndex` table for full-text search via the [command palette](/features/search/) and the `/api/search` endpoint. Results are scoped to the requesting user's accessible tenants.
+Asset lists search names and indexed field values, including text, choice labels, numbers, stored dates and date-times, file names, and tag names. Boolean values, asset-reference targets, and Vaultwarden links are not indexed. Client users search only fields visible to clients.
+
+Type a term and press **Enter** to add a search pill, then add more terms to narrow the list. Every term must match; words within a term may match different fields. Matching is case-insensitive and uses literal substrings, so `%` and `_` are ordinary characters. Remove a pill with its **×**, use **Backspace** in an empty search box to remove the last term, or choose **Clear all** to reset the filters. A search supports at most **10 distinct terms**, each with at most **8 words** and **200 characters**.
+
+The company Assets page also accepts `field.<slug>=<value>` URL filters. Text values are trimmed and matched case-insensitively; dropdowns accept a choice label or slug. Numbers and booleans match by value. Without a layout filter, a field slug matches across all layouts that use it. Invalid fields, values, or search limits show a **Filter not applied** banner and keep the filter pills available for removal.
+
+The same indexed text supports full-text search via the [command palette](/features/search/) and the search API. Results are scoped to the requesting user's accessible tenants.
+
+## CSV Export
+
+On a company's layout list in the admin interface, open **Export** and choose:
+
+| Choice | Contents |
+|---|---|
+| **Visible columns (CSV)** | Name, layout fields marked **Show in table** (except the primary field already represented by Name), Updated, and Archived at when archived records are included |
+| **All fields (CSV)** | Name, every readable non-primary layout field, ID, Created, Updated, and Archived at |
+
+Export requires asset read access; read-only staff can use it. The client portal has no Export control. Both choices omit archived fields and Vaultwarden links. Files export as names, references as asset names where available, tags and choices as labels, and rich text as plain text. Timestamps use ISO format.
+
+The CSV follows the list's committed search terms, archive toggle, and tag filter. It exports up to **5,000 rows** in the list's default order, applying the tag filter after that cap, just as the page does. Local column sorting does not change the CSV order. When the base list exceeds the cap, a warning asks you to narrow the search. Cells that could be interpreted as spreadsheet formulas are escaped, and every download is audited as `asset.export`.
+
+The API endpoint is `GET /api/v1/companies/:companyId/assets/export`, with required `layout=<uuid>`, optional repeated `q`, `includeArchived=true`, `tag=<uuid>`, and `columns=table|all` (default `table`). It allows 10 requests per minute and returns `X-Export-Truncated: true` when capped.

@@ -119,7 +119,7 @@ For sensitive credentials, you can add restrictions:
 
 ## Controlling Internal User Access
 
-Every credential has an **Internal access** panel on its detail page that controls which of your internal (non-client) users can see it. By default a credential is visible to **all internal users with company access**. You can instead restrict it to a hand-picked list.
+Every credential has an **Internal access** panel on its detail page that controls which of your internal (non-client) users can see it. Without its own list, a credential follows the global password access policy and any active company membership override. On a default installation, that allows **all internal users with company access**. You can instead give the credential a hand-picked list.
 
 Restriction here controls **visibility**, not just reveal: a user who is not on the list does not see the credential in the list, cannot open its detail page, and cannot reveal it. Reason-to-view (above) is a separate control that prompts for a justification before showing the secret to users who *do* have access.
 
@@ -128,12 +128,12 @@ Restriction here controls **visibility**, not just reveal: a user who is not on 
 1. Open the credential's detail page
 2. In the **Internal access** panel, click **Edit**
 3. Choose one of:
-   - **All internal users with company access** — the default; anyone with normal access to the company can see the credential
+   - **All internal users with company access**, or **Use the global policy (selected users)** when that policy is active — no list on this credential; company membership overrides still apply
    - **Restrict to selected internal users** — only the users you tick can see it
 4. When restricting, tick the users who should retain access
 5. Click **Save**
 
-The panel summarises the current state: **All internal users** or **Restricted** with a count of how many users are allowed. When you are one of the allowed users, the panel notes that you're included.
+The panel summarises the current state: **All internal users**, **Global policy (selected users)**, or **Restricted** with a count of how many users are allowed. When you are one of the allowed users, the panel notes that you're included.
 
 ### Who Can Be Selected
 
@@ -155,12 +155,12 @@ Use the global policy when most credentials must be limited to a small team, for
 
 1. Go to **Settings → Passwords**
 2. In **Password access**, select **Selected users only**
-3. Tick the operators and contractors who need access. Super admins are always included.
-4. Click **Save password access** and confirm with step-up authentication
+3. Click **Manage users**, search by name or email, and tick the operators and contractors who need access. Super admins are always included.
+4. Click **Apply** to return to settings, then **Save password access** and confirm with step-up authentication
 
 The policy applies to every credential that has no own internal-access list. A credential with its own list uses only that list, so you can still give one credential to a user who is not in the global list. When the global policy is **Selected users only**, the first option in a credential's **Internal access** dialog reads **Use the global policy (selected users)**.
 
-Users outside the policy do not see those credentials anywhere, including search, stars, PDF exports, and MCP. They also do not see **New password**, because a credential they create without its own list would be hidden from them. Select **All internal users** to go back to the default. The saved user list is kept for later.
+Unless a company membership override allows access, users outside the policy do not see those credentials anywhere, including search, stars, PDF exports, and MCP. They also do not see **New password** in that company, because a credential they create without its own list would be hidden from them. Select **All internal users** to go back to the default. The saved eligible-user list is kept for later. A selected-users policy accepts up to 500 users; use **Remove unavailable** if a previously selected user is no longer eligible.
 
 ### Allowing or Denying 1 User in 1 Company
 

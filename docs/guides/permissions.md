@@ -37,6 +37,12 @@ User account
 
 An explicit membership overrides default tenant access for that tenant.
 
+### Password Access on a Membership
+
+For operators and contractors, each membership also has **Password access**: **Use global policy** (the default), **Allow**, or **Deny**. This controls credentials without their own internal-access list in that company. It does not grant company access or change the membership's read/write role. A credential with its own list uses that list first; super admins always retain access, and client users follow **Visible to clients**.
+
+Set the override on the company **Members** page or under **Users → (user) → Companies**. Creating or changing an override, changing its expiry, or revoking it requires an interactive session and step-up authentication. Expiry and revocation end the override; adding a revoked membership again defaults to **Use global policy**. Bulk adds also use that default. See [Company Password Access Override](/features/passwords/#company-password-access-override) for the rule order and examples.
+
 ## Default Tenant Access (`users.globalAccess`)
 
 Only applies to `OPERATOR` users when they do **not** have an explicit membership for a tenant.

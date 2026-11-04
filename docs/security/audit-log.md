@@ -13,12 +13,12 @@ Every mutation in Weavestream writes an immutable record to the audit log. The l
 
 Every create, update, delete, archive, restore, and sensitive access operation writes an audit entry. This includes:
 
-- **Asset** create, update, archive, restore
+- **Asset** create, update, archive, restore, CSV export (`asset.export`, including layout, column mode, field slugs, row count, truncation, and filter metadata)
 - **Password** create, update, archive, restore, **reveal** (each decryption), version restore
 - **Article** create, update, move, archive, restore
 - **Company** create, update, archive, restore
 - **User** create, update, deactivate, role change, password change, MFA reset, invite created/accepted
-- **Membership** create, update, revoke
+- **Membership** create, update, revoke, including the company password-access override in the change history
 - **Domain** create, update, archive, restore, check result
 - **Layout** create, update, rename, archive
 - **Settings** update, email update/test
@@ -30,6 +30,7 @@ Every create, update, delete, archive, restore, and sensitive access operation w
 - **Login** events (success, failure, MFA success/failure, logout, refresh)
 - **Auth** MFA enroll/complete, sessions revoke others, remote AI connection approved (`auth.mcp_connection.create`) and revoked (`auth.mcp_connection.revoke`)
 - **Settings** the API key and remote AI connection switches (`settings.api_keys.toggle`, `settings.mcp_remote.toggle`), and which AI apps can connect (`settings.mcp_client_policy.change`)
+- **Settings** global password access policy changes (`settings.password_access_policy.change`), including before/after modes and selected user IDs, plus the acting session row ID
 
 ## Audit Entry Fields
 

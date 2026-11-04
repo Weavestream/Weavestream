@@ -30,7 +30,7 @@ The `api` container runs `prisma migrate deploy` automatically on startup. Schem
 
 ## Minor Version Upgrades
 
-Check the [changelog](/overview/changelog/) for any `### Upgrading from X.Y.Z` sections. These describe manual steps that must be completed **before** or **alongside** the image update.
+Check the [changelog](/overview/changelog/) for **Upgrade notes** or **Upgrading from X.Y.Z** sections. These describe any steps that must be completed **before** or **alongside** the image update.
 
 ### Example: 1.0.0 → 1.1.0
 

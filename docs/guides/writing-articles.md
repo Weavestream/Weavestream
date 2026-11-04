@@ -29,6 +29,21 @@ Each article has its own **editor mode** — you are not locked into a workspace
 
 To switch an existing article's format, use the **format toggle** in the article form. A confirmation dialog warns you before running the one-time conversion, because the process can be lossy for complex content. After switching, click **Save** — the format toggle does not autosave.
 
+## Importing Markdown Files
+
+Users with article write access can import existing documentation from the company's **Articles** page:
+
+1. Select the destination folder in the sidebar. **All** and **No folder** import at the root.
+2. Click **Import** and choose `.md` or `.markdown` files.
+3. Review the proposed titles and any rejected files. **Visible to clients** is off by default and applies to the whole batch.
+4. Click **Import** and keep the page open until it finishes.
+
+Each file becomes a new Markdown article. The title comes from the first `#` heading outside fenced code blocks, or the first heading of another level if there is no `#` heading. Without a heading, the importer uses a front-matter `title:` value, then the filename. A leading front-matter block is removed. The chosen heading is removed from the body only when it is the first content line and body text remains.
+
+An import accepts up to **100 files**, each at most **2 MiB**, with an article body of at most **500,000 characters**. Empty files and files over these limits are rejected before import. Existing articles are never overwritten: a conflicting title/slug is retried with a numbered suffix, up to `20`.
+
+The result reports imported, failed, not imported, and uncertain files. A lost connection stops the batch because the current article may already have been created; check the article list before retrying an uncertain file. A sign-in failure or rate limit also stops the remaining files. Linked local images and other files are not uploaded by this workflow; add them separately through the editor.
+
 ## Editor Toolbar
 
 The toolbar provides quick access to all formatting options:

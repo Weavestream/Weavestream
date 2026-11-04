@@ -24,6 +24,10 @@ You switch modes from the article form using the **format toggle**. Switching an
 
 Search always indexes `content_plaintext` regardless of mode, so both formats are equally discoverable.
 
+## Markdown Import
+
+Click **Import** on a company's Articles page to create articles from `.md` or `.markdown` files in the selected folder. Review titles and client visibility before importing; existing articles are preserved and title conflicts receive numbered suffixes. Batches support up to 100 files, subject to file and body-size limits. See [Importing Markdown Files](/guides/writing-articles/#importing-markdown-files) for limits, title selection, and partial-failure handling.
+
 ## Rich-Text Editing
 
 Articles in Tiptap mode are powered by **Tiptap 3**, a headless editor built on ProseMirror. The editor supports:

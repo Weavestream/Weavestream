@@ -13,6 +13,40 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-11-04
+
+### Added
+
+- **Import Markdown files as articles.** The company Articles page has an **Import** action for `.md` and `.markdown` files. Review titles, destination folder, and client visibility before importing up to 100 files. Titles come from headings, front matter, or filenames; conflicts receive numbered suffixes without overwriting existing articles. Progress and per-file results identify failures and uncertain outcomes. See [Importing Markdown Files](/guides/writing-articles/#importing-markdown-files).
+- **Export a layout's assets to CSV.** **Export → Visible columns (CSV)** or **All fields (CSV)** downloads the current search, archive, and tag-filtered list, up to 5,000 rows. Read-only staff can export. Files, tags, references, and rich text become readable cell values; Vaultwarden links are excluded, spreadsheet formulas are escaped, and each export is audited. See [CSV Export](/features/assets/#csv-export).
+- **Global password access policy.** Under **Settings → Passwords → Password access**, choose **All internal users** (the default) or **Selected users only** for credentials without their own access list. **Manage users** opens a searchable selection dialog; **Apply** returns to settings and **Save password access** saves with step-up authentication. Super admins retain access, client users follow **Visible to clients**, and selecting a user never grants company access.
+- **Password access per company member.** Set **Use global policy**, **Allow**, or **Deny** on the company Members page or a user's Companies list. An active override applies to credentials without their own access list in that company and ends when the membership expires or is revoked. Changing an override or its lifecycle requires step-up authentication. A credential with its own list uses that list first. See [Password Access Restrictions](/features/passwords/#access-restrictions).
+
+### Changed
+
+- **Asset search includes field values.** Company and layout lists, including portal lists, match names and indexed field text such as serial numbers, IP addresses, choice labels, numbers, dates, file names, and tag names. Press **Enter** to stack removable search pills; every term must match, and words may match different fields. Searches accept up to 10 terms, each with up to 8 words and 200 characters. The mobile asset-reference picker and MCP `list_assets` use the expanded matching too.
+- **Consistent radio and checkbox controls.** Settings and account preferences share option cards with visible native indicators, accent borders, and soft accent fills for selected choices. Inline checkboxes also use the shared control.
+
+### Fixed
+
+- **Asset field filters match what users enter.** Text filters trim whitespace and ignore case, dropdowns accept labels or slugs, and a shared field slug matches across layouts when no layout is selected. Invalid filters and over-limit searches show a removable-filter banner instead of silently appearing as an empty result.
+- **Asset search text stays current.** Choice-label changes and tag renames or deletions rebuild affected index rows. Numbers, dates, file names, and tag names are indexed, with automatic background refresh for existing assets. Rebuilds take an asset row lock so a concurrent older rebuild cannot overwrite corrected client-visible text.
+- **Company-scoped reads work for membership-only operators.** Search-hit enrichment, starring records, asset indexing, company-logo validation, and alert entity-name lookups now supply explicit company scope where required.
+- **Markdown editor dependency copies are aligned.** CodeMirror and Lezer core packages are pinned to one version each, preventing extension-identity errors and missing highlighting from duplicate copies.
+- **Membership edits preserve expiry times.** Edit dialogs use local date-time input values and submit only changed fields, avoiding UTC shifts, validation failures on unchanged expired dates, and unnecessary step-up challenges on role-only edits.
+
+### Security
+
+- **Password access is enforced across read paths.** Global policy and membership overrides apply to lists, details, reveals, attachment access and search, stars, related items, PDF exports, and API keys or MCP acting as the user. Creating a credential without its own list is refused when the creator could not read it.
+- **PDF exports belong to their requester.** Only the requester or a super admin may read a job's status or download its file. The worker checks current password policy and membership overrides before gathering credentials, their attachments, and related-item links; missing or inactive requesters receive no password entries.
+- **Membership override changes cannot race past step-up.** Updates and revocations check the locked membership row before writing. Reactivation succeeds only while the row is still revoked, and concurrent membership creation returns a conflict instead of overwriting another request's access settings.
+
+### Upgrade notes
+
+- Update the **API, web, and worker together**. Migrations `0089_asset_search_reindex`, `0090_password_access_policy`, and `0091_membership_password_access` apply automatically. Existing password access is preserved: the global policy starts at **All internal users** and memberships at **Use global policy**. No new environment variables are required.
+- Existing asset search text refreshes in the background. The API runs an early pass; the updated worker logs **Asset search text refreshed (final pass)** when finished. Newly indexed values on old assets may not match until then. A failed refresh retries on the next service start; no manual reindex is normally needed.
+- PDF jobs queued before requester tracking omit password entries and their attachments when processed by the updated worker, and only super admins can retrieve those legacy jobs. Request a new export if needed. See [Upgrades](/deployment/upgrades/).
+
 ## [1.11.1] - 2026-11-01
 
 ### Changed
