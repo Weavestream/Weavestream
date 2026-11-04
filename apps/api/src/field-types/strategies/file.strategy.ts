@@ -23,7 +23,8 @@ import type {
  */
 export class FileStrategy implements FieldTypeStrategy {
   readonly kind = 'FILE' as const;
-  readonly searchable = false;
+  // Indexed by file name (see `toPlaintext`).
+  readonly searchable = true;
   readonly optionsSchema = fileOptionsSchema;
 
   valueSchema(options: Record<string, unknown>): z.ZodTypeAny {
@@ -62,14 +63,14 @@ const tagsOptionsSchema = z.object({}).strict();
  * the wire shape into the canonical stored shape (a plain `string[]` of
  * UUIDs) before `valueSchema` validation and `normalize`.
  *
- * `toPlaintext` returns `''` because the strategy itself has no DB access
- * — search-indexing of tag names is intentionally out of scope here. The
- * read-side serializer in AssetsService hydrates `{ id, name }` snapshots
- * for the UI separately.
+ * `toPlaintext` returns `''` because the strategy itself has no DB access.
+ * The field is still searchable: `SearchIndexService.upsertAsset` resolves
+ * the stored ids to tag names and indexes those. The read-side serializer
+ * in AssetsService hydrates `{ id, name }` snapshots for the UI separately.
  */
 export class TagsStrategy implements FieldTypeStrategy {
   readonly kind = 'TAGS' as const;
-  readonly searchable = false;
+  readonly searchable = true;
   readonly optionsSchema = tagsOptionsSchema;
 
   valueSchema(): z.ZodTypeAny {

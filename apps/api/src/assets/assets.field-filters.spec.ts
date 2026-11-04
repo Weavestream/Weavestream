@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import { AssetsService } from './assets.service.js';
+import { AssetsService, MAX_ASSET_SEARCH_TERMS } from './assets.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /**
@@ -179,5 +179,87 @@ describe('AssetsService.list field filters', () => {
         await badRequestBody(service.list(OPERATOR, COMPANY, { fieldFilters: { ram: raw } })),
       ).toMatchObject({ error: 'InvalidFilterValue' });
     }
+  });
+});
+
+describe('AssetsService.list stacked search terms', () => {
+  function makeSearchService() {
+    const prisma = {
+      assetField: { findMany: jest.fn(async () => []) },
+      asset: { findMany: jest.fn(async () => []) },
+    };
+    const searchIndex = {
+      matchAssetIds: jest.fn(async (_companyId: string, term: string) => [`hit-${term}`]),
+    };
+    const service = new AssetsService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      searchIndex as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+    const where = () =>
+      (prisma.asset.findMany.mock.calls[0] as unknown as [{ where: Prisma.AssetWhereInput }])[0]
+        .where;
+    return { service, searchIndex, where };
+  }
+
+  it('requires every term to match, each by name or by the search index', async () => {
+    const { service, searchIndex, where } = makeSearchService();
+
+    await service.list(OPERATOR, COMPANY, { q: ['dell', ' 10.2.4 '] });
+
+    expect(searchIndex.matchAssetIds).toHaveBeenCalledTimes(2);
+    expect(where().companyId).toBe(COMPANY);
+    expect(where().AND).toEqual([
+      {
+        OR: [
+          { name: { contains: 'dell', mode: 'insensitive' } },
+          { id: { in: ['hit-dell'] } },
+        ],
+      },
+      {
+        OR: [
+          { name: { contains: '10.2.4', mode: 'insensitive' } },
+          { id: { in: ['hit-10.2.4'] } },
+        ],
+      },
+    ]);
+  });
+
+  it('keeps accepting a single term, and skips blank and repeated terms', async () => {
+    const single = makeSearchService();
+    await single.service.list(OPERATOR, COMPANY, { q: 'dell' });
+    expect(single.where().AND).toHaveLength(1);
+
+    const repeated = makeSearchService();
+    await repeated.service.list(OPERATOR, COMPANY, { q: ['dell', 'DELL', '  '] });
+    expect(repeated.searchIndex.matchAssetIds).toHaveBeenCalledTimes(1);
+    expect(repeated.where().AND).toHaveLength(1);
+  });
+
+  it('checks every term before it runs any search', async () => {
+    const { service, searchIndex } = makeSearchService();
+
+    expect(
+      await badRequestBody(
+        service.list(OPERATOR, COMPANY, { q: ['dell', 'a b c d e f g h i'] }),
+      ),
+    ).toMatchObject({ error: 'SearchTermTooLong' });
+    expect(searchIndex.matchAssetIds).not.toHaveBeenCalled();
+  });
+
+  it(`rejects more than ${MAX_ASSET_SEARCH_TERMS} terms before searching`, async () => {
+    const { service, searchIndex } = makeSearchService();
+    const terms = Array.from({ length: MAX_ASSET_SEARCH_TERMS + 1 }, (_, i) => `t${i}`);
+
+    expect(await badRequestBody(service.list(OPERATOR, COMPANY, { q: terms }))).toMatchObject({
+      error: 'TooManySearchTerms',
+    });
+    expect(searchIndex.matchAssetIds).not.toHaveBeenCalled();
   });
 });

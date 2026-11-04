@@ -6,7 +6,8 @@ const optionsSchema = z.object({}).strict();
 
 export class NumberStrategy implements FieldTypeStrategy {
   readonly kind = 'NUMBER' as const;
-  readonly searchable = false;
+  // Indexed so a numeric serial or asset number finds its asset.
+  readonly searchable = true;
   readonly optionsSchema = optionsSchema;
 
   valueSchema(): z.ZodTypeAny {

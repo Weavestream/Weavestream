@@ -46,6 +46,10 @@ function makeAudit() {
   };
 }
 
+function makeSearchIndex() {
+  return { reindexAssetsWithTag: jest.fn().mockResolvedValue(0) };
+}
+
 const ACTOR: AuthedUser = {
   id: 'u-1',
   email: 'op@example.com',
@@ -60,7 +64,7 @@ describe('TagsService', () => {
       const prisma = makePrisma();
       const audit = makeAudit();
       prisma.tag.findMany.mockResolvedValue([nowRow('Alpha', 't-1')]);
-      const svc = new TagsService(prisma as never, audit as never);
+      const svc = new TagsService(prisma as never, audit as never, makeSearchIndex() as never);
       await svc.list();
       expect(prisma.tag.findMany).toHaveBeenCalledWith({
         where: {},
@@ -73,7 +77,7 @@ describe('TagsService', () => {
     it('clamps limit to 200 max', async () => {
       const prisma = makePrisma();
       prisma.tag.findMany.mockResolvedValue([]);
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       await svc.list({ limit: 5000 });
       expect(prisma.tag.findMany.mock.calls[0]![0]).toMatchObject({ take: 200 });
     });
@@ -81,7 +85,7 @@ describe('TagsService', () => {
     it('searches case-insensitively on nameLower', async () => {
       const prisma = makePrisma();
       prisma.tag.findMany.mockResolvedValue([]);
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       await svc.list({ q: ' Prod ' });
       expect(prisma.tag.findMany.mock.calls[0]![0]).toMatchObject({
         where: { nameLower: { contains: 'prod' } },
@@ -94,7 +98,7 @@ describe('TagsService', () => {
       const prisma = makePrisma();
       prisma.tag.findUnique.mockResolvedValue(null);
       prisma.tag.upsert.mockResolvedValue({ id: 't-1', name: 'Production' });
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       const id = await svc.upsertByName('  Production  ');
       expect(id).toBe('t-1');
       expect(prisma.tag.findUnique).toHaveBeenCalledWith({
@@ -112,14 +116,14 @@ describe('TagsService', () => {
     it('skips the upsert when the row already exists', async () => {
       const prisma = makePrisma();
       prisma.tag.findUnique.mockResolvedValue({ id: 't-7' });
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       const id = await svc.upsertByName('Production');
       expect(id).toBe('t-7');
       expect(prisma.tag.upsert).not.toHaveBeenCalled();
     });
 
     it('rejects empty names', async () => {
-      const svc = new TagsService(makePrisma() as never, makeAudit() as never);
+      const svc = new TagsService(makePrisma() as never, makeAudit() as never, makeSearchIndex() as never);
       await expect(svc.upsertByName('   ')).rejects.toBeInstanceOf(
         ConflictException,
       );
@@ -133,7 +137,7 @@ describe('TagsService', () => {
           upsert: jest.fn().mockResolvedValue({ id: 't-9', name: 'Critical' }),
         },
       };
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       const id = await svc.upsertByName('Critical', tx as never);
       expect(id).toBe('t-9');
       expect(prisma.tag.upsert).not.toHaveBeenCalled();
@@ -146,7 +150,7 @@ describe('TagsService', () => {
       const audit = makeAudit();
       prisma.tag.findUnique.mockResolvedValue(null);
       prisma.tag.upsert.mockResolvedValue({ id: 't-1', name: 'Production' });
-      const svc = new TagsService(prisma as never, audit as never);
+      const svc = new TagsService(prisma as never, audit as never, makeSearchIndex() as never);
       await svc.upsertByName('Production', undefined, AUDIT_META);
       expect(audit.log).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -172,7 +176,7 @@ describe('TagsService', () => {
         },
         auditLog: { create: jest.fn() },
       };
-      const svc = new TagsService(prisma as never, audit as never);
+      const svc = new TagsService(prisma as never, audit as never, makeSearchIndex() as never);
       await svc.upsertByName('Critical', tx as never, AUDIT_META);
       expect(audit.logWithClient).toHaveBeenCalledWith(
         tx,
@@ -185,7 +189,7 @@ describe('TagsService', () => {
       const prisma = makePrisma();
       const audit = makeAudit();
       prisma.tag.findUnique.mockResolvedValue({ id: 't-1' });
-      const svc = new TagsService(prisma as never, audit as never);
+      const svc = new TagsService(prisma as never, audit as never, makeSearchIndex() as never);
       await svc.upsertByName('Production', undefined, AUDIT_META);
       expect(audit.log).not.toHaveBeenCalled();
       expect(prisma.tag.upsert).not.toHaveBeenCalled();
@@ -196,7 +200,7 @@ describe('TagsService', () => {
       const audit = makeAudit();
       prisma.tag.findUnique.mockResolvedValue(null);
       prisma.tag.upsert.mockResolvedValue({ id: 't-1', name: 'Production' });
-      const svc = new TagsService(prisma as never, audit as never);
+      const svc = new TagsService(prisma as never, audit as never, makeSearchIndex() as never);
       await svc.upsertByName('Production');
       expect(audit.log).not.toHaveBeenCalled();
     });
@@ -209,7 +213,7 @@ describe('TagsService', () => {
       prisma.tag.findUnique.mockResolvedValue(null);
       prisma.tag.upsert.mockResolvedValue({ id: 't-1', name: 'Production' });
       prisma.tag.findUniqueOrThrow.mockResolvedValue(nowRow('Production'));
-      const svc = new TagsService(prisma as never, audit as never);
+      const svc = new TagsService(prisma as never, audit as never, makeSearchIndex() as never);
       const out = await svc.create(ACTOR, 'Production', META);
       expect(out.name).toBe('Production');
       expect(audit.log).toHaveBeenCalledTimes(1);
@@ -228,7 +232,7 @@ describe('TagsService', () => {
       const audit = makeAudit();
       prisma.tag.findUnique.mockResolvedValue({ id: 't-1' });
       prisma.tag.findUniqueOrThrow.mockResolvedValue(nowRow('Production'));
-      const svc = new TagsService(prisma as never, audit as never);
+      const svc = new TagsService(prisma as never, audit as never, makeSearchIndex() as never);
       await svc.create(ACTOR, 'Production', META);
       expect(audit.log).not.toHaveBeenCalled();
       expect(prisma.tag.upsert).not.toHaveBeenCalled();
@@ -239,7 +243,7 @@ describe('TagsService', () => {
     it('throws NotFound when the tag is missing', async () => {
       const prisma = makePrisma();
       prisma.tag.findUnique.mockResolvedValue(null);
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       await expect(svc.rename(ACTOR, 't-x', 'Foo', META)).rejects.toBeInstanceOf(
         NotFoundException,
       );
@@ -250,7 +254,7 @@ describe('TagsService', () => {
       prisma.tag.findUnique
         .mockResolvedValueOnce(nowRow('Production', 't-1'))
         .mockResolvedValueOnce(nowRow('staging', 't-2'));
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       await expect(
         svc.rename(ACTOR, 't-1', 'Staging', META),
       ).rejects.toBeInstanceOf(ConflictException);
@@ -264,7 +268,7 @@ describe('TagsService', () => {
         .mockResolvedValueOnce(nowRow('Production', 't-1'))
         .mockResolvedValueOnce(null);
       prisma.tag.update.mockResolvedValue(nowRow('Prod', 't-1'));
-      const svc = new TagsService(prisma as never, audit as never);
+      const svc = new TagsService(prisma as never, audit as never, makeSearchIndex() as never);
       const out = await svc.rename(ACTOR, 't-1', 'Prod', META);
       expect(prisma.tag.update).toHaveBeenCalledWith({
         where: { id: 't-1' },
@@ -286,10 +290,53 @@ describe('TagsService', () => {
       const prisma = makePrisma();
       prisma.tag.findUnique.mockResolvedValueOnce(nowRow('production', 't-1'));
       prisma.tag.update.mockResolvedValue(nowRow('Production', 't-1'));
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       await svc.rename(ACTOR, 't-1', 'Production', META);
       expect(prisma.tag.findUnique).toHaveBeenCalledTimes(1);
       expect(prisma.tag.update).toHaveBeenCalled();
+    });
+  });
+
+  describe('search reindex', () => {
+    // The search index holds tag names, so every asset with the tag is
+    // rebuilt after a rename or delete.
+    it('reindexes the tagged assets after a rename', async () => {
+      const prisma = makePrisma();
+      prisma.tag.findUnique.mockResolvedValueOnce(nowRow('Production', 't-1')).mockResolvedValueOnce(null);
+      prisma.tag.update.mockResolvedValue(nowRow('Prod', 't-1'));
+      const searchIndex = makeSearchIndex();
+      const svc = new TagsService(prisma as never, makeAudit() as never, searchIndex as never);
+      await svc.rename(ACTOR, 't-1', 'Prod', META);
+      expect(searchIndex.reindexAssetsWithTag).toHaveBeenCalledWith('t-1');
+    });
+
+    it('reindexes the tagged assets after a delete', async () => {
+      const prisma = makePrisma();
+      prisma.tag.findUnique.mockResolvedValueOnce(nowRow('Production', 't-1'));
+      prisma.tag.delete.mockResolvedValue(undefined);
+      const searchIndex = makeSearchIndex();
+      const svc = new TagsService(prisma as never, makeAudit() as never, searchIndex as never);
+      await svc.remove(ACTOR, 't-1', META);
+      expect(searchIndex.reindexAssetsWithTag).toHaveBeenCalledWith('t-1');
+    });
+
+    it('rethrows a reindex failure after the rename has committed', async () => {
+      const prisma = makePrisma();
+      prisma.tag.findUnique.mockResolvedValueOnce(nowRow('production', 't-1'));
+      prisma.tag.update.mockResolvedValue(nowRow('Production', 't-1'));
+      const searchIndex = { reindexAssetsWithTag: jest.fn().mockRejectedValue(new Error('db down')) };
+      const svc = new TagsService(prisma as never, makeAudit() as never, searchIndex as never);
+      await expect(svc.rename(ACTOR, 't-1', 'Production', META)).rejects.toThrow('db down');
+      expect(prisma.tag.update).toHaveBeenCalled();
+    });
+
+    it('does not reindex when the tag is missing', async () => {
+      const prisma = makePrisma();
+      prisma.tag.findUnique.mockResolvedValue(null);
+      const searchIndex = makeSearchIndex();
+      const svc = new TagsService(prisma as never, makeAudit() as never, searchIndex as never);
+      await expect(svc.remove(ACTOR, 't-x', META)).rejects.toBeInstanceOf(NotFoundException);
+      expect(searchIndex.reindexAssetsWithTag).not.toHaveBeenCalled();
     });
   });
 
@@ -297,7 +344,7 @@ describe('TagsService', () => {
     it('throws NotFound when missing', async () => {
       const prisma = makePrisma();
       prisma.tag.findUnique.mockResolvedValue(null);
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       await expect(svc.remove(ACTOR, 't-x', META)).rejects.toBeInstanceOf(
         NotFoundException,
       );
@@ -308,7 +355,7 @@ describe('TagsService', () => {
       const audit = makeAudit();
       prisma.tag.findUnique.mockResolvedValueOnce(nowRow('Production', 't-1'));
       prisma.tag.delete.mockResolvedValue(undefined);
-      const svc = new TagsService(prisma as never, audit as never);
+      const svc = new TagsService(prisma as never, audit as never, makeSearchIndex() as never);
       await svc.remove(ACTOR, 't-1', META);
       expect(prisma.tag.delete).toHaveBeenCalledWith({ where: { id: 't-1' } });
       expect(audit.log).toHaveBeenCalledWith(
@@ -325,7 +372,7 @@ describe('TagsService', () => {
 
   describe('getMany', () => {
     it('returns an empty map for an empty input', async () => {
-      const svc = new TagsService(makePrisma() as never, makeAudit() as never);
+      const svc = new TagsService(makePrisma() as never, makeAudit() as never, makeSearchIndex() as never);
       const out = await svc.getMany([]);
       expect(out.size).toBe(0);
     });
@@ -348,7 +395,7 @@ describe('TagsService', () => {
           updatedAt: new Date(),
         },
       ]);
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       const out = await svc.getMany([
         '11111111-1111-1111-1111-111111111111',
         '11111111-1111-1111-1111-111111111111',
@@ -378,7 +425,7 @@ describe('TagsService', () => {
       // `findMany`. The service must filter them before issuing the query.
       const prisma = makePrisma();
       prisma.tag.findMany.mockResolvedValue([]);
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       const out = await svc.getMany(['production', 'staging', 'not-a-uuid']);
       expect(prisma.tag.findMany).not.toHaveBeenCalled();
       expect(out.size).toBe(0);
@@ -395,7 +442,7 @@ describe('TagsService', () => {
           updatedAt: new Date(),
         },
       ]);
-      const svc = new TagsService(prisma as never, makeAudit() as never);
+      const svc = new TagsService(prisma as never, makeAudit() as never, makeSearchIndex() as never);
       const out = await svc.getMany([
         'production',
         '11111111-1111-1111-1111-111111111111',

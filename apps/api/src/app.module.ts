@@ -32,7 +32,7 @@ import { UploadsModule } from './uploads/uploads.module.js';
 import { FoldersModule } from './folders/folders.module.js';
 import { ArticlesModule } from './articles/articles.module.js';
 import { SearchModule } from './search/search.module.js';
-import { MarkdownPlaintextRefreshModule } from './search/markdown-plaintext-refresh.service.js';
+import { SearchRefreshModule } from './search/search-refresh.service.js';
 import { SettingsModule } from './settings/settings.module.js';
 import { McpOAuthModule } from './mcp-oauth/mcp-oauth.module.js';
 import { McpModule } from './mcp/mcp.module.js';
@@ -164,8 +164,8 @@ const httpSerializers = {
     FoldersModule,
     ArticlesModule,
     SearchModule,
-    // Early pass of a queued Markdown plaintext refresh; the worker finishes it.
-    MarkdownPlaintextRefreshModule.forProcess('api'),
+    // Early pass of a queued search-text refresh; the worker finishes it.
+    SearchRefreshModule.forProcess('api'),
     SettingsModule,
     McpOAuthModule,
     McpModule,

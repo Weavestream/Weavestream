@@ -31,11 +31,12 @@ import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { AuditLogService, type AuditEntry } from '../audit/audit.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { choices as choiceOptions } from '../field-types/strategies/choice.strategy.js';
+import { escapeLikePattern } from '../common/like-pattern.js';
 import { RelationsService } from '../relations/relations.service.js';
 import { getTenantContext } from '@weavestream/shared/server';
 import { UploadContentMissingException, UploadsService } from '../uploads/uploads.service.js';
 import { describeError } from '../common/describe-error.js';
-import { SearchIndexService } from '../search/search-index.service.js';
+import { SearchIndexService, assetSearchWords } from '../search/search-index.service.js';
 import { PasswordsService } from '../passwords/passwords.service.js';
 import { StarsService } from '../stars/stars.service.js';
 import { TagsService } from '../tags/tags.service.js';
@@ -287,9 +288,13 @@ const INTEGRATION_AUDIT_META: AuditMeta = {
  */
 const INTEGRATION_WRITE_MAX_ATTEMPTS = 3;
 
+/** Most search terms (`q` values) one asset list request may stack. */
+export const MAX_ASSET_SEARCH_TERMS = 10;
+
 export interface AssetListOptions {
   layoutId?: string;
-  q?: string;
+  /** One search term, or several stacked ones (`?q=a&q=b`). */
+  q?: string | string[];
   includeArchived?: boolean;
   /** Raw `field.<slug>=<value>` filters, parsed from `req.query`. */
   fieldFilters?: Record<string, string>;
@@ -384,6 +389,22 @@ export interface SerializedAsset {
 
 type LayoutWithFields = AssetLayout & { fields: AssetField[] };
 
+/**
+ * The distinct, non-blank search terms in a `q` value. A term repeated
+ * in another letter case counts once.
+ */
+function searchTerms(q: string | string[] | undefined): string[] {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const raw of Array.isArray(q) ? q : q === undefined ? [] : [q]) {
+    const term = raw.trim();
+    if (!term || seen.has(term.toLowerCase())) continue;
+    seen.add(term.toLowerCase());
+    terms.push(term);
+  }
+  return terms;
+}
+
 @Injectable()
 export class AssetsService {
   private readonly logger = new Logger(AssetsService.name);
@@ -405,11 +426,17 @@ export class AssetsService {
   // --------------------------------------------------------------------
 
   /**
-   * List assets for a company with layout filter, name search, archive
+   * List assets for a company with layout filter, text search, archive
    * filter, and `field.<slug>=<value>` filter DSL. Each `field.*` filter
    * is resolved against the field definitions (filterable types only —
    * see `FILTERABLE_FIELD_TYPES`) and the filters are ANDed. See
    * `resolveFieldFilters` for the match rules.
+   *
+   * `q` matches when every word is in the name or in any indexed field
+   * value (`SearchIndexService.matchAssetIds`), so a pasted serial
+   * number, IP address or custom value finds its asset. The direct
+   * name match stays as well, for an asset whose index row is missing.
+   * Several `q` terms stack: an asset must match every one.
    */
   async list(
     actor: AuthedUser,
@@ -421,15 +448,32 @@ export class AssetsService {
     const where: Prisma.AssetWhereInput = { companyId };
     if (!options.includeArchived) where.archivedAt = null;
     if (options.layoutId) where.assetLayoutId = options.layoutId;
-    if (options.q) {
-      where.name = { contains: options.q, mode: 'insensitive' };
+    const terms = searchTerms(options.q);
+    if (terms.length > MAX_ASSET_SEARCH_TERMS) {
+      throw new BadRequestException({
+        error: 'TooManySearchTerms',
+        message: `Use at most ${MAX_ASSET_SEARCH_TERMS} search terms.`,
+      });
+    }
+    // Check every term first, so a bad last term costs no search queries.
+    for (const term of terms) assetSearchWords(term);
+    const searchClauses: Prisma.AssetWhereInput[] = [];
+    for (const term of terms) {
+      const matched = await this.searchIndex.matchAssetIds(companyId, term, {
+        clientVisibleOnly: actor.role === 'CLIENT_USER',
+      });
+      searchClauses.push({
+        OR: [
+          { name: { contains: escapeLikePattern(term), mode: 'insensitive' } },
+          { id: { in: matched } },
+        ],
+      });
     }
 
-    const filterClauses = await this.resolveFieldFilters(
-      companyId,
-      options.layoutId,
-      options.fieldFilters ?? {},
-    );
+    const filterClauses = [
+      ...searchClauses,
+      ...(await this.resolveFieldFilters(companyId, options.layoutId, options.fieldFilters ?? {})),
+    ];
 
     if (filterClauses.length > 0) {
       where.AND = filterClauses;

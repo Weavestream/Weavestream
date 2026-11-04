@@ -275,3 +275,70 @@ describe('AssetLayoutsService.addField', () => {
     expect(tx.assetLayout.findUnique).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * The search index holds choice *labels* for DROPDOWN/MULTISELECT values
+ * (slug → label), so a changed choice list must rebuild every asset on the
+ * layout, the same as a visibility flip or a removed field. Other option
+ * edits leave the indexed text alone and must not pay for a reindex.
+ */
+describe('AssetLayoutsService.saveFields search reindex', () => {
+  const META = { ip: '203.0.113.1', userAgent: 'jest' };
+  const CHOICES_BEFORE = { choices: [{ slug: 'dell', label: 'Dell' }] };
+  const CHOICES_AFTER = { choices: [{ slug: 'dell', label: 'Dell Technologies' }] };
+
+  function harness(existing: MockFieldRow) {
+    const tx = {
+      assetField: { updateMany: jest.fn(), update: jest.fn(), create: jest.fn() },
+      assetLayout: {
+        update: jest.fn(async () => makeLayoutRow([existing])),
+      },
+    };
+    const prisma = {
+      assetLayout: { findUnique: jest.fn(async () => makeLayoutRow([existing])) },
+      $transaction: jest.fn(async (fn: (t: typeof tx) => unknown) => fn(tx)),
+    };
+    const audit = { log: jest.fn() };
+    const registry = { get: () => ({ optionsSchema: { safeParse: () => ({ success: true }) } }) };
+    const searchIndex = { reindexLayout: jest.fn().mockResolvedValue(0) };
+    const service = new AssetLayoutsService(
+      prisma as never,
+      audit as never,
+      registry as never,
+      searchIndex as never,
+    );
+    return { service, searchIndex };
+  }
+
+  function save(service: AssetLayoutsService, field: MockFieldRow, options: Record<string, unknown>) {
+    const { archivedAt: _archivedAt, position: _position, ...rest } = field;
+    return service.saveFields(
+      OPERATOR,
+      'l-1',
+      { fields: [{ ...rest, options }] } as never,
+      {},
+      META,
+    );
+  }
+
+  it.each(['DROPDOWN', 'MULTISELECT'])('reindexes the layout when a %s choice label changes', async (fieldType) => {
+    const field = makeField({ fieldType, options: CHOICES_BEFORE });
+    const { service, searchIndex } = harness(field);
+    await save(service, field, CHOICES_AFTER);
+    expect(searchIndex.reindexLayout).toHaveBeenCalledWith('l-1');
+  });
+
+  it('does not reindex when a non-choice field changes its options', async () => {
+    const field = makeField({ fieldType: 'TEXT', options: { maxLength: 100 } });
+    const { service, searchIndex } = harness(field);
+    await save(service, field, { maxLength: 200 });
+    expect(searchIndex.reindexLayout).not.toHaveBeenCalled();
+  });
+
+  it('does not reindex when the choices are unchanged', async () => {
+    const field = makeField({ fieldType: 'DROPDOWN', options: CHOICES_BEFORE });
+    const { service, searchIndex } = harness(field);
+    await save(service, field, CHOICES_BEFORE);
+    expect(searchIndex.reindexLayout).not.toHaveBeenCalled();
+  });
+});

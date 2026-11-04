@@ -75,6 +75,9 @@ export interface SerializedLayout {
   fields: SerializedLayoutField[];
 }
 
+/** Field types whose indexed text comes from the choice labels in `options`. */
+const CHOICE_FIELD_TYPES: ReadonlySet<string> = new Set(['DROPDOWN', 'MULTISELECT']);
+
 @Injectable()
 export class AssetLayoutsService {
   private readonly logger = new Logger(AssetLayoutsService.name);
@@ -524,6 +527,9 @@ export class AssetLayoutsService {
       from: unknown;
       to: unknown;
     }> = [];
+    // The search index holds choice *labels* (dropdown slug → label), so
+    // a changed choice list makes the indexed text of every asset stale.
+    let choiceTextChanged = false;
 
     const updatedLayout = await this.prisma.$transaction(async (tx) => {
       // Archive removed fields (soft). Destructive, but audit-friendly.
@@ -605,6 +611,9 @@ export class AssetLayoutsService {
             showInTable: f.showInTable,
             options: f.options,
           });
+          if ('options' in diff.before && CHOICE_FIELD_TYPES.has(old.fieldType)) {
+            choiceTextChanged = true;
+          }
           if (Object.keys(diff.before).length > 0) {
             updatedAudits.push({
               id: f.id,
@@ -719,17 +728,18 @@ export class AssetLayoutsService {
       });
     }
 
-    // Phase 6: whenever field visibility flips or a field is removed,
-    // every asset's denormalised `body_public` is stale. Rebuild the
-    // search_index rows for the whole layout. Layout edits are
-    // operator-only and low-frequency, so doing this synchronously in
-    // the request is acceptable (batched in 200-row chunks by
-    // `reindexLayout`). Field-value mutations have no impact on the
-    // index beyond the per-asset path in AssetsService.
+    // Phase 6: whenever field visibility flips, a field is removed, or
+    // the choices of a DROPDOWN/MULTISELECT field change, the indexed
+    // text of every asset on the layout is stale (`body_public`, or the
+    // choice labels). Rebuild the search_index rows for the whole
+    // layout. Layout edits are operator-only and low-frequency, so doing
+    // this synchronously in the request is acceptable (batched in
+    // 200-row chunks by `reindexLayout`). Field-value mutations have no
+    // impact on the index beyond the per-asset path in AssetsService.
     const visibilityChanged = updatedAudits.some((u) =>
       Object.prototype.hasOwnProperty.call(u.from as object, 'visibleToClients'),
     );
-    if (visibilityChanged || removedIds.length > 0) {
+    if (visibilityChanged || choiceTextChanged || removedIds.length > 0) {
       try {
         await this.searchIndex.reindexLayout(layoutId);
       } catch (error) {

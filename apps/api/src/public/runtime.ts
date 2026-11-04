@@ -38,6 +38,6 @@ export { EmailService } from '../email/email.service.js';
 export { configureEgressGuard, safeFetch } from '../common/egress/safe-fetch.js';
 export { QueuesProducerModule } from '../queues/queues-producer.module.js';
 export { QueuesService } from '../queues/queues.service.js';
-// Final pass of a queued Markdown plaintext refresh: the worker starts
-// last in an upgrade, so it is the process that may clear the marker.
-export { MarkdownPlaintextRefreshModule } from '../search/markdown-plaintext-refresh.service.js';
+// Final pass of a queued search-text refresh: the worker starts last
+// in an upgrade, so it is the process that may clear the marker.
+export { SearchRefreshModule } from '../search/search-refresh.service.js';

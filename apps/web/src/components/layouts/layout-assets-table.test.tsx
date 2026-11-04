@@ -10,9 +10,21 @@ import { LayoutAssetsTable } from './layout-assets-table';
 import { TimezoneProvider } from '../../lib/timezone-context';
 
 const push = jest.fn();
+const replace = jest.fn();
+
+/**
+ * `useTransition` runs the callback at once and reports `navigating` as
+ * its pending flag. With the flag true, the table sees a navigation
+ * still in flight, as Next reports until a pushed URL lands.
+ */
+const mockTransition = { navigating: false };
+jest.mock('react', () => ({
+  ...jest.requireActual<typeof import('react')>('react'),
+  useTransition: () => [mockTransition.navigating, (fn: () => void) => fn()],
+}));
 
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push, refresh: jest.fn(), replace: jest.fn() }),
+  useRouter: () => ({ push, refresh: jest.fn(), replace }),
 }));
 jest.mock('next/link', () => ({
   __esModule: true,
@@ -106,7 +118,7 @@ function renderTable(
   overrides: Partial<
     Pick<
       React.ComponentProps<typeof LayoutAssetsTable>,
-      'q' | 'includeArchived' | 'canManage'
+      'searchTerms' | 'includeArchived' | 'canManage'
     >
   > = {},
 ) {
@@ -115,7 +127,7 @@ function renderTable(
       basePath="/admin/companies/co-1"
       layout={layout}
       rows={rows}
-      q={overrides.q ?? ''}
+      searchTerms={overrides.searchTerms ?? []}
       includeArchived={overrides.includeArchived ?? false}
       canManage={overrides.canManage ?? false}
     />,
@@ -151,42 +163,153 @@ describe('LayoutAssetsTable URL cell', () => {
 describe('LayoutAssetsTable filters', () => {
   beforeEach(() => {
     push.mockClear();
+    replace.mockClear();
   });
 
   it('keeps filter controls available when a server-side filter has no matches', () => {
-    renderTable([], { q: 'missing', includeArchived: true });
+    renderTable([], { searchTerms: ['missing'], includeArchived: true });
 
-    expect(screen.getByPlaceholderText('Search Devices…')).toHaveValue('missing');
+    expect(screen.getByPlaceholderText('Add a search term…')).toHaveValue('');
+    expect(screen.getByText('search: missing')).toBeInTheDocument();
+    expect(screen.getByText('incl. archived')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Hide archived' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Clear filters' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'clear all' })).toBeInTheDocument();
     expect(screen.getByText('No Devices match the current filters.')).toBeInTheDocument();
   });
 
   it('clears all URL-backed filters without reloading', () => {
-    renderTable([], { q: 'missing', includeArchived: true });
+    renderTable([], { searchTerms: ['missing'], includeArchived: true });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    fireEvent.click(screen.getByRole('button', { name: 'clear all' }));
 
     expect(push).toHaveBeenCalledWith('/admin/companies/co-1/layouts/devices');
   });
 
-  it('synchronizes the search input when URL state changes', () => {
-    const { rerender } = renderTable([makeRow('a-4', 'Delta', 'example.com')], {
-      q: 'before',
+  it('stacks a new search term as a pill and clears the box (#99)', () => {
+    renderTable([makeRow('a-1', 'Alpha', 'example.com')], { searchTerms: ['dell'] });
+    const box = screen.getByPlaceholderText('Add a search term…');
+
+    fireEvent.change(box, { target: { value: ' 10.2.4 ' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+
+    // An added term edits the active search: it replaces the history
+    // entry, so Back removes the whole search.
+    expect(replace).toHaveBeenCalledWith('/admin/companies/co-1/layouts/devices?q=dell&q=10.2.4');
+    expect(push).not.toHaveBeenCalled();
+    expect(box).toHaveValue('');
+  });
+
+  it('ignores a blank or repeated term and never commits on blur', () => {
+    renderTable([makeRow('a-1', 'Alpha', 'example.com')], { searchTerms: ['dell'] });
+    const box = screen.getByPlaceholderText('Add a search term…');
+
+    fireEvent.change(box, { target: { value: 'DELL' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    fireEvent.change(box, { target: { value: '   ' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    fireEvent.change(box, { target: { value: 'typed only' } });
+    fireEvent.blur(box);
+
+    expect(push).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it('removes one search pill and keeps the others', () => {
+    renderTable([makeRow('a-1', 'Alpha', 'example.com')], {
+      searchTerms: ['dell', 'lab', 'rack 4'],
+      includeArchived: true,
     });
 
-    rerender(
-      <LayoutAssetsTable
-        basePath="/admin/companies/co-1"
-        layout={layout}
-        rows={[makeRow('a-4', 'Delta', 'example.com')]}
-        q="after"
-        includeArchived={false}
-        canManage={false}
-      />,
-    );
+    const pill = screen.getByText('search: lab').closest('span')!;
+    fireEvent.click(within(pill).getByRole('button', { name: 'Remove filter' }));
 
-    expect(screen.getByPlaceholderText('Search Devices…')).toHaveValue('after');
+    expect(replace).toHaveBeenCalledWith(
+      '/admin/companies/co-1/layouts/devices?q=dell&q=rack+4&archived=1',
+    );
+  });
+
+  it('keeps a term entered while the previous search is still navigating', () => {
+    // Next keeps the push transition pending until the new URL lands, so
+    // the URL (the `searchTerms` prop) still has no terms here.
+    mockTransition.navigating = true;
+    try {
+      renderTable([makeRow('a-1', 'Alpha', 'example.com')]);
+      const box = screen.getByPlaceholderText('Search Devices…');
+
+      fireEvent.change(box, { target: { value: 'dell' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      fireEvent.change(box, { target: { value: 'lab' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+
+      // The 1st term starts the search (a new history entry); the 2nd
+      // edits it (replaces that entry).
+      expect(push).toHaveBeenCalledTimes(1);
+      expect(push).toHaveBeenCalledWith('/admin/companies/co-1/layouts/devices?q=dell');
+      expect(replace).toHaveBeenLastCalledWith('/admin/companies/co-1/layouts/devices?q=dell&q=lab');
+      expect(screen.getByText('search: dell')).toBeInTheDocument();
+      expect(screen.getByText('search: lab')).toBeInTheDocument();
+    } finally {
+      mockTransition.navigating = false;
+    }
+  });
+
+  it('forgets pushed terms once navigation settles, so a later navigation cannot bring them back', () => {
+    const rows = [makeRow('a-1', 'Alpha', 'example.com')];
+    const table = (navigating: boolean) => {
+      mockTransition.navigating = navigating;
+      return (
+        <LayoutAssetsTable
+          basePath="/admin/companies/co-1"
+          layout={layout}
+          rows={rows}
+          searchTerms={[]}
+          includeArchived={false}
+          canManage={false}
+        />
+      );
+    };
+    try {
+      // Search for `dell` while a navigation is in flight.
+      const { rerender } = render(table(true));
+      const box = screen.getByPlaceholderText('Search Devices…');
+      fireEvent.change(box, { target: { value: 'dell' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      expect(screen.getByText('search: dell')).toBeInTheDocument();
+
+      // Navigation settles; then Back leaves a URL with no terms.
+      rerender(table(false));
+      // A later navigation (for example removing another pill) starts.
+      rerender(table(true));
+
+      expect(screen.queryByText('search: dell')).not.toBeInTheDocument();
+      fireEvent.change(box, { target: { value: 'lab' } });
+      fireEvent.keyDown(box, { key: 'Enter' });
+      expect(push).toHaveBeenLastCalledWith('/admin/companies/co-1/layouts/devices?q=lab');
+    } finally {
+      mockTransition.navigating = false;
+    }
+  });
+
+  it('follows the URL again once navigation settles', () => {
+    renderTable([makeRow('a-1', 'Alpha', 'example.com')]);
+    const box = screen.getByPlaceholderText('Search Devices…');
+
+    // The mocked push never changes the URL and the transition is not
+    // pending, so the URL's empty term list is what the next push uses.
+    fireEvent.change(box, { target: { value: 'dell' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+    fireEvent.change(box, { target: { value: 'lab' } });
+    fireEvent.keyDown(box, { key: 'Enter' });
+
+    expect(push).toHaveBeenLastCalledWith('/admin/companies/co-1/layouts/devices?q=lab');
+  });
+
+  it('removes the last search pill on Backspace in an empty box', () => {
+    renderTable([makeRow('a-1', 'Alpha', 'example.com')], { searchTerms: ['dell', 'lab'] });
+
+    fireEvent.keyDown(screen.getByPlaceholderText('Add a search term…'), { key: 'Backspace' });
+
+    expect(replace).toHaveBeenCalledWith('/admin/companies/co-1/layouts/devices?q=dell');
   });
 
   it('retains the dedicated creation state for an unfiltered empty layout', () => {
@@ -235,7 +358,7 @@ describe('LayoutAssetsTable DATETIME sorting', () => {
             whenRow('a-2', 'Instant', '2026-07-01T20:00:00Z'),
             whenRow('a-3', 'Earlier wall clock', '2026-07-01T14:59'),
           ]}
-          q=""
+          searchTerms={[]}
           includeArchived={false}
           canManage={false}
         />

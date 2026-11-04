@@ -48,4 +48,5 @@ export { OverflowMenu, MenuItem, MenuDivider } from './overflow-menu';
 export { UserPicker, type UserPickerValue } from './user-picker';
 export { CompanyPicker, type CompanyPickerValue } from './company-picker';
 export { ErrorBanner } from './error-banner';
+export { FilterChip, FilterChipRow, type FilterChipItem } from './filter-chips';
 export { ToastProvider, useToast } from './toast';

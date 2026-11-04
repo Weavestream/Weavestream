@@ -120,9 +120,10 @@ export interface FieldTypeStrategy {
   ): Prisma.InputJsonValue;
 
   /**
-   * Plaintext view of a stored value, used by Phase 6 search (tsvector).
-   * Strategies that have no plaintext representation (FILE, VAULTWARDEN_LINK)
-   * return an empty string.
+   * Plaintext view of a stored value, used by Phase 6 search (tsvector)
+   * and the asset list `q` search. Strategies that have no plaintext
+   * representation (VAULTWARDEN_LINK, ASSET_REFERENCE) return an empty
+   * string. TAGS also returns '' here; the indexer resolves tag names.
    */
   toPlaintext(value: unknown, options: Record<string, unknown>): string;
 

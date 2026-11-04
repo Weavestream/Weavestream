@@ -1,10 +1,6 @@
 import { markdownExcerpt, markdownToPlaintext } from '@weavestream/shared';
 import type { PrismaService } from '../prisma/prisma.service.js';
-import {
-  MarkdownPlaintextRefreshService,
-  refreshMarkdownPlaintext,
-  type MarkdownRefreshRole,
-} from './markdown-plaintext-refresh.service.js';
+import { refreshMarkdownPlaintext } from './markdown-plaintext-refresh.service.js';
 
 /** The SQL text and bound values of one tagged-template raw call. */
 function sqlCall(call: unknown[]): { sql: string; values: unknown[] } {
@@ -51,50 +47,5 @@ describe('refreshMarkdownPlaintext', () => {
       [0],
     );
     await expect(refreshMarkdownPlaintext(prisma)).resolves.toBe(0);
-  });
-});
-
-describe('MarkdownPlaintextRefreshService', () => {
-  function setup(role: MarkdownRefreshRole, opts: { marker: boolean; findMany?: jest.Mock }) {
-    const queryRaw = jest
-      .fn()
-      .mockResolvedValue([{ present: opts.marker ? 'pending_markdown_plaintext_refresh' : null }]);
-    const executeRaw = jest.fn().mockResolvedValue(0);
-    const findMany = opts.findMany ?? jest.fn().mockResolvedValue([]);
-    const prisma = { $queryRaw: queryRaw, $executeRaw: executeRaw, article: { findMany } } as unknown as PrismaService;
-    return { svc: new MarkdownPlaintextRefreshService(prisma, role), executeRaw, findMany };
-  }
-
-  const drops = (executeRaw: jest.Mock) =>
-    executeRaw.mock.calls.some((c) => sqlCall(c).sql.includes('DROP TABLE IF EXISTS "pending_markdown_plaintext_refresh"'));
-
-  it.each<MarkdownRefreshRole>(['api', 'worker'])('%s does nothing on a normal boot (no marker)', async (role) => {
-    const { svc, findMany, executeRaw } = setup(role, { marker: false });
-    await svc.run();
-    expect(findMany).not.toHaveBeenCalled();
-    expect(executeRaw).not.toHaveBeenCalled();
-  });
-
-  it('api refreshes but keeps the marker: an old worker may still be writing', async () => {
-    const { svc, findMany, executeRaw } = setup('api', { marker: true });
-    await svc.run();
-    expect(findMany).toHaveBeenCalled();
-    expect(drops(executeRaw)).toBe(false);
-  });
-
-  it('worker refreshes, then drops the marker', async () => {
-    const { svc, findMany, executeRaw } = setup('worker', { marker: true });
-    await svc.run();
-    expect(findMany).toHaveBeenCalled();
-    expect(drops(executeRaw)).toBe(true);
-  });
-
-  it('worker keeps the marker when the refresh fails, so the next boot resumes', async () => {
-    const { svc, executeRaw } = setup('worker', {
-      marker: true,
-      findMany: jest.fn().mockRejectedValue(new Error('db down')),
-    });
-    await expect(svc.run()).resolves.toBeUndefined();
-    expect(drops(executeRaw)).toBe(false);
   });
 });

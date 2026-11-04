@@ -96,7 +96,7 @@ describe('AssetReferencePicker', () => {
       refs: [{ id: 'b0000000-0000-4000-8000-0000000000b2', name: 'core-sw-01', archived: false }],
     });
     // Single mode closes on pick — the search field is gone.
-    expect(screen.queryByPlaceholderText('Search by name…')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Search assets…')).not.toBeInTheDocument();
   });
 
   it('multi mode: toggling adds refs and Done closes', async () => {
@@ -110,7 +110,7 @@ describe('AssetReferencePicker', () => {
     });
     // Sheet stays open in multi mode; Done closes it.
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-    expect(screen.queryByPlaceholderText('Search by name…')).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('Search assets…')).not.toBeInTheDocument();
   });
 
   it('archived candidates are pickable and marked', async () => {

@@ -1,12 +1,17 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import type { Prisma, Tag } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { validTagIds } from './tag-ids.js';
+import { SearchIndexService } from '../search/search-index.service.js';
+import { describeError } from '../common/describe-error.js';
+import { getTenantContext } from '@weavestream/shared/server';
 
 export interface AuditMeta {
   ip: string;
@@ -57,9 +62,12 @@ const MAX_OFFSET = 10_000;
  */
 @Injectable()
 export class TagsService {
+  private readonly logger = new Logger(TagsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
+    private readonly searchIndex: SearchIndexService,
   ) {}
 
   async list(options: ListTagsOptions = {}): Promise<SerializedTag[]> {
@@ -81,14 +89,8 @@ export class TagsService {
   async getMany(ids: string[]): Promise<Map<string, SerializedTag>> {
     const map = new Map<string, SerializedTag>();
     if (ids.length === 0) return map;
-    // Defensive filter: legacy `AssetFieldValue.value` rows from before the
-    // global-Tag migration may still hold raw strings (e.g. "production")
-    // instead of UUIDs. Passing those to Prisma's `id: { in: [...] }` on a
-    // UUID column raises P2023 ("Error creating UUID"). The plan
-    // explicitly chose not to migrate that data, so we silently drop any
-    // non-UUID id here — the caller treats missing ids as deleted/unknown
-    // and skips them on render.
-    const unique = Array.from(new Set(ids.filter(isUuid)));
+    // Drops legacy non-UUID values; see `validTagIds`.
+    const unique = validTagIds(ids);
     if (unique.length === 0) return map;
     const rows = await this.prisma.tag.findMany({
       where: { id: { in: unique } },
@@ -205,6 +207,7 @@ export class TagsService {
       before: { name: before.name },
       after: { name: row.name },
     });
+    await this.reindexTaggedAssets(id, 'rename');
     return serialize(row);
   }
 
@@ -233,6 +236,27 @@ export class TagsService {
       before: { name: before.name },
       after: null,
     });
+    await this.reindexTaggedAssets(id, 'delete');
+  }
+
+  /**
+   * The search index holds tag *names*, so a rename or delete leaves the
+   * indexed text of every asset with this tag stale. The tag change has
+   * already committed; a failure here is logged for an admin (until
+   * `reindex-search` runs, search matches the old name) and rethrown,
+   * the same as the layout reindex path.
+   */
+  private async reindexTaggedAssets(id: string, change: 'rename' | 'delete'): Promise<void> {
+    try {
+      await this.searchIndex.reindexAssetsWithTag(id);
+    } catch (error) {
+      this.logger.error(
+        `Search reindex failed for tag ${id} after a ${change} ` +
+          `(ref ${getTenantContext()?.requestId ?? 'none'}). Asset search may match ` +
+          `the old tag name until \`reindex-search\` runs: ${describeError(error)}`,
+      );
+      throw error;
+    }
   }
 }
 
@@ -255,11 +279,4 @@ function clampOffset(raw: number | undefined): number {
   if (!raw || raw <= 0) return 0;
   if (raw > MAX_OFFSET) return MAX_OFFSET;
   return raw;
-}
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function isUuid(s: string): boolean {
-  return UUID_RE.test(s);
 }

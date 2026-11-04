@@ -14,7 +14,8 @@ const ISO_DATETIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2
  */
 export class DateStrategy implements FieldTypeStrategy {
   readonly kind = 'DATE' as const;
-  readonly searchable = false;
+  // Indexed as the stored ISO string (`2026-03-14`).
+  readonly searchable = true;
   readonly optionsSchema = dateOptionsSchema;
 
   valueSchema(): z.ZodTypeAny {
@@ -45,7 +46,7 @@ export class DateStrategy implements FieldTypeStrategy {
 
 export class DateTimeStrategy implements FieldTypeStrategy {
   readonly kind = 'DATETIME' as const;
-  readonly searchable = false;
+  readonly searchable = true;
   readonly optionsSchema = datetimeOptionsSchema;
 
   valueSchema(): z.ZodTypeAny {

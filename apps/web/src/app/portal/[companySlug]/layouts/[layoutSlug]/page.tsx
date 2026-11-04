@@ -2,7 +2,8 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { getMe } from '../../../../../lib/server-api/auth';
 import { listLayouts } from '../../../../../lib/server-api/layouts';
-import { listAllAssets } from '../../../../../lib/server-api/assets';
+import { listAllAssetsForPage } from '../../../../../lib/server-api/assets';
+import { parseSearchTerms } from '../../../../../lib/search-terms';
 import { forMetadata } from '../../../../../lib/server-api/core';
 import {
   ApiUnavailableError,
@@ -13,7 +14,7 @@ import {
   PageBody,
   PageHeader,
 } from '../../../../../components/shell/page-header';
-import { LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
+import { ErrorBanner, LayoutSwatch, Panel, Tag } from '../../../../../components/ui';
 import { LayoutAssetsTable } from '../../../../../components/layouts/layout-assets-table';
 
 /**
@@ -73,12 +74,12 @@ export default async function PortalLayoutAssetsPage({
   const { company, layout } = ctx;
   const companyId = company.id;
 
-  const q = typeof sp.q === 'string' ? sp.q : undefined;
+  const searchTerms = parseSearchTerms(sp.q);
   const includeArchived = sp.archived === '1';
 
-  const assets = await listAllAssets(companyId, {
+  const { assets, filterError } = await listAllAssetsForPage(companyId, {
     layoutId: layout.id,
-    q,
+    q: searchTerms,
     includeArchived,
   });
 
@@ -96,6 +97,11 @@ export default async function PortalLayoutAssetsPage({
         description={`Every ${layout.name} record shared with you for ${company.name}.`}
       />
       <PageBody>
+        {filterError && (
+          <div style={{ marginBottom: 12 }}>
+            <ErrorBanner title="Filter not applied" detail={filterError} tone="warn" />
+          </div>
+        )}
         <Panel
           title={
             <span>
@@ -121,7 +127,7 @@ export default async function PortalLayoutAssetsPage({
             basePath={`/portal/${companySlug}`}
             layout={layout}
             rows={assets.items}
-            q={q ?? ''}
+            searchTerms={searchTerms}
             includeArchived={includeArchived}
             canManage={false}
           />

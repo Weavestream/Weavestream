@@ -17,6 +17,8 @@ import {
   DataTable,
   type DataColumn,
   Dialog,
+  FilterChipRow,
+  type FilterChipItem,
   Icon,
   LayoutSwatch,
   MobileCardRow,
@@ -28,19 +30,22 @@ import { vaultLinkLabel } from '../../../../../lib/vault-link';
 import { LayoutFilterMenu } from '../../../../../components/layouts/layout-filter-menu';
 import { TagFilterMenu } from '../../../../../components/layouts/tag-filter-menu';
 import { compactRelative as relative } from '../../../../../lib/relative-time';
+import { editsActiveSearch, withSearchTerm } from '../../../../../lib/search-terms';
+import { usePendingSearchTerms } from '../../../../../lib/hooks/use-pending-search-terms';
 
 /**
  * Interactive asset list. URL is the source of truth; every filter
  * change pushes a new query string so deep links survive refreshes.
  * Field-level filters use the same `field.<slug>=<value>` DSL the API
- * accepts, rendered as removable chips.
+ * accepts. Every active filter, each search term included, shows as a
+ * removable pill in the shared `FilterChipRow`.
  */
 export function AssetsTable({
   companyId,
   rows,
   passwords,
   layouts,
-  q,
+  searchTerms,
   layoutId,
   includeArchived,
   fieldFilters,
@@ -50,7 +55,8 @@ export function AssetsTable({
   rows: AssetSummary[];
   passwords: PasswordSummary[];
   layouts: LayoutSummary[];
-  q: string;
+  /** Stacked search terms from the URL (`?q=a&q=b`); all must match. */
+  searchTerms: string[];
   layoutId: string;
   includeArchived: boolean;
   fieldFilters: Record<string, string>;
@@ -58,12 +64,12 @@ export function AssetsTable({
 }) {
   const router = useRouter();
   const toast = useToast();
-  const [_pending, startTransition] = useTransition();
-  const [draftState, setDraftState] = useState(() => ({ source: q, value: q }));
+  const [navigating, startTransition] = useTransition();
+  // Terms to build on: includes terms pushed but not yet in the URL.
+  const [terms, rememberTerms] = usePendingSearchTerms(searchTerms, navigating);
+  // The box only holds the term being typed; committed terms are pills.
+  const [draft, setDraft] = useState('');
   const [tagFilter, setTagFilter] = useState<string | null>(null);
-  // Ignore a stale local draft when Next reuses this client component
-  // with a different URL query during back/forward navigation.
-  const draft = draftState.source === q ? draftState.value : q;
 
   // Bulk selection. `selectionMode` toggles the checkbox column and bulk
   // action bar; `selectedIds` persists across filter changes so a user
@@ -197,9 +203,13 @@ export function AssetsTable({
     return passwords.filter((p) => ids.has(p.id));
   }, [activeTag, passwordTagIndex, passwords]);
 
-  function pushParams(next: Record<string, string | undefined | null>) {
+  function pushParams(
+    next: Record<string, string | undefined | null>,
+    nextTerms: readonly string[] = terms,
+  ) {
+    rememberTerms(nextTerms);
     const params = new URLSearchParams();
-    if (q) params.set('q', q);
+    for (const term of nextTerms) params.append('q', term);
     if (layoutId) params.set('layout', layoutId);
     if (includeArchived) params.set('archived', '1');
     for (const [k, v] of Object.entries(fieldFilters)) params.set(`field.${k}`, v);
@@ -208,16 +218,17 @@ export function AssetsTable({
       else params.set(k, v);
     }
     const qs = params.toString();
+    const href = `/admin/companies/${companyId}/assets${qs ? `?${qs}` : ''}`;
+    const replace = editsActiveSearch(terms, nextTerms);
     startTransition(() => {
-      router.push(
-        `/admin/companies/${companyId}/assets${qs ? `?${qs}` : ''}`,
-      );
+      if (replace) router.replace(href);
+      else router.push(href);
     });
   }
 
   function removeFieldFilter(slug: string) {
     const params = new URLSearchParams();
-    if (q) params.set('q', q);
+    for (const term of terms) params.append('q', term);
     if (layoutId) params.set('layout', layoutId);
     if (includeArchived) params.set('archived', '1');
     for (const [k, v] of Object.entries(fieldFilters)) {
@@ -233,14 +244,48 @@ export function AssetsTable({
   }
 
   function clearAll() {
+    setDraft('');
+    setTagFilter(null);
+    rememberTerms([]);
     startTransition(() => {
       router.push(`/admin/companies/${companyId}/assets`);
     });
   }
 
   function commitSearch() {
-    pushParams({ q: draft.trim() || null });
+    const next = withSearchTerm(terms, draft);
+    setDraft('');
+    if (next) pushParams({}, next);
   }
+
+  function removeSearchTerm(index: number) {
+    pushParams(
+      {},
+      terms.filter((_, i) => i !== index),
+    );
+  }
+
+  const chips: FilterChipItem[] = [
+    ...terms.map((term, i) => ({
+      key: `q:${term}`,
+      label: `search: ${term}`,
+      onRemove: () => removeSearchTerm(i),
+    })),
+    ...(activeLayout
+      ? [{ key: 'layout', label: `layout: ${activeLayout.name}`, onRemove: () => pushParams({ layout: null }) }]
+      : []),
+    ...(activeTag
+      ? [{ key: 'tag', label: `tag: ${activeTag.name}`, onRemove: () => setTagFilter(null) }]
+      : []),
+    ...(includeArchived
+      ? [{ key: 'archived', label: 'incl. archived', onRemove: () => pushParams({ archived: null }) }]
+      : []),
+    ...Object.entries(fieldFilters).map(([k, v]) => ({
+      key: `field:${k}`,
+      label: `${k}: ${v}`,
+      onRemove: () => removeFieldFilter(k),
+    })),
+  ];
 
   // ----- Bulk selection helpers -----
 
@@ -419,12 +464,18 @@ export function AssetsTable({
           <Icon.search size={12} style={{ color: 'var(--muted)' }} />
           <input
             value={draft}
-            onChange={(e) => setDraftState({ source: q, value: e.target.value })}
+            onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') commitSearch();
+              // Backspace in an empty box removes the last search pill.
+              if (e.key === 'Backspace' && draft === '' && terms.length > 0) {
+                removeSearchTerm(terms.length - 1);
+              }
             }}
-            onBlur={commitSearch}
-            placeholder="Search by name…"
+            placeholder={
+              terms.length > 0 ? 'Add a search term…' : 'Search all fields…'
+            }
+            aria-label="Add a search term"
             style={{
               flex: 1,
               background: 'transparent',
@@ -528,64 +579,7 @@ export function AssetsTable({
         />
       )}
 
-      {/* Chips row */}
-      {(layoutId || Object.keys(fieldFilters).length > 0 || q) && (
-        <div
-          style={{
-            padding: '8px 14px',
-            borderBottom: '1px solid var(--line)',
-            display: 'flex',
-            gap: 6,
-            flexWrap: 'wrap',
-            alignItems: 'center',
-            background: 'var(--surface)',
-            flexShrink: 0,
-          }}
-        >
-          <span
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 10.5,
-              color: 'var(--dim)',
-              textTransform: 'uppercase',
-              letterSpacing: 0.5,
-              marginRight: 6,
-            }}
-          >
-            filters
-          </span>
-          {q && (
-            <Chip onRemove={() => pushParams({ q: null })}>
-              query: {q}
-            </Chip>
-          )}
-          {activeLayout && (
-            <Chip onRemove={() => pushParams({ layout: null })}>
-              layout: {activeLayout.name}
-            </Chip>
-          )}
-          {Object.entries(fieldFilters).map(([k, v]) => (
-            <Chip key={k} onRemove={() => removeFieldFilter(k)}>
-              {k}: {v}
-            </Chip>
-          ))}
-          <span style={{ flex: 1 }} />
-          <button
-            type="button"
-            onClick={clearAll}
-            style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              color: 'var(--muted)',
-              background: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-            }}
-          >
-            clear all
-          </button>
-        </div>
-      )}
+      <FilterChipRow chips={chips} onClearAll={clearAll} />
 
       {/* When a tag filter is active, surface passwords carrying the
           same tag inline so the operator doesn't have to bounce to the
@@ -1315,49 +1309,6 @@ function AssetMobileBody({
     >
       {inner}
     </Link>
-  );
-}
-
-function Chip({
-  children,
-  onRemove,
-}: {
-  children: React.ReactNode;
-  onRemove: () => void;
-}) {
-  return (
-    <span
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 5,
-        padding: '2px 6px 2px 8px',
-        background: 'var(--accent-soft)',
-        color: 'var(--accent)',
-        border: '1px solid var(--accent-line)',
-        borderRadius: 3,
-        fontSize: 10.5,
-        fontFamily: 'var(--font-mono)',
-      }}
-    >
-      {children}
-      <button
-        type="button"
-        onClick={onRemove}
-        style={{
-          background: 'transparent',
-          border: 'none',
-          color: 'inherit',
-          cursor: 'pointer',
-          padding: 0,
-          display: 'grid',
-          placeItems: 'center',
-        }}
-        aria-label="Remove filter"
-      >
-        <Icon.x size={9} />
-      </button>
-    </span>
   );
 }
 

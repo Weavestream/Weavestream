@@ -202,7 +202,7 @@ function ReferencePickerSheet({
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by name…"
+          placeholder="Search assets…"
           autoCapitalize="none"
           autoCorrect="off"
           spellCheck={false}

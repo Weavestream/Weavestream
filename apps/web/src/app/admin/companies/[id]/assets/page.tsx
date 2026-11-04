@@ -5,7 +5,8 @@ import { requireMe } from '../../../../../lib/server-api/auth';
 import { getSettings } from '../../../../../lib/server-api/settings';
 import { getCompanyDetail } from '../../../../../lib/server-api/companies';
 import { getActiveLayouts } from '../../../../../lib/server-api/layouts';
-import { AssetFilterError, listAllAssets } from '../../../../../lib/server-api/assets';
+import { listAllAssetsForPage } from '../../../../../lib/server-api/assets';
+import { parseSearchTerms } from '../../../../../lib/search-terms';
 import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import {
   getCompanyActivePasswords,
@@ -39,7 +40,7 @@ export default async function CompanyAssetsPage({
   const manage = canWriteCompany(me, company.id);
 
   const layoutId = typeof sp.layout === 'string' ? sp.layout : undefined;
-  const q = typeof sp.q === 'string' ? sp.q : undefined;
+  const searchTerms = parseSearchTerms(sp.q);
   const includeArchived = sp.archived === '1';
   const fieldFilters: Record<string, string> = {};
   for (const [k, v] of Object.entries(sp)) {
@@ -47,23 +48,17 @@ export default async function CompanyAssetsPage({
     if (typeof v === 'string') fieldFilters[k.slice('field.'.length)] = v;
   }
 
-  // A filter the API refuses (unknown field, wrong value type) shows as
-  // a banner over an empty list. The table still renders its chips, so
-  // the bad filter can be removed in 1 click.
+  // A filter the API refuses (unknown field, wrong value type, too many
+  // search terms) shows as a banner over an empty list. The table still
+  // renders its pills, so the bad filter can be removed in 1 click.
   const [layouts, { assets, filterError }, passwords] = await Promise.all([
     getActiveLayouts(),
-    listAllAssets(companyId, {
+    listAllAssetsForPage(companyId, {
       layoutId,
-      q,
+      q: searchTerms,
       includeArchived,
       fieldFilters,
-    }).then(
-      (assets) => ({ assets, filterError: null as string | null }),
-      (err: unknown) => {
-        if (!(err instanceof AssetFilterError)) throw err;
-        return { assets: { items: [], truncated: false }, filterError: err.message };
-      },
-    ),
+    }),
     // Passwords share the same global tag namespace as assets, so we load
     // them here too. The table surfaces matching credentials inline when
     // the operator picks a tag filter, since the per-company assets view
@@ -131,7 +126,7 @@ export default async function CompanyAssetsPage({
             rows={assets.items}
             passwords={passwords}
             layouts={layouts}
-            q={q ?? ''}
+            searchTerms={searchTerms}
             layoutId={layoutId ?? ''}
             includeArchived={includeArchived}
             fieldFilters={fieldFilters}

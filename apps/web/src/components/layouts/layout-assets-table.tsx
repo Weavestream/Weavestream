@@ -20,6 +20,8 @@ import { fieldDateTimeSortKey } from '../../lib/field-datetime';
 import {
   DataTable,
   type DataColumn,
+  FilterChipRow,
+  type FilterChipItem,
   Icon,
   LayoutSwatch,
   LinkBtn,
@@ -28,6 +30,8 @@ import {
 } from '../ui';
 import { TagFilterMenu } from './tag-filter-menu';
 import { compactRelative as relative } from '../../lib/relative-time';
+import { editsActiveSearch, withSearchTerm } from '../../lib/search-terms';
+import { usePendingSearchTerms } from '../../lib/hooks/use-pending-search-terms';
 
 type ReferenceMap = AssetSummary['references'];
 
@@ -56,7 +60,7 @@ export function LayoutAssetsTable({
   basePath,
   layout,
   rows,
-  q,
+  searchTerms,
   includeArchived,
   canManage,
 }: {
@@ -64,18 +68,19 @@ export function LayoutAssetsTable({
   basePath: string;
   layout: LayoutSummary;
   rows: AssetSummary[];
-  q: string;
+  /** Stacked search terms from the URL (`?q=a&q=b`); all must match. */
+  searchTerms: string[];
   includeArchived: boolean;
   canManage: boolean;
 }) {
   const router = useRouter();
   const timeZone = useTimezone();
-  const [pending, startTransition] = useTransition();
-  const [draftState, setDraftState] = useState(() => ({ source: q, value: q }));
+  const [navigating, startTransition] = useTransition();
+  // Terms to build on: includes terms pushed but not yet in the URL.
+  const [terms, rememberTerms] = usePendingSearchTerms(searchTerms, navigating);
+  // The box only holds the term being typed; committed terms are pills.
+  const [draft, setDraft] = useState('');
   const [tagFilter, setTagFilter] = useState<string | null>(null);
-  // Ignore a stale local draft when Next reuses this client component
-  // with a different URL query during back/forward navigation.
-  const draft = draftState.source === q ? draftState.value : q;
 
   const columns = useMemo(() => {
     const primary = layout.fields.find((f) => f.isPrimary);
@@ -156,34 +161,65 @@ export function LayoutAssetsTable({
     ? availableTags.find((t) => t.id === tagFilter) ?? null
     : null;
 
-  function pushParams(next: Record<string, string | undefined | null>) {
+  function pushParams(
+    next: Record<string, string | undefined | null>,
+    nextTerms: readonly string[] = terms,
+  ) {
+    rememberTerms(nextTerms);
     const params = new URLSearchParams();
-    if (q) params.set('q', q);
+    for (const term of nextTerms) params.append('q', term);
     if (includeArchived) params.set('archived', '1');
     for (const [k, v] of Object.entries(next)) {
       if (v == null || v === '') params.delete(k);
       else params.set(k, v);
     }
     const qs = params.toString();
+    const href = `${basePath}/layouts/${layout.slug}${qs ? `?${qs}` : ''}`;
+    const replace = editsActiveSearch(terms, nextTerms);
     startTransition(() => {
-      router.push(`${basePath}/layouts/${layout.slug}${qs ? `?${qs}` : ''}`);
+      if (replace) router.replace(href);
+      else router.push(href);
     });
   }
 
   function commitSearch() {
-    pushParams({ q: draft.trim() || null });
+    const next = withSearchTerm(terms, draft);
+    setDraft('');
+    if (next) pushParams({}, next);
+  }
+
+  function removeSearchTerm(index: number) {
+    pushParams(
+      {},
+      terms.filter((_, i) => i !== index),
+    );
   }
 
   function clearAll() {
-    setDraftState({ source: q, value: '' });
+    setDraft('');
     setTagFilter(null);
-    if (!q && !includeArchived) return;
+    rememberTerms([]);
+    if (terms.length === 0 && !includeArchived) return;
     startTransition(() => {
       router.push(`${basePath}/layouts/${layout.slug}`);
     });
   }
 
-  if (rows.length === 0 && !q && !includeArchived) {
+  const chips: FilterChipItem[] = [
+    ...terms.map((term, i) => ({
+      key: `q:${term}`,
+      label: `search: ${term}`,
+      onRemove: () => removeSearchTerm(i),
+    })),
+    ...(activeTag
+      ? [{ key: 'tag', label: `tag: ${activeTag.name}`, onRemove: () => setTagFilter(null) }]
+      : []),
+    ...(includeArchived
+      ? [{ key: 'archived', label: 'incl. archived', onRemove: () => pushParams({ archived: null }) }]
+      : []),
+  ];
+
+  if (rows.length === 0 && terms.length === 0 && !includeArchived) {
     return (
       <div
         style={{
@@ -251,12 +287,18 @@ export function LayoutAssetsTable({
           <Icon.search size={12} style={{ color: 'var(--muted)' }} />
           <input
             value={draft}
-            onChange={(e) => setDraftState({ source: q, value: e.target.value })}
+            onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter') commitSearch();
+              // Backspace in an empty box removes the last search pill.
+              if (e.key === 'Backspace' && draft === '' && terms.length > 0) {
+                removeSearchTerm(terms.length - 1);
+              }
             }}
-            onBlur={commitSearch}
-            placeholder={`Search ${layout.name}…`}
+            placeholder={
+              terms.length > 0 ? 'Add a search term…' : `Search ${layout.name}…`
+            }
+            aria-label="Add a search term"
             style={{
               flex: 1,
               background: 'transparent',
@@ -315,25 +357,9 @@ export function LayoutAssetsTable({
           {includeArchived ? 'Hide archived' : 'Show archived'}
         </button>
 
-        {(q || includeArchived || tagFilter) && (
-          <button
-            type="button"
-            onClick={clearAll}
-            style={{
-              height: 28,
-              padding: '0 8px',
-              background: 'transparent',
-              border: 'none',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              color: 'var(--muted)',
-              cursor: 'pointer',
-            }}
-          >
-            Clear filters
-          </button>
-        )}
       </div>
+
+      <FilterChipRow chips={chips} onClearAll={clearAll} />
 
       {/* Table / cards — `flex: 1; min-height: 0` so the DataTable's
           fillHeight scroll region claims the leftover viewport rather
@@ -360,7 +386,7 @@ export function LayoutAssetsTable({
         ) : (
           <div
             style={{
-              opacity: pending ? 0.6 : 1,
+              opacity: navigating ? 0.6 : 1,
               transition: 'opacity 120ms ease',
               flex: 1,
               minHeight: 0,

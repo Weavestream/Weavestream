@@ -12,6 +12,8 @@ const FILTER_ERROR_CODES = new Set([
   'UnknownFilterField',
   'UnfilterableField',
   'InvalidFilterValue',
+  'TooManySearchTerms',
+  'SearchTermTooLong',
 ]);
 
 /**
@@ -30,7 +32,8 @@ export async function listAssets(
   companyId: string,
   params: {
     layoutId?: string;
-    q?: string;
+    /** One search term, or stacked terms that must all match. */
+    q?: string | string[];
     includeArchived?: boolean;
     fieldFilters?: Record<string, string>;
     limit?: number;
@@ -39,7 +42,9 @@ export async function listAssets(
 ): Promise<AssetPage> {
   const q = new URLSearchParams();
   if (params.layoutId) q.set('layout', params.layoutId);
-  if (params.q) q.set('q', params.q);
+  for (const term of typeof params.q === 'string' ? [params.q] : params.q ?? []) {
+    if (term) q.append('q', term);
+  }
   if (params.includeArchived) q.set('includeArchived', 'true');
   if (params.limit) q.set('limit', String(params.limit));
   if (params.cursor) q.set('cursor', params.cursor);
@@ -81,7 +86,7 @@ export async function listAllAssets(
   companyId: string,
   params: {
     layoutId?: string;
-    q?: string;
+    q?: string | string[];
     includeArchived?: boolean;
     fieldFilters?: Record<string, string>;
   } = {},
@@ -94,6 +99,27 @@ export async function listAllAssets(
     (cursor) => listAssets(companyId, { ...params, limit: PAGE_SIZE, cursor }),
     MAX_PAGES,
   );
+}
+
+/**
+ * {@link listAllAssets} for an asset list page. A filter or search the
+ * API refuses comes back as `filterError` over an empty list, so the
+ * page can show why and keep its filter pills for removal. Every other
+ * error still throws.
+ */
+export async function listAllAssetsForPage(
+  companyId: string,
+  params: Parameters<typeof listAllAssets>[1],
+): Promise<{
+  assets: { items: AssetSummary[]; truncated: boolean };
+  filterError: string | null;
+}> {
+  try {
+    return { assets: await listAllAssets(companyId, params), filterError: null };
+  } catch (err) {
+    if (!(err instanceof AssetFilterError)) throw err;
+    return { assets: { items: [], truncated: false }, filterError: err.message };
+  }
 }
 
 /**

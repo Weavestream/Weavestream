@@ -23,7 +23,7 @@ jest.mock('next/headers', () => ({
 }));
 
 import { RateLimitedError } from '../api-errors';
-import { AssetFilterError, getAsset, listAllAssets } from './assets';
+import { AssetFilterError, getAsset, listAllAssets, listAllAssetsForPage } from './assets';
 import { forMetadata } from './core';
 
 function resetRequestCache() {
@@ -171,6 +171,26 @@ describe('listAllAssets', () => {
     const err = await listAllAssets('co-1', { fieldFilters: { nope: 'x' } }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(AssetFilterError);
     expect((err as Error).message).toBe('No field "nope" exists on any layout.');
+  });
+
+  it('sends each stacked search term as its own q value', async () => {
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValueOnce(page([], null));
+
+    await listAllAssets('co-1', { q: ['dell', '10.2.4'] });
+
+    const url = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(url.searchParams.getAll('q')).toEqual(['dell', '10.2.4']);
+  });
+
+  it('turns a refused search into filterError for the page', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce(
+      problem({ error: 'TooManySearchTerms', detail: 'Use at most 10 search terms.' }),
+    );
+
+    expect(await listAllAssetsForPage('co-1', { q: ['a', 'b'] })).toEqual({
+      assets: { items: [], truncated: false },
+      filterError: 'Use at most 10 search terms.',
+    });
   });
 
   it('keeps the empty-page fallback for other 4xx responses', async () => {

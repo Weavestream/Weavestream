@@ -43,8 +43,11 @@ import { PermissionService } from '../rbac/permission.service.js';
  *
  * `GET /companies/:companyId/assets` accepts:
  *   - `layout=<uuid>` — restrict to a single layout.
- *   - `q=<text>` — case-insensitive substring match on `Asset.name`
- *     (Phase 6 expands this to field values via tsvector).
+ *   - `q=<text>` (repeatable, at most 10) — each term must match; in a
+ *     term, every word is a case-insensitive substring of the
+ *     name or of any indexed field value (see
+ *     `SearchIndexService.matchAssetIds`). Client users match only
+ *     fields visible to clients.
  *   - `includeArchived=true` — includes soft-deleted assets.
  *   - `field.<slug>=<value>` — value-equality filter against that field
  *     (text types trimmed and case-insensitive; a DROPDOWN accepts the
@@ -91,7 +94,7 @@ export class AssetsController {
   async list(
     @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
-    @Query() query: Record<string, string | undefined>,
+    @Query() query: Record<string, string | string[] | undefined>,
   ) {
     // Build the filter map from a validated entry list rather than
     // dynamic bracket-writes. `fieldSlugSchema` enforces the canonical
@@ -107,13 +110,21 @@ export class AssetsController {
           : [];
       }),
     );
+    // Only `q` may repeat (stacked search terms). Any other key that
+    // arrives repeated (an array) is ignored.
+    const single = (key: string): string | undefined => {
+      const value = query[key];
+      return typeof value === 'string' ? value : undefined;
+    };
+    const q = query['q'];
+    const limit = single('limit');
     return this.assets.list(actor, companyId, {
-      layoutId: query['layout'],
-      q: query['q'],
-      includeArchived: query['includeArchived'] === 'true',
+      layoutId: single('layout'),
+      q: Array.isArray(q) ? q.filter((t): t is string => typeof t === 'string') : q,
+      includeArchived: single('includeArchived') === 'true',
       fieldFilters,
-      limit: query['limit'] ? parseInt(query['limit'], 10) : undefined,
-      cursor: query['cursor'],
+      limit: limit ? parseInt(limit, 10) : undefined,
+      cursor: single('cursor'),
     });
   }
 

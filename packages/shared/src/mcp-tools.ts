@@ -289,7 +289,8 @@ export const MCP_TOOLS: readonly McpToolDefinition[] = [
 
   defineTool({
     name: 'list_assets',
-    description: 'List assets in a company, optionally filtered by layout or text.',
+    description:
+      'List assets in a company, optionally filtered by layout or by text (q) that matches the asset name or any field value, such as a serial number or IP address.',
     access: 'read',
     inputSchema: { companyId, layoutId: id.optional(), q: z.string().max(200).optional(), limit, cursor },
     run: (api, { companyId: c, layoutId, ...rest }) =>
