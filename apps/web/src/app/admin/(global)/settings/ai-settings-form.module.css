@@ -154,33 +154,9 @@
   max-width: 960px;
 }
 
-.providerCard {
-  position: relative;
-  align-items: center;
-  min-width: 0;
+/* Layout only. Border, fill and focus come from the shared `.ws-choice` style (globals.css). */
+.providerGrid .providerCard {
   min-height: 86px;
-  transition: box-shadow 120ms ease;
-}
-
-.providerCard:has(input:checked) {
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
-.providerCard:hover {
-  box-shadow: inset 0 0 0 1px var(--line-2);
-}
-
-.providerCard:has(input:checked):hover {
-  box-shadow: inset 0 0 0 1px var(--accent);
-}
-
-.providerCard:has(input:focus-visible) {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-}
-
-.providerCard input:focus-visible {
-  outline: none;
 }
 
 .providerLabel {
@@ -350,7 +326,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .providerCard {
+  .providerGrid .providerCard {
     min-height: 76px;
   }
 

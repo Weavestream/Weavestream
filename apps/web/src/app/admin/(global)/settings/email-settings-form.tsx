@@ -4,7 +4,16 @@ import { useRef, useState } from 'react';
 import type { EmailSettings, SmtpSecurityMode } from '@weavestream/shared';
 import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
-import { Btn, Field, Input, Select, Tag, useToast } from '../../../../components/ui';
+import {
+  Btn,
+  Checkbox,
+  CheckboxOption,
+  Field,
+  Input,
+  Select,
+  Tag,
+  useToast,
+} from '../../../../components/ui';
 
 export function EmailSettingsForm({
   initial,
@@ -107,23 +116,11 @@ export function EmailSettingsForm({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
-      <label
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          fontSize: 13,
-          color: 'var(--text)',
-          cursor: 'pointer',
-        }}
-      >
-        <input
-          type="checkbox"
-          checked={enabled}
-          onChange={(e) => setEnabled(e.target.checked)}
-        />
-        Enable outbound email
-      </label>
+      <CheckboxOption
+        label="Enable outbound email"
+        checked={enabled}
+        onChange={setEnabled}
+      />
 
       <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 16 }}>
         <Field label="SMTP host" htmlFor="smtp-host">
@@ -190,24 +187,12 @@ export function EmailSettingsForm({
       </div>
 
       {baseline.current.passwordConfigured && (
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 13,
-            color: 'var(--text-2)',
-            cursor: 'pointer',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={clearPassword}
-            disabled={password.length > 0}
-            onChange={(e) => setClearPassword(e.target.checked)}
-          />
-          Clear saved SMTP password
-        </label>
+        <Checkbox
+          label="Clear saved SMTP password"
+          checked={clearPassword}
+          disabled={password.length > 0}
+          onChange={setClearPassword}
+        />
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>

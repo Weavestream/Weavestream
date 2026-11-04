@@ -454,6 +454,86 @@ button.sidebar-switcher-entry {
   outline-offset: 2px;
 }
 
+/* Selectable option cards: `RadioOption` and `CheckboxOption` in
+ * components/ui/choice-option.tsx. This is the ONE look for every radio
+ * or checkbox drawn as a card. Do not restyle the selected state per
+ * page; a `className` on either component is for layout only.
+ * Selected  = accent border + accent-soft fill.
+ * Otherwise = line-2 border + no fill.
+ * The native radio/checkbox indicator is always visible. */
+
+.ws-choice {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.ws-choice:hover {
+  border-color: var(--line-3);
+}
+
+.ws-choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.ws-choice:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.ws-choice:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.ws-choice--dense {
+  min-height: 0;
+  padding: 8px 10px;
+}
+
+.ws-choice-input {
+  flex-shrink: 0;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.ws-choice-input:focus-visible {
+  outline: none;
+}
+
+.ws-choice-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ws-choice-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.ws-choice-hint {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 /* Phase 6 command palette. `cmdk` tags the currently-highlighted
  * row (via keyboard nav or hover) with `aria-selected="true"` and
  * puts `cmdk-*` data attributes on its primitives. We lean on both

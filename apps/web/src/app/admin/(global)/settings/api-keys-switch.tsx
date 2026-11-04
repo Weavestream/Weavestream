@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { MCP_CLIENT_POLICY_LABELS, problemMessage, type McpClientPolicy } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
-import { RadioOption, Toggle, useToast } from '../../../../components/ui';
+import { RadioOption, CheckboxOption, useToast } from '../../../../components/ui';
 import { SectionHeader } from './settings-form';
 
 /**
@@ -80,9 +80,9 @@ export function AccessSwitch({
     <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <SectionHeader label={title} help={description} />
       <div style={{ opacity: pending ? 0.6 : 1, pointerEvents: pending ? 'none' : undefined }}>
-        <Toggle
+        <CheckboxOption
           label={label}
-          help={value ? onHelp : offHelp}
+          hint={value ? onHelp : offHelp}
           checked={value}
           onChange={(next) => void change(next)}
         />

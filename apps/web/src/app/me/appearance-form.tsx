@@ -10,7 +10,7 @@ import {
   type UserUiPreferences,
 } from '@weavestream/shared';
 import { apiFetch } from '../../lib/api';
-import { Btn, Icon, Toggle, useToast } from '../../components/ui';
+import { Btn, Icon, CheckboxOption, useToast } from '../../components/ui';
 
 /**
  * Phase 9b.1 — "Appearance" panel on /me. Lets the user pick theme and
@@ -187,9 +187,9 @@ export function AppearanceForm({ initial }: { initial: UserUiPreferences }) {
 
       <FormRow label="Density">
         <div style={{ display: 'grid', gap: 10, maxWidth: 560 }}>
-          <Toggle
+          <CheckboxOption
             label="Show item counts in the sidebar"
-            help="Totals beside each nav entry. Warning badges — expiring domains, stale passwords, subnet conflicts — always show."
+            hint="Totals beside each nav entry. Warning badges — expiring domains, stale passwords, subnet conflicts — always show."
             checked={showCounts}
             onChange={setShowCounts}
           />

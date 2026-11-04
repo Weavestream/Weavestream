@@ -14,6 +14,11 @@
 - When adding a table, use the global table standard: `DataTable`, `DataColumn`, and `MobileCardRow` from `apps/web/src/components/ui`.
 - Follow the existing assets table pattern in `apps/web/src/app/admin/companies/[id]/assets/assets-table.tsx`: define typed columns, provide sort values where useful, set sensible column widths, and supply `renderMobileCard` for mobile.
 - Do not add one-off table markup unless the global table cannot support the use case; if so, explain why in the change.
+- **Radio and checkbox choices use the shared controls — no exceptions.** One look everywhere: selected = accent border + `--accent-soft` fill, otherwise `--line-2` border + no fill, and the native indicator is always visible.
+  - `RadioOption` (pick one of several) and `CheckboxOption` (one on/off preference or switch) from `apps/web/src/components/ui` for any option drawn as a card. Their styling lives only in the `.ws-choice` classes in `apps/web/src/app/globals.css`.
+  - `Checkbox` from the same module for a bare inline checkbox (dialog-form knobs, "Clear saved password"-style options).
+  - Never hand-roll a selectable card (`<label>` or `<button role="radio">` with its own border/background), never hide the indicator, and never pass a `className` or CSS-module override that changes the border, fill, or focus ring. A `className` on these controls is for layout only (grid sizing, min-height).
+  - If a new case needs a different look, change `.ws-choice` for every caller, or ask first. Compact segmented controls and chip pickers (for example the password-generator preset and separator pickers) are a separate pattern, not option cards.
 - When adding a new page or major page section, include mobile view optimization as part of the implementation. Ensure filters/actions wrap cleanly, dense content has a mobile-friendly layout, and tables/cards remain usable on narrow screens. This is responsive-desktop work and is separate from the dedicated mobile app below.
 
 ### Mobile app (`apps/mobile`)

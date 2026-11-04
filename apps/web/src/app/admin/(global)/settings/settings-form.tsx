@@ -15,9 +15,12 @@ import {
 import { apiFetch } from '../../../../lib/api';
 import {
   Btn,
+  Checkbox,
+  CheckboxOption,
   Field,
   Icon,
   Input,
+  RadioOption,
   Select,
   Tag,
   useToast,
@@ -376,52 +379,12 @@ function SettingsForm({
               label="Autosave"
               help="Controls whether the article editor silently persists in-progress edits while typing."
             />
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 10,
-                padding: 12,
-                background: 'var(--panel-2)',
-                border: '1px solid var(--line-2)',
-                borderRadius: 6,
-                cursor: 'pointer',
-                userSelect: 'none',
-              }}
-            >
-              <input
-                type="checkbox"
-                checked={articleAutosaveEnabled}
-                onChange={(e) => setArticleAutosaveEnabled(e.target.checked)}
-                style={{ marginTop: 3, accentColor: 'var(--accent)' }}
-              />
-              <span
-                style={{ display: 'flex', flexDirection: 'column', gap: 4 }}
-              >
-                <span
-                  style={{
-                    fontSize: 13,
-                    color: 'var(--text)',
-                    fontWeight: 500,
-                  }}
-                >
-                  Enable article autosave (drafts every ~4 s)
-                </span>
-                <span
-                  style={{
-                    fontSize: 12,
-                    color: 'var(--muted)',
-                    lineHeight: 1.5,
-                  }}
-                >
-                  When on, the editor stores work-in-progress edits as a
-                  single rolling draft version. Clicking Save promotes the
-                  draft to a numbered version; Cancel discards the draft and
-                  restores the article to its last saved version. Off by
-                  default — operators must click Save to persist any change.
-                </span>
-              </span>
-            </label>
+            <CheckboxOption
+              label="Enable article autosave (drafts every ~4 s)"
+              hint="When on, the editor stores work-in-progress edits as a single rolling draft version. Clicking Save promotes the draft to a numbered version; Cancel discards the draft and restores the article to its last saved version. Off by default — operators must click Save to persist any change."
+              checked={articleAutosaveEnabled}
+              onChange={setArticleAutosaveEnabled}
+            />
           </section>
         </>
       )}
@@ -511,10 +474,9 @@ const EDITOR_MODE_OPTIONS: ReadonlyArray<{
 ];
 
 /**
- * Segmented control mirroring the password-generator preset picker so
- * the two article-settings sections feel visually consistent. Selected
- * tile uses the accent colour; helper copy under each label tells the
- * admin which UX their operators will land in on "New article".
+ * Default editor format: one `RadioOption` per mode, side by side. Helper
+ * copy under each label tells the admin which UX their operators will land
+ * in on "New article".
  */
 function EditorModePicker({
   value,
@@ -524,59 +486,29 @@ function EditorModePicker({
   onChange: (next: ArticleEditorMode) => void;
 }) {
   return (
-    <div
-      role="radiogroup"
+    <fieldset
       aria-label="Default article editor format"
       style={{
+        margin: 0,
+        padding: 0,
+        border: 0,
+        minWidth: 0,
         display: 'grid',
-        gridTemplateColumns: '1fr 1fr',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
         gap: 10,
       }}
     >
-      {EDITOR_MODE_OPTIONS.map((opt) => {
-        const active = opt.id === value;
-        return (
-          <button
-            key={opt.id}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            onClick={() => onChange(opt.id)}
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-start',
-              gap: 4,
-              textAlign: 'left',
-              padding: '12px 14px',
-              borderRadius: 6,
-              border: '1px solid',
-              borderColor: active ? 'var(--accent)' : 'var(--line-2)',
-              background: active ? 'var(--accent-soft)' : 'var(--panel-2)',
-              color: 'var(--text)',
-              cursor: 'pointer',
-              transition:
-                'background 120ms ease, border-color 120ms ease, color 120ms ease',
-            }}
-          >
-            <span
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                color: active ? 'var(--accent)' : 'var(--text)',
-              }}
-            >
-              {opt.label}
-            </span>
-            <span
-              style={{ fontSize: 12, color: 'var(--muted)', lineHeight: 1.4 }}
-            >
-              {opt.help}
-            </span>
-          </button>
-        );
-      })}
-    </div>
+      {EDITOR_MODE_OPTIONS.map((opt) => (
+        <RadioOption
+          key={opt.id}
+          name="article-default-editor-mode"
+          checked={opt.id === value}
+          onChange={() => onChange(opt.id)}
+          label={opt.label}
+          hint={opt.help}
+        />
+      ))}
+    </fieldset>
   );
 }
 
@@ -770,42 +702,16 @@ function GeneratorEditor({
       </Field>
 
       <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 13,
-            color: 'var(--text)',
-            cursor: 'pointer',
-            userSelect: 'none',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={value.alternateCase}
-            onChange={(e) => setField('alternateCase', e.target.checked)}
-          />
-          Alternate case
-        </label>
-        <label
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            fontSize: 13,
-            color: 'var(--text)',
-            cursor: 'pointer',
-            userSelect: 'none',
-          }}
-        >
-          <input
-            type="checkbox"
-            checked={value.includeNumber}
-            onChange={(e) => setField('includeNumber', e.target.checked)}
-          />
-          Include a number
-        </label>
+        <Checkbox
+          label="Alternate case"
+          checked={value.alternateCase}
+          onChange={(next) => setField('alternateCase', next)}
+        />
+        <Checkbox
+          label="Include a number"
+          checked={value.includeNumber}
+          onChange={(next) => setField('includeNumber', next)}
+        />
       </div>
 
       <div

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '../../lib/api';
-import { Btn, Field, Input, Toggle, useToast } from '../../components/ui';
+import { Btn, Field, Input, CheckboxOption, useToast } from '../../components/ui';
 import { isOperator } from '../../lib/roles';
 import type { Me } from '../../lib/server-api/auth';
 import { TimezonePicker } from './timezone-picker';
@@ -105,15 +105,15 @@ export function ProfileForm({ me }: { me: Me }) {
             either toggle per-search inside the palette itself.
           </p>
           <div style={{ display: 'grid', gap: 10, maxWidth: 560 }}>
-            <Toggle
+            <CheckboxOption
               label="Default to comprehensive"
-              help="Match partial words so short queries surface longer stems."
+              hint="Match partial words so short queries surface longer stems."
               checked={defaultComprehensive}
               onChange={setDefaultComprehensive}
             />
-            <Toggle
+            <CheckboxOption
               label="Default to global"
-              help="Search every company you can access, even when viewing one."
+              hint="Search every company you can access, even when viewing one."
               checked={defaultGlobal}
               onChange={setDefaultGlobal}
             />

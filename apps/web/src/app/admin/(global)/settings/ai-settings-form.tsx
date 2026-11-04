@@ -27,7 +27,7 @@ import {
   Select,
   RadioOption,
   Tag,
-  Toggle,
+  CheckboxOption,
   useToast,
 } from '../../../../components/ui';
 import styles from './ai-settings-form.module.css';
@@ -314,9 +314,9 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
             <h2>AI integration</h2>
             <p>Connect a provider to power Ask anything and article summaries.</p>
           </div>
-          <Toggle
+          <CheckboxOption
             label="Enable AI integration"
-            help={
+            hint={
               enabled
                 ? 'On. Uses the provider configured below for Ask anything.'
                 : 'Off. Ask anything and automatic article summaries are disabled.'
@@ -340,7 +340,6 @@ export function AiSettingsForm({ initial }: { initial: AiSettings }) {
                   name="ai-provider"
                   checked={provider === p.value}
                   onChange={() => changeProvider(p.value)}
-                  hideIndicator
                   className={styles.providerCard}
                   label={
                     <span className={styles.providerLabel}>
