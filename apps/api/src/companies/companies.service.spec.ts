@@ -1,6 +1,12 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { CompaniesService } from './companies.service.js';
+import {
+  getTenantContext,
+  runWithTenantContext,
+  type TenantContext,
+} from '@weavestream/shared/server';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { assertTenantScope } from '../prisma/tenant-scoped-models.js';
 
 /**
  * Phase 9a service coverage. These are pure unit tests backed by
@@ -96,7 +102,7 @@ function makePrisma(companies: Record<string, CompanyRow> = {}) {
       findMany: jest.fn().mockResolvedValue([]),
     },
     upload: {
-      findUnique: jest.fn().mockResolvedValue(null),
+      findFirst: jest.fn().mockResolvedValue(null),
     },
   };
 }
@@ -310,8 +316,15 @@ describe('CompaniesService logo guard', () => {
   function setup(upload: null | { companyId: string; isImage: boolean; deletedAt: Date | null }) {
     const companies = { c1: makeCompany({ id: 'c1' }) };
     const prisma = makePrisma(companies);
-    prisma.upload.findUnique.mockResolvedValue(
-      upload === null ? null : { id: 'u-1', ...upload },
+    // Runs the real tenant guard under the active context, and only
+    // returns the row when the query's company filter can see it.
+    prisma.upload.findFirst.mockImplementation(
+      async (args: { where: { companyId?: string } }) => {
+        const ctx = getTenantContext();
+        if (ctx) assertTenantScope({ model: 'Upload', action: 'findFirst', args }, ctx);
+        if (upload === null || args.where.companyId !== upload.companyId) return null;
+        return { id: 'u-1', isImage: upload.isImage, deletedAt: upload.deletedAt };
+      },
     );
     return {
       prisma,
@@ -327,7 +340,28 @@ describe('CompaniesService logo guard', () => {
     const { svc } = setup({ companyId: 'other', isImage: true, deletedAt: null });
     await expect(
       svc.update(ACTOR, 'c1', { logoUploadId: 'u-1' }, META),
-    ).rejects.toThrow(/different company/i);
+    ).rejects.toThrow(/not found/i);
+  });
+
+  it('lets a COMPANY_MANAGE holder with no membership set the logo', async () => {
+    // `company.manage` is a global capability. Before the scoped read,
+    // the tenant middleware rejected the unscoped upload lookup (500).
+    const { svc } = setup({ companyId: 'c1', isImage: true, deletedAt: null });
+    const tenant: TenantContext = {
+      userId: 'op-1',
+      role: 'OPERATOR',
+      email: 'op@x',
+      allowedCompanyIds: [],
+      isSuperAdmin: false,
+      globalAccess: 'NONE',
+      requestId: 'req-1',
+      ip: META.ip,
+      userAgent: META.userAgent,
+    };
+    const out = await runWithTenantContext(tenant, () =>
+      svc.update(ACTOR, 'c1', { logoUploadId: 'u-1' }, META),
+    );
+    expect(out.logoUploadId).toBe('u-1');
   });
 
   it('rejects non-image uploads', async () => {

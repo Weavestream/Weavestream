@@ -1,6 +1,7 @@
 import { alertsSendJobSchema } from '@weavestream/shared';
 import { AlertEmitterService } from './alert-emitter.service.js';
 import type { PersistedAuditEntry } from '../audit/audit.service.js';
+import { assertTenantScope } from '../prisma/tenant-scoped-models.js';
 
 /**
  * Security-alert matching in AlertEmitterService: reserved-selector
@@ -51,7 +52,7 @@ function entryOf(
   };
 }
 
-function makeEmitter(rows: ConfigRow[]) {
+function makeEmitter(rows: ConfigRow[], prismaOverrides: Record<string, unknown> = {}) {
   const createMany = jest.fn().mockResolvedValue({ count: 1 });
   const queueAdd = jest.fn().mockResolvedValue(undefined);
   const findMany = jest.fn().mockResolvedValue(rows);
@@ -63,11 +64,12 @@ function makeEmitter(rows: ConfigRow[]) {
         .fn()
         .mockResolvedValue({ name: 'Ada Operator', email: 'ada@example.com' }),
     },
-    asset: { findUnique: jest.fn().mockResolvedValue(null) },
-    article: { findUnique: jest.fn().mockResolvedValue(null) },
-    password: { findUnique: jest.fn().mockResolvedValue(null) },
-    monitoredDomain: { findUnique: jest.fn().mockResolvedValue(null) },
+    asset: { findFirst: jest.fn().mockResolvedValue(null) },
+    article: { findFirst: jest.fn().mockResolvedValue(null) },
+    password: { findFirst: jest.fn().mockResolvedValue(null) },
+    monitoredDomain: { findFirst: jest.fn().mockResolvedValue(null) },
     company: { findUnique: jest.fn().mockResolvedValue(null) },
+    ...prismaOverrides,
   };
   const audit = { registerHook: jest.fn() };
   const queues = { get: jest.fn(() => ({ add: queueAdd })) };
@@ -81,8 +83,8 @@ function makeEmitter(rows: ConfigRow[]) {
   return { svc, createMany, queueAdd, findMany };
 }
 
-async function primed(rows: ConfigRow[]) {
-  const ctx = makeEmitter(rows);
+async function primed(rows: ConfigRow[], prismaOverrides: Record<string, unknown> = {}) {
+  const ctx = makeEmitter(rows, prismaOverrides);
   await ctx.svc.invalidate(); // loads the mocked findMany rows into the cache
   return ctx;
 }
@@ -383,5 +385,45 @@ describe('AlertEmitterService — security matching', () => {
       const parsed = alertsSendJobSchema.safeParse(call[1]);
       expect(parsed.success).toBe(true);
     }
+  });
+});
+
+/**
+ * Issue #109 follow-up: the record name in a CRUD alert email is read
+ * while the acting operator's tenant context is active. An unscoped
+ * read throws in the tenant middleware for a membership-scoped
+ * operator, and the email silently lost the record name.
+ */
+describe('AlertEmitterService — entity name lookup tenant scope', () => {
+  const COMPANY = '2ba00000-0000-4000-8000-00000000c109';
+  const ASSET = '2ba00000-0000-4000-8000-00000000a109';
+  const operatorCtx = {
+    userId: 'u-109',
+    role: 'OPERATOR' as const,
+    email: 'operator@example.test',
+    allowedCompanyIds: [COMPANY],
+    isSuperAdmin: false,
+    globalAccess: 'NONE' as const,
+    requestId: 'req-109',
+    ip: '127.0.0.1',
+    userAgent: 'jest',
+  };
+
+  it('scopes the record read by the audit row company, so the name renders', async () => {
+    const findFirst = jest.fn(async (args: Record<string, unknown>) => {
+      assertTenantScope({ model: 'Asset', action: 'findFirst', args }, operatorCtx);
+      return { name: 'Core switch' };
+    });
+    const { svc, queueAdd } = await primed([CRUD_ALL_CFG], { asset: { findFirst } });
+
+    await svc.maybeFire(
+      entryOf('asset.create', { entityType: 'Asset', entityId: ASSET, companyId: COMPANY }),
+    );
+
+    expect(findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: ASSET, companyId: COMPANY } }),
+    );
+    const payload = queueAdd.mock.calls[0]?.[1] as { text: string };
+    expect(payload.text).toContain('Core switch');
   });
 });

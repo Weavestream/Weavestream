@@ -10,9 +10,9 @@ import {
   type ResolveIntegrationDifferenceInput,
   type ResolveIntegrationDifferencesBulkInput,
 } from '@weavestream/shared';
-import { getTenantContext, runWithTenantContext } from '@weavestream/shared/server';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { runInCompanyScope } from '../prisma/company-scope.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { AssetsService } from '../assets/assets.service.js';
@@ -269,7 +269,7 @@ export class IntegrationDifferencesService {
         continue;
       }
       try {
-        await this.inCompanyScope([target.companyId], () =>
+        await runInCompanyScope([target.companyId], () =>
           this.resolve(actor, target.companyId, target.assetId, {
             syncRecordId: target.syncRecordId,
             assetFieldId: target.assetFieldId,
@@ -335,7 +335,7 @@ export class IntegrationDifferencesService {
     const unique = [...new Map(items.map((item) => [`${item.syncRecordId}:${item.assetFieldId}`, item])).values()];
     const rows = mapped.length === 0
       ? []
-      : await this.inCompanyScope(mapped, () =>
+      : await runInCompanyScope(mapped, () =>
           this.prisma.integrationSyncRecord.findMany({
             where: {
               id: { in: [...new Set(unique.map((item) => item.syncRecordId))] },
@@ -375,7 +375,7 @@ export class IntegrationDifferencesService {
     }
     const companyIds = filter.companyId ? [filter.companyId] : mapped;
     if (companyIds.length === 0) return { targets: [], nextCursor: null };
-    const rows = await this.inCompanyScope(companyIds, () =>
+    const rows = await runInCompanyScope(companyIds, () =>
       this.prisma.integrationSyncRecord.findMany({
         where: {
           ...HAS_DIFFS,
@@ -421,7 +421,7 @@ export class IntegrationDifferencesService {
       assetId: { not: null },
       companyMapping: { integrationId },
     };
-    return this.inCompanyScope(companyIds, async () => {
+    return runInCompanyScope(companyIds, async () => {
       const rows = await this.prisma.integrationSyncRecord.findMany({
         where: { ...where, ...(query.cursor ? { id: { gt: query.cursor } } : {}) },
         orderBy: { id: 'asc' },
@@ -481,11 +481,5 @@ export class IntegrationDifferencesService {
       const last = page[page.length - 1];
       return { items, total, nextCursor: rows.length > query.limit && last ? last.id : null };
     });
-  }
-
-  private inCompanyScope<T>(companyIds: string[], read: () => Promise<T>): Promise<T> {
-    const tenant = getTenantContext();
-    if (!tenant) return read();
-    return runWithTenantContext({ ...tenant, allowedCompanyIds: companyIds }, read);
   }
 }

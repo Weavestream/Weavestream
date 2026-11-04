@@ -299,7 +299,7 @@ export class AlertEmitterService
     parsed: ParsedAction,
   ): Promise<ResolvedLabels> {
     const [entityName, companyName, actor] = await Promise.all([
-      this.lookupEntityName(parsed.entity, entry.entityId),
+      this.lookupEntityName(parsed.entity, entry.entityId, entry.companyId),
       this.lookupCompanyName(entry.companyId),
       this.lookupActor(entry.actorId),
     ]);
@@ -314,34 +314,39 @@ export class AlertEmitterService
   private async lookupEntityName(
     entity: AlertRecordEntityType,
     entityId: string | null,
+    companyId: string | null,
   ): Promise<string | null> {
     if (!entityId) return null;
+    // The audit row's companyId scopes the read, so the tenant
+    // middleware accepts it for membership-scoped operators (issue #109
+    // follow-up). Without it, only read-bypass callers resolve the name.
+    const where = companyId ? { id: entityId, companyId } : { id: entityId };
     try {
       switch (entity) {
         case 'asset': {
-          const row = await this.prisma.asset.findUnique({
-            where: { id: entityId },
+          const row = await this.prisma.asset.findFirst({
+            where,
             select: { name: true },
           });
           return row?.name ?? null;
         }
         case 'article': {
-          const row = await this.prisma.article.findUnique({
-            where: { id: entityId },
+          const row = await this.prisma.article.findFirst({
+            where,
             select: { title: true },
           });
           return row?.title ?? null;
         }
         case 'password': {
-          const row = await this.prisma.password.findUnique({
-            where: { id: entityId },
+          const row = await this.prisma.password.findFirst({
+            where,
             select: { name: true },
           });
           return row?.name ?? null;
         }
         case 'domain': {
-          const row = await this.prisma.monitoredDomain.findUnique({
-            where: { id: entityId },
+          const row = await this.prisma.monitoredDomain.findFirst({
+            where,
             select: { hostname: true },
           });
           return row?.hostname ?? null;

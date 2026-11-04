@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { runInCompanyScope } from '../prisma/company-scope.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { refreshMarkdownPlaintext } from './markdown-plaintext-refresh.service.js';
 
@@ -48,14 +49,18 @@ export class SearchIndexService {
    * When the asset has been hard-deleted since the call was issued
    * (rare; asset deletion is `Restrict` for layouts), we silently no-op
    * — the trigger path will have already removed the row.
+   *
+   * `companyId` scopes the read so the tenant middleware accepts it for
+   * operators pinned to their memberships (issue #109).
    */
   async upsertAsset(
     tx: Prisma.TransactionClient | PrismaService,
     assetId: string,
+    companyId: string,
   ): Promise<void> {
     const client = tx as PrismaService;
-    const asset = await client.asset.findUnique({
-      where: { id: assetId },
+    const asset = await client.asset.findFirst({
+      where: { id: assetId, companyId },
       include: {
         assetLayout: {
           include: {
@@ -119,28 +124,40 @@ export class SearchIndexService {
    * field has its `visibleToClients` flipped or a field is archived,
    * so the stale `body_public` is rebuilt for every row. Batched to
    * keep transactions small on layouts with thousands of assets.
+   *
+   * Layouts are global, so their assets span every company. The caller
+   * is authorized by the global `layout.manage.global` capability and
+   * may hold no membership, so the reads run in an explicit all-company
+   * scope (`runInCompanyScope`). Nothing read here goes back to the
+   * caller: the only output is the derived `search_index` rows.
    */
   async reindexLayout(layoutId: string, batchSize = 200): Promise<number> {
-    let done = 0;
-    let cursor: string | undefined;
+    const companies = await this.prisma.company.findMany({ select: { id: true } });
+    const companyIds = companies.map((c) => c.id);
+    if (companyIds.length === 0) return 0;
 
-    while (true) {
-      const batch = await this.prisma.asset.findMany({
-        where: { assetLayoutId: layoutId },
-        orderBy: { id: 'asc' },
-        take: batchSize,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-        select: { id: true },
-      });
-      if (batch.length === 0) break;
-      for (const row of batch) {
-        await this.upsertAsset(this.prisma, row.id);
-        done += 1;
+    return runInCompanyScope(companyIds, async () => {
+      let done = 0;
+      let cursor: string | undefined;
+
+      while (true) {
+        const batch = await this.prisma.asset.findMany({
+          where: { assetLayoutId: layoutId, companyId: { in: companyIds } },
+          orderBy: { id: 'asc' },
+          take: batchSize,
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+          select: { id: true, companyId: true },
+        });
+        if (batch.length === 0) break;
+        for (const row of batch) {
+          await this.upsertAsset(this.prisma, row.id, row.companyId);
+          done += 1;
+        }
+        cursor = batch[batch.length - 1]!.id;
+        if (batch.length < batchSize) break;
       }
-      cursor = batch[batch.length - 1]!.id;
-      if (batch.length < batchSize) break;
-    }
-    return done;
+      return done;
+    });
   }
 
   // ------------------------------------------------------------------
@@ -173,10 +190,10 @@ export class SearchIndexService {
 
     const assetIds = await this.prisma.asset.findMany({
       orderBy: { id: 'asc' },
-      select: { id: true },
+      select: { id: true, companyId: true },
     });
-    for (const { id } of assetIds) {
-      await this.upsertAsset(this.prisma, id);
+    for (const { id, companyId } of assetIds) {
+      await this.upsertAsset(this.prisma, id, companyId);
       counts.assets += 1;
     }
 

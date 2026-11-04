@@ -734,7 +734,7 @@ export class AssetsService {
       // Phase 6: rebuild search_index inside the same tx so the row
       // only becomes discoverable after its field values are visible
       // to the rest of the app.
-      await this.searchIndex.upsertAsset(tx, created.id);
+      await this.searchIndex.upsertAsset(tx, created.id, companyId);
 
       return created;
     });
@@ -856,7 +856,7 @@ export class AssetsService {
       // Phase 6: rewrite the denormalised plaintext so the asset's
       // updated field values and name surface in the next search
       // query. Same-tx so a rollback cleans both sides up together.
-      await this.searchIndex.upsertAsset(tx, id);
+      await this.searchIndex.upsertAsset(tx, id, companyId);
     });
 
     const entry: AuditEntry = {
@@ -1273,7 +1273,7 @@ export class AssetsService {
           true,
         );
         await this.linkFileFieldUploadsToAsset(tx, input.companyId, row.id, layout, canonicalValues);
-        await this.searchIndex.upsertAsset(tx, row.id);
+        await this.searchIndex.upsertAsset(tx, row.id, input.companyId);
         await this.audit.logWithClient(tx, {
           actorId: input.auditActorId,
           action: 'integration.asset.created',
@@ -1396,7 +1396,7 @@ export class AssetsService {
             true,
           );
           await this.linkFileFieldUploadsToAsset(tx, input.companyId, target!.id, layout, canonicalValues);
-          await this.searchIndex.upsertAsset(tx, target!.id);
+          await this.searchIndex.upsertAsset(tx, target!.id, input.companyId);
           await this.audit.logWithClient(tx, {
             actorId: input.auditActorId,
             action: 'integration.asset.updated',
@@ -1493,7 +1493,7 @@ export class AssetsService {
       });
       // Phase 6: mirror `archived_at` into `search_index` so the default
       // query filter (`archived_at IS NULL`) hides the row immediately.
-      await this.searchIndex.upsertAsset(tx, id);
+      await this.searchIndex.upsertAsset(tx, id, companyId);
     });
 
     // Phase 10: cascade archive to embedded credentials. Runs outside
@@ -1535,7 +1535,7 @@ export class AssetsService {
         where: { id, companyId },
         data: { archivedAt: null, updatedBy: actor.id },
       });
-      await this.searchIndex.upsertAsset(tx, id);
+      await this.searchIndex.upsertAsset(tx, id, companyId);
     });
 
     // Phase 10: mirror the restore onto embedded credentials the asset

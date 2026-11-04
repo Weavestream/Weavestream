@@ -9,6 +9,7 @@ import type {
   UpdateCompanyInput,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { runInCompanyScope } from '../prisma/company-scope.js';
 import { AuditLogService } from '../audit/audit.service.js';
 import { MembershipCacheService } from '../cache/membership-cache.service.js';
 import { allowedCompanyIds } from '../rbac/permission.service.js';
@@ -382,17 +383,19 @@ export class CompaniesService {
     }
 
     if (input.logoUploadId !== undefined && input.logoUploadId !== null) {
-      const upload = await this.prisma.upload.findUnique({
-        where: { id: input.logoUploadId },
-        select: { id: true, companyId: true, isImage: true, deletedAt: true },
-      });
+      // `company.manage` is a global capability: its holder may have no
+      // membership on this company, so the read runs in this company's
+      // scope. The `companyId` filter is also the cross-tenant guard —
+      // company B's upload cannot become company A's logo.
+      const logoUploadId = input.logoUploadId;
+      const upload = await runInCompanyScope([id], () =>
+        this.prisma.upload.findFirst({
+          where: { id: logoUploadId, companyId: id },
+          select: { id: true, isImage: true, deletedAt: true },
+        }),
+      );
       if (!upload || upload.deletedAt) {
         throw new BadRequestException('Logo upload not found');
-      }
-      if (upload.companyId !== id) {
-        // Cross-tenant guard: an operator with access to two tenants
-        // could otherwise point company A at company B's upload.
-        throw new BadRequestException('Logo upload belongs to a different company');
       }
       if (!upload.isImage) {
         throw new BadRequestException('Logo upload must be an image');

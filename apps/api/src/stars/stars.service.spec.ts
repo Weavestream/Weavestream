@@ -1,5 +1,8 @@
 import { StarsService } from './stars.service.js';
+import { NotFoundException } from '@nestjs/common';
+import { runWithTenantContext, type TenantContext } from '@weavestream/shared/server';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { assertTenantScope } from '../prisma/tenant-scoped-models.js';
 
 /**
  * Access-scoping coverage for `GET /me/stars`.
@@ -126,5 +129,83 @@ describe('StarsService company scoping', () => {
       companyId?: unknown;
     };
     expect(where.companyId).toBeUndefined();
+  });
+});
+
+/**
+ * Issue #109 follow-up: star/unstar resolve an entity's company before
+ * the membership check. An unscoped read threw in the tenant middleware
+ * for a membership-scoped operator (500 on every star). The fake runs
+ * the real guard and only returns the row when the filter can see it.
+ */
+describe('StarsService entity lookup tenant scope', () => {
+  const COMPANY = '2ba00000-0000-4000-8000-00000000c109';
+  const ASSET = '2ba00000-0000-4000-8000-00000000a109';
+  const OPERATOR: AuthedUser = { ...SUPER_ADMIN, role: 'OPERATOR', globalAccess: 'NONE' };
+  const meta = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  function tenant(allowedCompanyIds: string[]): TenantContext {
+    return {
+      userId: OPERATOR.id,
+      role: 'OPERATOR',
+      email: OPERATOR.email,
+      allowedCompanyIds,
+      isSuperAdmin: false,
+      globalAccess: 'NONE',
+      requestId: 'req-109',
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+    };
+  }
+
+  function setup(ctx: TenantContext, existingStar: boolean) {
+    const createdAt = new Date('2026-11-04T08:00:00.000Z');
+    const prisma = {
+      asset: {
+        findFirst: jest.fn(async (args: { where: { companyId?: { in?: string[] } } }) => {
+          assertTenantScope({ model: 'Asset', action: 'findFirst', args }, ctx);
+          return args.where.companyId?.in?.includes(COMPANY) ? { companyId: COMPANY } : null;
+        }),
+      },
+      membership: { findFirst: jest.fn().mockResolvedValue({ id: 'm-1' }) },
+      starredAsset: {
+        findUnique: jest.fn().mockResolvedValue(existingStar ? { createdAt } : null),
+        create: jest.fn().mockResolvedValue({ createdAt }),
+        delete: jest.fn().mockResolvedValue({}),
+      },
+    };
+    const audit = makeAudit();
+    const svc = new StarsService(prisma as never, audit as never);
+    const run = <T>(fn: () => Promise<T>) => runWithTenantContext(ctx, fn);
+    return { svc, prisma, audit, run };
+  }
+
+  it('lets a company-only operator star an asset in their company', async () => {
+    const { svc, prisma, audit, run } = setup(tenant([COMPANY]), false);
+
+    await expect(run(() => svc.star(OPERATOR, 'asset', ASSET, meta))).resolves.toMatchObject({
+      starred: true,
+    });
+    expect(prisma.starredAsset.create).toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ companyId: COMPANY }));
+  });
+
+  it('returns 404 for an asset outside the operator scope', async () => {
+    const { svc, prisma, run } = setup(tenant(['2ba00000-0000-4000-8000-00000000c110']), false);
+
+    await expect(run(() => svc.star(OPERATOR, 'asset', ASSET, meta))).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+    expect(prisma.starredAsset.create).not.toHaveBeenCalled();
+  });
+
+  it('still removes a dangling star after the membership is gone', async () => {
+    const { svc, prisma, audit, run } = setup(tenant([]), true);
+
+    await expect(run(() => svc.unstar(OPERATOR, 'asset', ASSET, meta))).resolves.toEqual({
+      starred: false,
+    });
+    expect(prisma.starredAsset.delete).toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ companyId: null }));
   });
 });

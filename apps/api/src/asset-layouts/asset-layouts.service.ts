@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, type AssetLayout, type AssetField } from '@prisma/client';
@@ -21,6 +22,8 @@ import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { SearchIndexService } from '../search/search-index.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { assertStringIdList } from '../common/safe-id-list.js';
+import { describeError } from '../common/describe-error.js';
+import { getTenantContext } from '@weavestream/shared/server';
 
 /** Another writer bumped the layout version between our read and write. */
 class LayoutVersionConflict extends Error {}
@@ -74,6 +77,8 @@ export interface SerializedLayout {
 
 @Injectable()
 export class AssetLayoutsService {
+  private readonly logger = new Logger(AssetLayoutsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditLogService,
@@ -725,7 +730,19 @@ export class AssetLayoutsService {
       Object.prototype.hasOwnProperty.call(u.from as object, 'visibleToClients'),
     );
     if (visibilityChanged || removedIds.length > 0) {
-      await this.searchIndex.reindexLayout(layoutId);
+      try {
+        await this.searchIndex.reindexLayout(layoutId);
+      } catch (error) {
+        // The layout change has already committed. Until the index is
+        // rebuilt, `body_public` can still hold values of a field just
+        // hidden from clients, so an admin must act on this.
+        this.logger.error(
+          `Search reindex failed for layout ${layoutId} after a field change ` +
+            `(ref ${getTenantContext()?.requestId ?? 'none'}). Client search may show ` +
+            `stale field values until \`reindex-search\` runs: ${describeError(error)}`,
+        );
+        throw error;
+      }
     }
 
     return this.serialize(updatedLayout, updatedLayout.fields);

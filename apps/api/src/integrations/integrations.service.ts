@@ -54,10 +54,7 @@ import { scanSensitiveMaterial } from './sensitive-material.js';
 import { IntegrationOAuthAppService } from './oauth/integration-oauth-app.service.js';
 import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
 import { isAdminConsent, type OAuthClientCredentials } from './oauth/oauth-token.js';
-import {
-  getTenantContext,
-  runWithTenantContext,
-} from '@weavestream/shared/server';
+import { runInCompanyScope } from '../prisma/company-scope.js';
 
 export interface AuditMeta {
   ip: string;
@@ -1051,7 +1048,7 @@ export class IntegrationsService {
       await this.requireReconstructionReadScope(integrationId, query);
     const rows = companyIds.length === 0
       ? []
-      : await this.withReconstructionCompanyScope(companyIds, () =>
+      : await runInCompanyScope(companyIds, () =>
           this.prisma.integrationReconstructionSummary.findMany({
             where: {
               companyId: { in: companyIds },
@@ -1164,7 +1161,7 @@ export class IntegrationsService {
     });
     const rows = companyIds.length === 0
       ? []
-      : await this.withReconstructionCompanyScope(companyIds, read);
+      : await runInCompanyScope(companyIds, read);
     for (const row of rows) {
       assertReconstructionRowScope(integrationId, row.companyId, row.companyMapping, row.resource);
     }
@@ -1250,18 +1247,6 @@ export class IntegrationsService {
     return { integration, companyIds };
   }
 
-  private withReconstructionCompanyScope<T>(
-    companyIds: string[],
-    read: () => Promise<T>,
-  ): Promise<T> {
-    const tenant = getTenantContext();
-    if (!tenant) return read();
-    return runWithTenantContext(
-      { ...tenant, allowedCompanyIds: companyIds },
-      read,
-    );
-  }
-
   // -------------------------------------------------------------------
   // Field-mapping CRUD (per-resource — replace-all per resource)
   // -------------------------------------------------------------------
@@ -1315,7 +1300,7 @@ export class IntegrationsService {
     // the integration's own mapped companies as the exact company scope.
     const { companyIds } = await this.requireReconstructionReadScope(integrationId, { resourceId });
     if (companyIds.length === 0) return null;
-    const checkpoints = await this.withReconstructionCompanyScope(companyIds, () =>
+    const checkpoints = await runInCompanyScope(companyIds, () =>
       this.prisma.integrationSyncCheckpoint.findMany({
         where: {
           companyId: { in: companyIds },
