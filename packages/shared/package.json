@@ -40,7 +40,7 @@
     "dompurify": "3.4.17",
     "jest": "^30.5.2",
     "jest-environment-jsdom": "^30.5.2",
-    "ts-jest": "^29.4.14",
+    "ts-jest": "^29.4.15",
     "typescript": "^5.9.0"
   }
 }
