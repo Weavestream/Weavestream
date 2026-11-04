@@ -340,10 +340,17 @@ export class SearchService {
       if (r.entity_type === 'upload') uploadIds.add(r.entity_id);
     }
 
+    // Article and Upload are tenant-scoped models: the Prisma tenant
+    // middleware rejects a read without a `companyId` filter for callers
+    // pinned to their memberships (globalAccess NONE). The hit rows are
+    // already scoped by the search query, so their own company ids are
+    // the filter.
+    const hitCompanyIds = [...companyIds];
+
     const [companies, layouts, articles, uploads] = await Promise.all([
       companyIds.size
         ? this.prisma.company.findMany({
-            where: { id: { in: [...companyIds] } },
+            where: { id: { in: hitCompanyIds } },
             select: { id: true, name: true, slug: true },
           })
         : Promise.resolve([] as Array<{ id: string; name: string; slug: string }>),
@@ -363,7 +370,7 @@ export class SearchService {
           ),
       articleIds.size
         ? this.prisma.article.findMany({
-            where: { id: { in: [...articleIds] } },
+            where: { id: { in: [...articleIds] }, companyId: { in: hitCompanyIds } },
             select: { id: true, slug: true, folderId: true },
           })
         : Promise.resolve(
@@ -371,7 +378,7 @@ export class SearchService {
           ),
       uploadIds.size
         ? this.prisma.upload.findMany({
-            where: { id: { in: [...uploadIds] } },
+            where: { id: { in: [...uploadIds] }, companyId: { in: hitCompanyIds } },
             select: { id: true, mimeType: true, isImage: true },
           })
         : Promise.resolve(

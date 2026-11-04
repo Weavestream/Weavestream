@@ -1,9 +1,11 @@
 import { SearchService } from './search.service.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import {
+  getTenantContext,
   runWithTenantContext,
   type TenantContext,
 } from '@weavestream/shared/server';
+import { assertTenantScope } from '../prisma/tenant-scoped-models.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
 /**
@@ -387,5 +389,65 @@ describe('SearchService archived-company exclusion (cross-org mode)', () => {
     );
     const { sql } = capturedSql(queryRaw);
     expect(sql).not.toContain(ARCHIVED_PREDICATE);
+  });
+});
+
+/**
+ * Hit enrichment reads Article and Upload, which are tenant-scoped
+ * models. For an operator pinned to their memberships (globalAccess
+ * NONE) the Prisma tenant middleware rejects any read without a
+ * `companyId` filter, so a search that matched an article returned 500.
+ * The stub runs the real `assertTenantScope` rule on each read.
+ */
+describe('SearchService hit enrichment under tenant scope', () => {
+  const ARTICLE_ID = '55555555-5555-5555-5555-555555555555';
+  const UPLOAD_ID = '66666666-6666-6666-6666-666666666666';
+
+  function makeEnrichService() {
+    const row = (entity_type: string, entity_id: string) => ({
+      entity_type,
+      entity_id,
+      company_id: COMPANY_ID,
+      title: entity_type,
+      snippet: '',
+      layout_id: null,
+      archived_at: null,
+      updated_at: new Date('2026-11-04T00:00:00Z'),
+      score: 1,
+    });
+    const scoped = (model: string) =>
+      jest.fn(async (args: Record<string, unknown>) => {
+        assertTenantScope({ model, action: 'findMany', args }, getTenantContext()!);
+        return [];
+      });
+    const prisma = {
+      $queryRaw: jest.fn(async () => [row('article', ARTICLE_ID), row('upload', UPLOAD_ID)]),
+      company: { findMany: jest.fn(async () => []) },
+      assetLayout: { findMany: jest.fn(async () => []) },
+      article: { findMany: scoped('Article') },
+      upload: { findMany: scoped('Upload') },
+    };
+    return { svc: new SearchService(prisma as unknown as PrismaService), prisma };
+  }
+
+  it('scopes article and upload reads by the hit company ids for a membership-pinned operator', async () => {
+    const actor = { ...makeActor('OPERATOR'), globalAccess: 'NONE' } as AuthedUser;
+    const { svc, prisma } = makeEnrichService();
+
+    const res = await runWithTenantContext(makeCtx(actor), () =>
+      svc.search(actor, { q: 'microsoft', companyId: COMPANY_ID }),
+    );
+
+    expect(res.items.map((i) => i.kind)).toEqual(['article', 'upload']);
+    expect(prisma.article.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: [ARTICLE_ID] }, companyId: { in: [COMPANY_ID] } },
+      }),
+    );
+    expect(prisma.upload.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: { in: [UPLOAD_ID] }, companyId: { in: [COMPANY_ID] } },
+      }),
+    );
   });
 });
