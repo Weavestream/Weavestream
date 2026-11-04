@@ -5,14 +5,14 @@ import { requireMe } from '../../../../../lib/server-api/auth';
 import { getSettings } from '../../../../../lib/server-api/settings';
 import { getCompanyDetail } from '../../../../../lib/server-api/companies';
 import { getActiveLayouts } from '../../../../../lib/server-api/layouts';
-import { listAllAssets } from '../../../../../lib/server-api/assets';
+import { AssetFilterError, listAllAssets } from '../../../../../lib/server-api/assets';
 import { throwUnlessFound } from '../../../../../lib/server-api/core';
 import {
   getCompanyActivePasswords,
 } from '../../../../../lib/server-api/passwords';
 import { canWriteCompany } from '../../../../../lib/roles';
 import { PageBody, PageHeader } from '../../../../../components/shell/page-header';
-import { Icon, LayoutSwatch, LinkBtn, Panel, Tag } from '../../../../../components/ui';
+import { ErrorBanner, Icon, LayoutSwatch, LinkBtn, Panel, Tag } from '../../../../../components/ui';
 import { buildTerm, lower } from '../../../../../lib/term';
 import { companyCrumbs } from '../../../../../lib/company-crumbs';
 import { AssetsTable } from './assets-table';
@@ -47,14 +47,23 @@ export default async function CompanyAssetsPage({
     if (typeof v === 'string') fieldFilters[k.slice('field.'.length)] = v;
   }
 
-  const [layouts, assets, passwords] = await Promise.all([
+  // A filter the API refuses (unknown field, wrong value type) shows as
+  // a banner over an empty list. The table still renders its chips, so
+  // the bad filter can be removed in 1 click.
+  const [layouts, { assets, filterError }, passwords] = await Promise.all([
     getActiveLayouts(),
     listAllAssets(companyId, {
       layoutId,
       q,
       includeArchived,
       fieldFilters,
-    }),
+    }).then(
+      (assets) => ({ assets, filterError: null as string | null }),
+      (err: unknown) => {
+        if (!(err instanceof AssetFilterError)) throw err;
+        return { assets: { items: [], truncated: false }, filterError: err.message };
+      },
+    ),
     // Passwords share the same global tag namespace as assets, so we load
     // them here too. The table surfaces matching credentials inline when
     // the operator picks a tag filter, since the per-company assets view
@@ -91,6 +100,11 @@ export default async function CompanyAssetsPage({
         }
       />
       <PageBody>
+        {filterError && (
+          <div style={{ marginBottom: 12 }}>
+            <ErrorBanner title="Filter not applied" detail={filterError} tone="warn" />
+          </div>
+        )}
         <Panel
           title={
             <span>

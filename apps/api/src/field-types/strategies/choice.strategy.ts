@@ -7,7 +7,8 @@ import {
 } from '@weavestream/shared';
 import type { FieldTypeStrategy } from '../field-type-strategy.js';
 
-function choices(options: Record<string, unknown>): FieldOptionChoice[] {
+/** The valid `{ slug, label }` choices on a DROPDOWN/MULTISELECT field. */
+export function choices(options: Record<string, unknown>): FieldOptionChoice[] {
   const arr = (options as { choices?: unknown }).choices;
   if (!Array.isArray(arr)) return [];
   return arr.filter(

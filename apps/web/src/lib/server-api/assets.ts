@@ -1,11 +1,30 @@
 import { cache } from 'react';
-import type { AssetPage, AssetSummary } from '@weavestream/shared';
+import { problemMessage, type AssetPage, type AssetSummary } from '@weavestream/shared';
 import { unwrapApiResponse } from '../api-errors';
 import { collectAllPages, serverApiFetch } from './core';
 
 // ───────────────────────────────────────────────────────────────────
 // Phase 3: assets
 // ───────────────────────────────────────────────────────────────────
+
+/** Error codes the API returns for a `field.<slug>=` filter it cannot apply. */
+const FILTER_ERROR_CODES = new Set([
+  'UnknownFilterField',
+  'UnfilterableField',
+  'InvalidFilterValue',
+]);
+
+/**
+ * The API refused a `field.<slug>=` filter (HTTP 400). Thrown instead of
+ * returning an empty page, so the list can say why it has no rows
+ * rather than claim that no asset matches.
+ */
+export class AssetFilterError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AssetFilterError';
+  }
+}
 
 export async function listAssets(
   companyId: string,
@@ -30,6 +49,10 @@ export async function listAssets(
   const res = await serverApiFetch<AssetPage>(
     `/companies/${companyId}/assets${q.toString() ? `?${q.toString()}` : ''}`,
   );
+  const errorCode = (res.problem as { error?: unknown } | undefined)?.error;
+  if (res.status === 400 && typeof errorCode === 'string' && FILTER_ERROR_CODES.has(errorCode)) {
+    throw new AssetFilterError(problemMessage(res.problem) ?? 'This filter cannot be applied.');
+  }
   // Throws on network failure / 5xx / 429 — an empty page here would
   // render as "no assets" when the backend is actually broken.
   return (

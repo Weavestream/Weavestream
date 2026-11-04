@@ -30,6 +30,7 @@ import { isUniqueConstraintError } from '../prisma/prisma-errors.js';
 import { AUDIT_ACTIONS } from '../audit/audit-actions.js';
 import { AuditLogService, type AuditEntry } from '../audit/audit.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
+import { choices as choiceOptions } from '../field-types/strategies/choice.strategy.js';
 import { RelationsService } from '../relations/relations.service.js';
 import { getTenantContext } from '@weavestream/shared/server';
 import { UploadContentMissingException, UploadsService } from '../uploads/uploads.service.js';
@@ -406,9 +407,9 @@ export class AssetsService {
   /**
    * List assets for a company with layout filter, name search, archive
    * filter, and `field.<slug>=<value>` filter DSL. Each `field.*` filter
-   * is resolved against the layout's field definitions (filterable types
-   * only — see `FILTERABLE_FIELD_TYPES`) and ANDed as separate nested
-   * `fieldValues.some` predicates.
+   * is resolved against the field definitions (filterable types only —
+   * see `FILTERABLE_FIELD_TYPES`) and the filters are ANDed. See
+   * `resolveFieldFilters` for the match rules.
    */
   async list(
     actor: AuthedUser,
@@ -424,52 +425,11 @@ export class AssetsService {
       where.name = { contains: options.q, mode: 'insensitive' };
     }
 
-    const filterClauses: Prisma.AssetWhereInput[] = [];
-    const fieldFilters = options.fieldFilters ?? {};
-    const filterSlugs = Object.keys(fieldFilters);
-
-    if (filterSlugs.length > 0) {
-      // Resolve slugs to field rows so the middle layer never has to do
-      // its own string->id lookup.
-      const layoutConstraint = options.layoutId
-        ? { assetLayoutId: options.layoutId }
-        : {};
-      const fieldRows = await this.prisma.assetField.findMany({
-        where: { ...layoutConstraint, slug: { in: filterSlugs }, archivedAt: null },
-      });
-      const fieldBySlug = new Map(fieldRows.map((f) => [f.slug, f]));
-
-      for (const slug of filterSlugs) {
-        const field = fieldBySlug.get(slug);
-        if (!field) {
-          throw new BadRequestException({
-            error: 'UnknownFilterField',
-            slug,
-            message: `No field "${slug}" exists on the selected layout.`,
-          });
-        }
-        if (!FILTERABLE_FIELD_TYPES.has(field.fieldType)) {
-          throw new BadRequestException({
-            error: 'UnfilterableField',
-            slug,
-            fieldType: field.fieldType,
-            message: `Field "${slug}" (${field.fieldType}) is not filterable.`,
-          });
-        }
-
-        const raw = fieldFilters[slug]!;
-        const parsed = this.coerceFilterValue(field.fieldType, raw);
-
-        filterClauses.push({
-          fieldValues: {
-            some: {
-              assetFieldId: field.id,
-              value: { equals: parsed as Prisma.InputJsonValue },
-            },
-          },
-        });
-      }
-    }
+    const filterClauses = await this.resolveFieldFilters(
+      companyId,
+      options.layoutId,
+      options.fieldFilters ?? {},
+    );
 
     if (filterClauses.length > 0) {
       where.AND = filterClauses;
@@ -2766,11 +2726,114 @@ export class AssetsService {
     });
   }
 
-  private coerceFilterValue(fieldType: string, raw: string): unknown {
+  /**
+   * Turn `field.<slug>=<value>` filters into one `id IN (...)` clause per
+   * slug; the clauses are ANDed by the caller.
+   *
+   * - Without a layout, one slug can name a field on several layouts
+   *   (`manufacturer` on Laptops and Servers). Every such field counts:
+   *   an asset matches when any of them holds the value.
+   * - NUMBER and BOOLEAN match by value. Every other filterable type is
+   *   stored as a JSON string and matches trimmed and case-insensitive.
+   * - DROPDOWN stores the choice slug, but people type the label they
+   *   see, so a label resolves to its slug.
+   *
+   * The match runs as raw SQL because Prisma's JSON filters have no
+   * case-insensitive mode. It is scoped to `companyId` in the WHERE
+   * clause and every value is a bound parameter.
+   */
+  private async resolveFieldFilters(
+    companyId: string,
+    layoutId: string | undefined,
+    fieldFilters: Record<string, string>,
+  ): Promise<Prisma.AssetWhereInput[]> {
+    const slugs = Object.keys(fieldFilters);
+    if (slugs.length === 0) return [];
+
+    const fieldRows = await this.prisma.assetField.findMany({
+      where: {
+        ...(layoutId ? { assetLayoutId: layoutId } : {}),
+        slug: { in: slugs },
+        archivedAt: null,
+      },
+    });
+
+    const clauses: Prisma.AssetWhereInput[] = [];
+    for (const slug of slugs) {
+      const raw = fieldFilters[slug]!;
+      const fields = fieldRows.filter((f) => f.slug === slug);
+      if (fields.length === 0) {
+        throw new BadRequestException({
+          error: 'UnknownFilterField',
+          slug,
+          message: layoutId
+            ? `No field "${slug}" exists on the selected layout.`
+            : `No field "${slug}" exists on any layout.`,
+        });
+      }
+      const filterable = fields.filter((f) => FILTERABLE_FIELD_TYPES.has(f.fieldType));
+      if (filterable.length === 0) {
+        throw new BadRequestException({
+          error: 'UnfilterableField',
+          slug,
+          fieldType: fields[0]!.fieldType,
+          message: `Field "${slug}" (${fields[0]!.fieldType}) is not filterable.`,
+        });
+      }
+
+      // A value that is not valid for one field's type (`abc` for a
+      // NUMBER field) only rules out that field. It is an error only
+      // when no field with this slug can take the value.
+      const conditions: Prisma.Sql[] = [];
+      let firstInvalid: BadRequestException | null = null;
+      for (const field of filterable) {
+        try {
+          conditions.push(this.fieldFilterCondition(field, raw));
+        } catch (err) {
+          if (!(err instanceof BadRequestException)) throw err;
+          firstInvalid ??= err;
+        }
+      }
+      if (conditions.length === 0) throw firstInvalid!;
+
+      const rows = await this.prisma.$queryRaw<Array<{ asset_id: string }>>(Prisma.sql`
+        SELECT DISTINCT asset_id FROM asset_field_values
+        WHERE company_id = ${companyId}::uuid
+          AND (${Prisma.join(conditions, ' OR ')})
+      `);
+      clauses.push({ id: { in: rows.map((r) => r.asset_id) } });
+    }
+    return clauses;
+  }
+
+  /** SQL predicate on `asset_field_values` for one field and one filter value. */
+  private fieldFilterCondition(field: AssetField, raw: string): Prisma.Sql {
+    if (field.fieldType === 'NUMBER' || field.fieldType === 'BOOLEAN') {
+      const parsed = this.coerceFilterValue(field.fieldType, raw);
+      return Prisma.sql`(asset_field_id = ${field.id}::uuid AND value = ${JSON.stringify(parsed)}::jsonb)`;
+    }
+    const value = raw.trim().toLowerCase();
+    const candidates = [value];
+    if (field.fieldType === 'DROPDOWN') {
+      const options = (field.options as Record<string, unknown> | null) ?? {};
+      // Labels need not be unique, so every choice with this label counts.
+      for (const c of choiceOptions(options)) {
+        if (c.slug.toLowerCase() === value || c.label.trim().toLowerCase() === value) {
+          candidates.push(c.slug.toLowerCase());
+        }
+      }
+    }
+    return Prisma.sql`(asset_field_id = ${field.id}::uuid
+      AND jsonb_typeof(value) = 'string'
+      AND lower(trim(value #>> '{}')) = ANY(${candidates}::text[]))`;
+  }
+
+  private coerceFilterValue(fieldType: 'NUMBER' | 'BOOLEAN', raw: string): unknown {
     switch (fieldType) {
       case 'NUMBER': {
         const n = Number(raw);
-        if (Number.isNaN(n)) {
+        // `Number('')` is 0 and `Infinity` has no JSON form, so both are rejected.
+        if (raw.trim() === '' || !Number.isFinite(n)) {
           throw new BadRequestException({
             error: 'InvalidFilterValue',
             fieldType,
@@ -2787,10 +2850,6 @@ export class AssetsService {
           fieldType,
           message: `Boolean filters accept "true" or "false".`,
         });
-      case 'EMAIL':
-        return raw.trim().toLowerCase();
-      default:
-        return raw;
     }
   }
 

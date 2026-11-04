@@ -23,7 +23,7 @@ jest.mock('next/headers', () => ({
 }));
 
 import { RateLimitedError } from '../api-errors';
-import { getAsset, listAllAssets } from './assets';
+import { AssetFilterError, getAsset, listAllAssets } from './assets';
 import { forMetadata } from './core';
 
 function resetRequestCache() {
@@ -151,5 +151,32 @@ describe('listAllAssets', () => {
     }
     expect(urls[0]!.searchParams.has('cursor')).toBe(false);
     expect(urls[1]!.searchParams.get('cursor')).toBe('a-2');
+  });
+
+  const problem = (body: Record<string, unknown>) =>
+    new Response(JSON.stringify({ status: 400, title: 'Bad Request', ...body }), {
+      status: 400,
+      headers: { 'content-type': 'application/problem+json' },
+    });
+
+  it('throws AssetFilterError with the API message when a field filter is refused (#99)', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce(
+      problem({
+        error: 'UnknownFilterField',
+        slug: 'nope',
+        detail: 'No field "nope" exists on any layout.',
+      }),
+    );
+
+    const err = await listAllAssets('co-1', { fieldFilters: { nope: 'x' } }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AssetFilterError);
+    expect((err as Error).message).toBe('No field "nope" exists on any layout.');
+  });
+
+  it('keeps the empty-page fallback for other 4xx responses', async () => {
+    jest.spyOn(global, 'fetch').mockResolvedValueOnce(problem({ detail: 'Something else' }));
+
+    const res = await listAllAssets('co-1');
+    expect(res.items).toEqual([]);
   });
 });

@@ -46,7 +46,10 @@ import { PermissionService } from '../rbac/permission.service.js';
  *   - `q=<text>` — case-insensitive substring match on `Asset.name`
  *     (Phase 6 expands this to field values via tsvector).
  *   - `includeArchived=true` — includes soft-deleted assets.
- *   - `field.<slug>=<value>` — value-equality filter against that field.
+ *   - `field.<slug>=<value>` — value-equality filter against that field
+ *     (text types trimmed and case-insensitive; a DROPDOWN accepts the
+ *     choice label or slug). Without `layout`, every layout's field with
+ *     that slug counts.
  *   - `limit=<int>`, `cursor=<uuid>` — keyset pagination (bounded 1..200).
  */
 @Controller({ path: 'companies/:companyId/assets', version: '1' })
