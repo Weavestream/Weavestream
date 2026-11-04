@@ -26,6 +26,7 @@ import { useIsMobile } from '../../../../../lib/hooks/use-is-mobile';
 import { useRailCollapse } from '../../../../../lib/hooks/use-rail-collapse';
 import { FolderSettingsDialog } from './folder-settings-dialog';
 import { ArticleActions } from './article-actions';
+import { ArticleImportButton, isSlugTaken } from './article-import';
 import { articleCounts, scopeArticles } from './article-scope';
 
 type ArticleCounts = ReturnType<typeof articleCounts>;
@@ -300,6 +301,13 @@ export function ArticlesBrowser({
         <Icon.archive size={12} />
         {includeArchived ? 'Hide archived' : 'Show archived'}
       </button>
+      {canManage && (
+        <ArticleImportButton
+          companyId={companyId}
+          folderId={selectedFolder ? selectedFolder.id : null}
+          folderName={selectedFolder?.name ?? null}
+        />
+      )}
     </div>
   );
 
@@ -987,16 +995,4 @@ function NewFolderInline({
       </Btn>
     </div>
   );
-}
-
-/**
- * Read the RFC 7807 `error` discriminator from whatever `apiFetch` handed
- * us back in the `problem` slot. We deliberately keep this defensive —
- * `problem` is typed as `unknown` because the server shape isn't
- * guaranteed on every status code.
- */
-function isSlugTaken(problem: unknown): boolean {
-  if (!problem || typeof problem !== 'object') return false;
-  const error = (problem as { error?: unknown }).error;
-  return error === 'SlugTaken';
 }

@@ -10,6 +10,7 @@ import {
   createArticleSchema,
   markdownExcerpt,
   markdownToPlaintext,
+  slugifyArticleTitle,
   tiptapExcerpt,
   tiptapToPlaintext,
   isValidTiptapDoc,
@@ -2194,16 +2195,9 @@ export class ArticlesService {
     };
   }
 
+  /** Shared with the web import's slug-conflict retry. */
   private slugifyTitle(title: string): string {
-    return (
-      title
-        .toLowerCase()
-        .normalize('NFKD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/(^-|-$)/g, '')
-        .slice(0, 80) || 'untitled'
-    );
+    return slugifyArticleTitle(title);
   }
 
   /**

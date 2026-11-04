@@ -92,6 +92,21 @@ overrides:
   # both apps' ranges drift; bump both together.
   "@types/react": 19.3.0
   "@types/react-dom": 19.3.0
+  # Dedupe pins. CodeMirror needs exactly one copy of each core package at
+  # runtime: extensions, facets and syntax trees are matched by instanceof
+  # and object identity, so two copies of @codemirror/state make the
+  # editor throw "Unrecognized extension value in extension set", and two
+  # copies of @codemirror/language or @lezer/* silently drop highlighting
+  # and language data. The @codemirror/view 6.43.15 bump (#89) resolved
+  # state 6.7.6 for view, while everything else stayed on 6.7.1; the
+  # autocomplete and one-dark entries had also drifted onto newer
+  # language/lezer copies. Every dependent declares a caret range that
+  # admits these versions. Bump them together with any @codemirror/*
+  # update. Pinned exactly, for the same reason as postcss above.
+  "@codemirror/state": 6.7.6
+  "@codemirror/language": 6.13.1
+  "@lezer/common": 1.5.4
+  "@lezer/lr": 1.4.11
   # Scope limiter, like nanoid above: pino 10.4.0 declares thread-stream
   # ^4.0.0, so the range admits the fix, but `pnpm update thread-stream -r`
   # also bumps @babel/*, @codemirror/*, @types/node and acorn. 4.0.0

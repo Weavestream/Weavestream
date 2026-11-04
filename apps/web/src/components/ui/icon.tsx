@@ -408,6 +408,11 @@ export const Icon = {
       <path d="M10 3v10" />
     </IconBase>
   ),
+  upload: (p: IconProps) => (
+    <IconBase {...p}>
+      <path d="M8 10.5V2.5M5 5.5l3-3 3 3M2.5 10v2.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V10" />
+    </IconBase>
+  ),
 };
 
 export type IconName = keyof typeof Icon;

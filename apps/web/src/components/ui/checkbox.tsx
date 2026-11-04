@@ -12,11 +12,13 @@ export function Checkbox({
   checked,
   onChange,
   hint,
+  disabled = false,
 }: {
   label: string;
   checked: boolean;
   onChange: (next: boolean) => void;
   hint?: string;
+  disabled?: boolean;
 }) {
   return (
     <label
@@ -25,12 +27,14 @@ export function Checkbox({
         gap: 8,
         alignItems: 'flex-start',
         fontSize: 13,
-        cursor: 'pointer',
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled ? 0.6 : 1,
       }}
     >
       <input
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
         style={{ marginTop: 3 }}
       />
