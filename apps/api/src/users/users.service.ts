@@ -111,6 +111,7 @@ export class UsersService {
             id: true,
             role: true,
             expiresAt: true,
+            passwordAccess: true,
             createdAt: true,
             revokedAt: true,
             // `archivedAt` feeds the "archived" status chip on the

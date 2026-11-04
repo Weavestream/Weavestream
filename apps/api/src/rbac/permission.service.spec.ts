@@ -82,4 +82,19 @@ describe('PermissionService membership cache', () => {
     expect(prisma.membership.findMany).toHaveBeenCalledTimes(1);
     expect(cached?.expiresAt).toEqual(expiresAt);
   });
+
+  it('keeps passwordAccess through the cache and reads unknown values as inherit', async () => {
+    const { prisma, svc } = setup();
+    prisma.membership.findMany.mockResolvedValue([
+      { ...READONLY[0], companyId: 'co-deny', passwordAccess: 'deny' },
+      { ...READONLY[0], companyId: 'co-odd', passwordAccess: 'something-else' },
+    ]);
+    await svc.loadMemberships('u-1');
+    const cached = await svc.loadMemberships('u-1');
+    expect(prisma.membership.findMany).toHaveBeenCalledTimes(1);
+    expect(cached.map((m) => [m.companyId, m.passwordAccess])).toEqual([
+      ['co-deny', 'deny'],
+      ['co-odd', 'inherit'],
+    ]);
+  });
 });

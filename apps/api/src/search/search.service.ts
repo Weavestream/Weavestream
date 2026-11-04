@@ -226,14 +226,22 @@ export class SearchService {
       // users are exempt by policy (their gate is visible_to_clients,
       // above) and super admins always pass.
       //
-      // Issue #110: an entry WITHOUT its own list follows the global
-      // password access policy, resolved per request into
-      // `actor.globalPasswordAccess` and bound as a parameter. An entry
-      // WITH its own list uses only that list.
-      const globalAccess = actor.globalPasswordAccess === true;
+      // Issue #110: an entry WITHOUT its own list follows the user's
+      // membership override for its company (`allow` / `deny`), else the
+      // global password access policy. Both come from `actor.passwordAccess`
+      // (resolved per request) and are bound as parameters. An entry WITH
+      // its own list uses only that list. Same rule as
+      // `passwordReadWhereFor` / `canReadPassword`.
+      const scope = actor.passwordAccess;
+      const byDefault = scope.byDefault === true;
+      const allowIds = [...scope.allowCompanyIds];
+      const denyIds = [...scope.denyCompanyIds];
+      const noOwnListAllowed = (companyIdColumn: Prisma.Sql) => Prisma.sql`(CASE WHEN ${byDefault}::boolean
+              THEN NOT (${companyIdColumn} = ANY(${denyIds}::uuid[]))
+              ELSE ${companyIdColumn} = ANY(${allowIds}::uuid[]) END)`;
       whereParts.push(
         Prisma.sql`(si.entity_type <> 'password'
-          OR (si.restricted_to_user_ids = '{}'::uuid[] AND ${globalAccess}::boolean)
+          OR (si.restricted_to_user_ids = '{}'::uuid[] AND ${noOwnListAllowed(Prisma.sql`si.company_id`)})
           OR ${actor.id}::uuid = ANY(si.restricted_to_user_ids))`,
       );
       // Files attached to an entry the actor cannot open are hidden too, so
@@ -246,7 +254,7 @@ export class SearchService {
           WHERE u.id = si.entity_id
             AND u.attached_to_type = 'password'
             AND NOT (
-              (p.restricted_to_user_ids = '{}'::uuid[] AND ${globalAccess}::boolean)
+              (p.restricted_to_user_ids = '{}'::uuid[] AND ${noOwnListAllowed(Prisma.sql`p.company_id`)})
               OR ${actor.id}::uuid = ANY(p.restricted_to_user_ids)
             )
         ))`,

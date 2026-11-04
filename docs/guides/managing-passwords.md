@@ -162,6 +162,22 @@ The policy applies to every credential that has no own internal-access list. A c
 
 Users outside the policy do not see those credentials anywhere, including search, stars, PDF exports, and MCP. They also do not see **New password**, because a credential they create without its own list would be hidden from them. Select **All internal users** to go back to the default. The saved user list is kept for later.
 
+### Allowing or Denying 1 User in 1 Company
+
+Use a company override when the global policy is correct for a user everywhere except in 1 company. Examples: a contractor outside the global list who needs credentials for 1 client, or a technician in the global list who must not see 1 client's credentials.
+
+1. Open the company and go to **Members**
+2. Add the user with **Add existing user**, or click **Edit** on the user's row
+3. In **Password access**, select **Allow** or **Deny**
+4. Click **Save** and confirm with step-up authentication
+
+You can also set the override from **Users → (user) → Companies**. The **Password access** column shows **Allow**, **Deny**, or **Global**.
+
+- A credential with its own internal-access list still uses only that list.
+- If the user has global access and is not yet a member, adding the membership also sets their role in this company.
+- If the membership has an expiry date, the override ends at that date and the global policy applies again. Revoking the membership also ends the override.
+- Client users do not have this setting. **Visible to clients** controls what they see.
+
 ## Linking to Articles and Assets
 
 Passwords can be linked to articles and assets using the same relations system used by the rest of Weavestream.

@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { GlobalAccess, MembershipRole, UserRole } from '@weavestream/shared';
+import type {
+  GlobalAccess,
+  MembershipPasswordAccess,
+  MembershipRole,
+  UserRole,
+} from '@weavestream/shared';
 import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
@@ -29,6 +34,17 @@ import type { Me } from '../../../../../lib/server-api/auth';
 import type { UserDetail } from '../../../../../lib/server-api/admin';
 import { lower } from '../../../../../lib/term';
 import { useTerm } from '../../../../../lib/term-context';
+import {
+  PasswordAccessField,
+  PasswordAccessTag,
+} from '../../../../../components/memberships/password-access-field';
+import {
+  fromLocalInputValue,
+  membershipPatch,
+  toLocalInputValue,
+  type MembershipDraft,
+  type MembershipPatch,
+} from '../../../../../components/memberships/membership-patch';
 
 type Row = UserDetail['memberships'][number];
 
@@ -113,6 +129,7 @@ export function UserMembershipsList({
     companyId: string;
     role: MembershipRole;
     expiresAt: string | null;
+    passwordAccess: MembershipPasswordAccess;
   }) {
     setPending(true);
     const res = await apiFetch(
@@ -123,12 +140,16 @@ export function UserMembershipsList({
           userId: user.id,
           role: input.role,
           expiresAt: input.expiresAt,
+          passwordAccess: input.passwordAccess,
         }),
       },
     );
     setPending(false);
     if (!res.ok) {
-      toast.push(problemMessage(res.problem) ?? `Could not set ${lower(term.one)}-level access.`, 'danger');
+      // A cancelled step-up (password access override) is the user's choice.
+      if (!res.stepUpCancelled) {
+        toast.push(problemMessage(res.problem) ?? `Could not set ${lower(term.one)}-level access.`, 'danger');
+      }
       return false;
     }
     toast.push(`${term.one}-level access set.`, 'ok');
@@ -137,18 +158,22 @@ export function UserMembershipsList({
     return true;
   }
 
-  async function update(
-    row: Row,
-    input: { role: MembershipRole; expiresAt: string | null },
-  ) {
+  async function update(row: Row, patch: MembershipPatch) {
+    // Nothing changed: close without a request (the API refuses an empty body).
+    if (Object.keys(patch).length === 0) {
+      setEditing(null);
+      return true;
+    }
     setPending(true);
     const res = await apiFetch(`/memberships/${row.id}`, {
       method: 'PATCH',
-      body: JSON.stringify(input),
+      body: JSON.stringify(patch),
     });
     setPending(false);
     if (!res.ok) {
-      toast.push(problemMessage(res.problem) ?? 'Update failed.', 'danger');
+      if (!res.stepUpCancelled) {
+        toast.push(problemMessage(res.problem) ?? 'Update failed.', 'danger');
+      }
       return false;
     }
     toast.push('Membership updated.', 'ok');
@@ -162,7 +187,9 @@ export function UserMembershipsList({
     const res = await apiFetch(`/memberships/${row.id}`, { method: 'DELETE' });
     setPending(false);
     if (!res.ok) {
-      toast.push(problemMessage(res.problem) ?? 'Revoke failed.', 'danger');
+      if (!res.stepUpCancelled) {
+        toast.push(problemMessage(res.problem) ?? 'Revoke failed.', 'danger');
+      }
       return;
     }
     toast.push('Membership revoked.', 'ok');
@@ -198,6 +225,13 @@ export function UserMembershipsList({
       width: 180,
       sortValue: (r) => r.role.toLowerCase(),
       render: (r) => <Tag tone="accent">{membershipRoleLabel(r.role)}</Tag>,
+    },
+    {
+      id: 'passwordAccess',
+      header: 'Password access',
+      width: 150,
+      sortValue: (r) => r.passwordAccess,
+      render: (r) => <PasswordAccessTag value={r.passwordAccess} />,
     },
     {
       id: 'expires',
@@ -399,6 +433,11 @@ export function UserMembershipsList({
                   </Tag>
                 )}
               </div>
+              {user.role !== 'CLIENT_USER' && (
+                <MobileCardRow label="Password access">
+                  <PasswordAccessTag value={r.passwordAccess} />
+                </MobileCardRow>
+              )}
               <MobileCardRow label="Expires" mono>
                 {expiresNode}
               </MobileCardRow>
@@ -499,6 +538,13 @@ export function UserMembershipsList({
           )}{' '}
           {term.one}-level access can be set again later — audit history is
           preserved.
+          {revoking && revoking.passwordAccess !== 'inherit' && (
+            <>
+              {' '}
+              Their password access override ({revoking.passwordAccess}) ends too, and the
+              global policy applies again.
+            </>
+          )}
         </p>
       </Dialog>
     </div>
@@ -530,12 +576,14 @@ function AttachDialog({
     companyId: string;
     role: MembershipRole;
     expiresAt: string | null;
+    passwordAccess: MembershipPasswordAccess;
   }) => Promise<boolean>;
 }) {
   const term = useTerm();
   const [picked, setPicked] = useState<CompanyPickerValue | null>(null);
   const [role, setRole] = useState<MembershipRole>(defaultRoleFor(userRole));
   const [expiresAt, setExpiresAt] = useState('');
+  const [passwordAccess, setPasswordAccess] = useState<MembershipPasswordAccess>('inherit');
 
   const availableRoles = useMemo(() => rolesForUser(userRole), [userRole]);
 
@@ -544,6 +592,7 @@ function AttachDialog({
       setPicked(null);
       setRole(defaultRoleFor(userRole));
       setExpiresAt('');
+      setPasswordAccess('inherit');
     }
   }, [open, userRole]);
 
@@ -583,9 +632,9 @@ function AttachDialog({
               await onSubmit({
                 companyId: picked.id,
                 role,
-                expiresAt: expiresAt
-                  ? new Date(expiresAt).toISOString()
-                  : null,
+                expiresAt: fromLocalInputValue(expiresAt),
+                // Client users never carry an override (the field is hidden).
+                passwordAccess: userRole === 'CLIENT_USER' ? 'inherit' : passwordAccess,
               });
             }}
           >
@@ -636,6 +685,13 @@ function AttachDialog({
             onChange={(e) => setExpiresAt(e.target.value)}
           />
         </Field>
+        <PasswordAccessField
+          id="u-attach-password-access"
+          value={passwordAccess}
+          onChange={setPasswordAccess}
+          userRole={userRole}
+          expiresAtLocal={expiresAt}
+        />
       </div>
     </Dialog>
   );
@@ -652,22 +708,28 @@ function EditDialog({
   userRole: UserRole;
   pending: boolean;
   onClose: () => void;
-  onSubmit: (input: {
-    role: MembershipRole;
-    expiresAt: string | null;
-  }) => Promise<boolean>;
+  onSubmit: (patch: MembershipPatch) => Promise<boolean>;
 }) {
   const [role, setRole] = useState<MembershipRole>(defaultRoleFor(userRole));
   const [expiresAt, setExpiresAt] = useState('');
+  const [passwordAccess, setPasswordAccess] = useState<MembershipPasswordAccess>('inherit');
 
   const availableRoles = useMemo(() => rolesForUser(userRole), [userRole]);
+
+  // The values the dialog opened with; only changed fields are sent.
+  const initial: MembershipDraft | null = row
+    ? {
+        role: row.role,
+        expiresAtLocal: toLocalInputValue(row.expiresAt),
+        passwordAccess: row.passwordAccess,
+      }
+    : null;
 
   useEffect(() => {
     if (!row) return;
     setRole(row.role);
-    setExpiresAt(
-      row.expiresAt ? new Date(row.expiresAt).toISOString().slice(0, 16) : '',
-    );
+    setExpiresAt(toLocalInputValue(row.expiresAt));
+    setPasswordAccess(row.passwordAccess);
   }, [row?.id]);
 
   if (!row) {
@@ -692,12 +754,10 @@ function EditDialog({
             kind="primary"
             loading={pending}
             onClick={() =>
-              onSubmit({
-                role,
-                expiresAt: expiresAt
-                  ? new Date(expiresAt).toISOString()
-                  : null,
-              })
+              initial &&
+              onSubmit(
+                membershipPatch(initial, { role, expiresAtLocal: expiresAt, passwordAccess }),
+              )
             }
           >
             Save
@@ -725,6 +785,13 @@ function EditDialog({
             onChange={(e) => setExpiresAt(e.target.value)}
           />
         </Field>
+        <PasswordAccessField
+          id="u-edit-password-access"
+          value={passwordAccess}
+          onChange={setPasswordAccess}
+          userRole={userRole}
+          expiresAtLocal={expiresAt}
+        />
       </div>
     </Dialog>
   );

@@ -11,6 +11,7 @@ import type {
 } from '@prisma/client';
 import { DomainsService } from './domains.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * Unit tests for DomainsService. Scope:
@@ -179,7 +180,7 @@ const OPERATOR: AuthedUser = {
   sessionId: 'sess-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 const CLIENT: AuthedUser = {
   id: 'user-2',
@@ -190,7 +191,7 @@ const CLIENT: AuthedUser = {
   sessionId: 'sess-2',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 describe('DomainsService — create', () => {

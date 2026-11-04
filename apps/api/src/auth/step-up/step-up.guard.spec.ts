@@ -3,7 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { StepUpGuard } from './step-up.guard.js';
 import { StepUpRequiredException } from './step-up-required.exception.js';
 import { REQUIRE_STEP_UP_KEY } from './require-step-up.decorator.js';
-import type { StepUpService } from './step-up.service.js';
+import { StepUpService } from './step-up.service.js';
 import type { RequireStepUpMetadata } from './require-step-up.decorator.js';
 
 function makeCtx(req: Record<string, unknown>): ExecutionContext {
@@ -24,7 +24,10 @@ function makeGuard(
     .mockImplementation((key) =>
       key === REQUIRE_STEP_UP_KEY ? meta : undefined,
     );
-  return new StepUpGuard(reflector, stepUp as StepUpService);
+  // The guard delegates to the real `assertVerified`, run against the
+  // mocked `isVerified` / `requiredFactor`.
+  const service = { ...stepUp, assertVerified: StepUpService.prototype.assertVerified };
+  return new StepUpGuard(reflector, service as unknown as StepUpService);
 }
 
 const VERIFIED = {

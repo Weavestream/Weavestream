@@ -1,6 +1,7 @@
 import type {
   ExpirationRow,
   GlobalAccess,
+  MembershipPasswordAccess,
   MembershipRole,
   PlatformCapability,
   RecentActivityItem,
@@ -46,6 +47,8 @@ export type UserDetail = UserListItem & {
     id: string;
     role: MembershipRole;
     expiresAt: string | null;
+    /** Company-level password access override. */
+    passwordAccess: MembershipPasswordAccess;
     revokedAt: string | null;
     createdAt: string;
     company: { id: string; name: string; slug: string; archivedAt: string | null };

@@ -38,10 +38,11 @@ export class MeController {
 
   @Get()
   async profile(@CurrentUser() user: AuthedUser) {
-    // `hasPasswordAccess` is a UI hint only (hide "New password"). Every
-    // password read and create re-checks the policy server-side.
+    // `passwordAccess` is the user's own scope, a UI hint only (hide "New
+    // password" per company via `passwordAccessForCompany`). Every password
+    // read and create re-checks the policy server-side.
     const profile = await this.me.profile(user.id);
-    return { ...profile, hasPasswordAccess: user.globalPasswordAccess };
+    return { ...profile, passwordAccess: user.passwordAccess };
   }
 
   @Get('sessions')

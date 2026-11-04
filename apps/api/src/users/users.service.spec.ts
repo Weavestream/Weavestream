@@ -2,6 +2,7 @@ import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { UsersService, hasAuthorityChanged } from './users.service.js';
 import { UsersController } from './users.controller.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 const ACTOR: AuthedUser = {
   id: 'actor-1',
@@ -12,7 +13,7 @@ const ACTOR: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 const META = { ip: '127.0.0.1', userAgent: 'jest' };

@@ -7,6 +7,7 @@ import {
 } from '@weavestream/shared/server';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { assertTenantScope } from '../prisma/tenant-scoped-models.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * Phase 9a service coverage. These are pure unit tests backed by
@@ -30,7 +31,7 @@ const ACTOR: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 const META = { ip: '127.0.0.1', userAgent: 'jest' };

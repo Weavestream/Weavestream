@@ -22,6 +22,8 @@ import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
 import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
 import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
+import { StepUpService } from '../auth/step-up/step-up.service.js';
+import { membershipChangeNeedsStepUp } from './membership-step-up.js';
 
 /**
  * Company-scoped membership endpoints. companyId is in the URL path so
@@ -29,7 +31,10 @@ import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
  */
 @Controller({ path: 'companies/:id/memberships', version: '1' })
 export class MembershipsCompanyController {
-  constructor(private readonly memberships: MembershipsService) {}
+  constructor(
+    private readonly memberships: MembershipsService,
+    private readonly stepUp: StepUpService,
+  ) {}
 
   @Get()
   // Reading the roster only requires FULL/READONLY effective access on
@@ -49,6 +54,11 @@ export class MembershipsCompanyController {
     @Body(new ZodBody(createMembershipSchema)) dto: CreateMembershipInput,
     @Req() req: Request,
   ) {
+    // A new `allow` / `deny` override changes password access: step-up.
+    // Decided in the handler so all 3 membership routes share one rule.
+    if (membershipChangeNeedsStepUp(null, dto)) {
+      await this.stepUp.assertVerified(user);
+    }
     return this.memberships.create(user, companyId, dto, {
       ip: ipOf(req),
       userAgent: uaOf(req),

@@ -2,6 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import { ExportsController } from './exports.controller.js';
 import { ExportsService, mayReadExportJob } from './exports.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { NO_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * An export job and its PDF belong to the user who started it. Job ids are
@@ -22,7 +23,7 @@ function actor(id: string, role: AuthedUser['role'] = 'OPERATOR'): AuthedUser {
     sessionId: 's-1',
     mfaEnforcementCompletedAt: null,
     mfaPending: false,
-    globalPasswordAccess: false,
+    passwordAccess: NO_PASSWORD_ACCESS,
   };
 }
 

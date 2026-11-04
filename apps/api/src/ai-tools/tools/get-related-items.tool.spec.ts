@@ -2,6 +2,10 @@ import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { GetRelatedItemsAiTool } from './get-related-items.tool.js';
 import type { AiToolExecutionContext } from '../tool-registry.js';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
+import {
+  FULL_PASSWORD_ACCESS,
+  type PasswordAccessScope,
+} from '../../passwords/password-access-policy.js';
 
 const SOURCE_ID = '4e8c7a52-88a1-4f5e-9b1e-1a2b3c4d5e6f';
 const REL_ASSET_ID = '11111111-1111-4111-8111-111111111111';
@@ -38,7 +42,7 @@ function relatedResult() {
 
 function makeTool(overrides: {
   role?: string;
-  globalPasswordAccess?: boolean;
+  passwordAccess?: PasswordAccessScope;
   allowedActions?: string[];
   sourceRow?: { id: string; name?: string; title?: string } | null;
 } = {}) {
@@ -83,7 +87,7 @@ function makeTool(overrides: {
     actor: {
       id: 'u-1',
       role: overrides.role ?? 'OPERATOR',
-      globalPasswordAccess: overrides.globalPasswordAccess ?? true,
+      passwordAccess: overrides.passwordAccess ?? FULL_PASSWORD_ACCESS,
     } as AuthedUser,
     tenant: {} as never,
     correlationId: 'req-1',

@@ -59,6 +59,7 @@ describe('ContractorAccessGuard', () => {
         role: 'READONLY',
         expiresAt: new Date('2000-01-01'),
         revokedAt: null,
+        passwordAccess: 'inherit' as const,
       },
     ]);
     await expect(
@@ -75,6 +76,7 @@ describe('ContractorAccessGuard', () => {
         role: 'READONLY',
         expiresAt: null,
         revokedAt: new Date(),
+        passwordAccess: 'inherit' as const,
       },
     ]);
     await expect(
@@ -91,6 +93,7 @@ describe('ContractorAccessGuard', () => {
         role: 'READONLY',
         expiresAt: new Date(Date.now() + 3600_000),
         revokedAt: null,
+        passwordAccess: 'inherit' as const,
       },
     ]);
     const ok = await g.canActivate(
@@ -109,6 +112,7 @@ describe('ContractorAccessGuard', () => {
       role: 'READONLY' as const,
       expiresAt: null,
       revokedAt: null,
+      passwordAccess: 'inherit' as const,
     };
     const g = makeGuard([live]);
     await g.canActivate(

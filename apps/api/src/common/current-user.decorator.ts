@@ -1,6 +1,11 @@
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 import type { Request } from 'express';
-import type { GlobalAccess, PlatformCapability, UserRole } from '@weavestream/shared';
+import type {
+  GlobalAccess,
+  PasswordAccessScope,
+  PlatformCapability,
+  UserRole,
+} from '@weavestream/shared';
 
 export interface AuthedUser {
   id: string;
@@ -18,13 +23,14 @@ export interface AuthedUser {
   mfaEnforcementCompletedAt: Date | null;
   mfaPending: boolean;
   /**
-   * Whether the global password access policy lets this user open password
-   * entries that have no own allow-list. Resolved once per request in
-   * `AuthGuard` (`passesGlobalPasswordPolicy`) so the policy functions in
-   * `passwords/password-access-policy.ts` stay synchronous. API keys and MCP
-   * connections inherit their owner's value.
+   * Who this user may open password entries WITHOUT their own allow-list
+   * for, per company: the global password access policy plus the user's
+   * active membership overrides (`allow` / `deny`). Resolved once per
+   * request in `AuthGuard` (`resolvePasswordAccessScope`) so the policy
+   * functions in `passwords/password-access-policy.ts` stay synchronous.
+   * API keys and MCP connections inherit their owner's scope.
    */
-  globalPasswordAccess: boolean;
+  passwordAccess: PasswordAccessScope;
   /**
    * Set when the principal authenticated with an API key rather than a
    * browser session. Presence — not absence — is the signal: guards that

@@ -1,6 +1,7 @@
 import { AssetsService } from './assets.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * DB-backed proof of the `field.<slug>=<value>` asset list filter
@@ -47,7 +48,7 @@ const OPERATOR: AuthedUser = {
   sessionId: id('e001'),
   mfaEnforcementCompletedAt: null,
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 describeIfDb('assets list field filters (DB integration)', () => {

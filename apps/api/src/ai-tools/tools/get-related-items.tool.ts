@@ -97,7 +97,7 @@ export class GetRelatedItemsAiTool implements AiReadTool {
       actor: {
         id: ctx.actor.id,
         role: ctx.actor.role,
-        globalPasswordAccess: ctx.actor.globalPasswordAccess,
+        passwordAccess: ctx.actor.passwordAccess,
       },
       companyId,
       entityType: input.entity_type,

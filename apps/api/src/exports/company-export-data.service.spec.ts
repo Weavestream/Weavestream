@@ -298,6 +298,67 @@ describe('CompanyExportDataService reconstruction export', () => {
       );
     });
 
+    const allUsersPolicy = async (args: { select?: object }) =>
+      args?.select && 'passwordAccessMode' in args.select
+        ? { passwordAccessMode: 'all_users', passwordAccessUserIds: [] }
+        : { workspaceName: 'MSP Workspace' };
+    /** Membership rows for the password-scope read only (not the member roster). */
+    const scopeMemberships = (prisma: ReturnType<typeof setup>['prisma'], rows: unknown[]) =>
+      prisma.membership.findMany.mockImplementation((async (args: { select?: object }) =>
+        args?.select && 'passwordAccess' in args.select ? rows : []) as never);
+    const passwordWhere = (prisma: ReturnType<typeof setup>['prisma']) =>
+      (prisma.password.findMany.mock.calls[0] as unknown as [{ where: { AND: unknown[] } }])[0].where.AND;
+
+    it('drops global-policy entries for a requester with a deny membership in this company', async () => {
+      const { prisma, service } = setup();
+      prisma.systemSetting.findUnique.mockImplementation(allUsersPolicy);
+      scopeMemberships(prisma, [
+        { companyId: ids.company, revokedAt: null, expiresAt: null, passwordAccess: 'deny' },
+      ]);
+      await service.gather(ids.company, { includePasswords: false, requestedBy: REQUESTER });
+      expect(prisma.membership.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { userId: REQUESTER, companyId: ids.company } }),
+      );
+      expect(passwordWhere(prisma)).toEqual([
+        {
+          OR: [
+            { restrictedToUserIds: { isEmpty: true }, companyId: { notIn: [ids.company] } },
+            { restrictedToUserIds: { has: REQUESTER } },
+          ],
+        },
+      ]);
+    });
+
+    it('includes global-policy entries for an outsider with an allow membership in this company', async () => {
+      const { prisma, service } = outsiderSetup();
+      scopeMemberships(prisma, [
+        { companyId: ids.company, revokedAt: null, expiresAt: null, passwordAccess: 'allow' },
+      ]);
+      await service.gather(ids.company, { includePasswords: false, requestedBy: REQUESTER });
+      expect(passwordWhere(prisma)).toEqual([
+        {
+          OR: [
+            { restrictedToUserIds: { isEmpty: true }, companyId: { in: [ids.company] } },
+            { restrictedToUserIds: { has: REQUESTER } },
+          ],
+        },
+      ]);
+    });
+
+    it('ignores an expired allow membership', async () => {
+      const { prisma, service } = outsiderSetup();
+      scopeMemberships(prisma, [
+        {
+          companyId: ids.company,
+          revokedAt: null,
+          expiresAt: new Date('2000-01-01'),
+          passwordAccess: 'allow',
+        },
+      ]);
+      await service.gather(ids.company, { includePasswords: false, requestedBy: REQUESTER });
+      expect(passwordWhere(prisma)).toEqual([{ restrictedToUserIds: { has: REQUESTER } }]);
+    });
+
     it.each([
       ['no requester (job queued before the field existed)', undefined, { id: REQUESTER, role: 'OPERATOR', isActive: true }],
       ['an inactive requester', REQUESTER, { id: REQUESTER, role: 'OPERATOR', isActive: false }],

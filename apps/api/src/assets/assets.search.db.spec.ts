@@ -5,6 +5,7 @@ import { SearchIndexService } from '../search/search-index.service.js';
 import { FieldTypesRegistry } from '../field-types/field-types.registry.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * DB-backed proof of the asset list `q` search: every word must be in
@@ -69,7 +70,7 @@ function actor(role: 'OPERATOR' | 'CLIENT_USER'): AuthedUser {
     sessionId: id('e002'),
     mfaEnforcementCompletedAt: null,
     mfaPending: false,
-    globalPasswordAccess: true,
+    passwordAccess: FULL_PASSWORD_ACCESS,
   } as AuthedUser;
 }
 

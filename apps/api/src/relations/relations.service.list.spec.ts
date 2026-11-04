@@ -1,6 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { RelationsService } from './relations.service.js';
 import type { UserRole } from '@weavestream/shared';
+import { FULL_PASSWORD_ACCESS, NO_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * Phase 5 tests for the read-side of RelationsService: `listRelated`,
@@ -274,8 +275,12 @@ function relation(
   };
 }
 
-function actor(role: UserRole = 'OPERATOR', globalPasswordAccess = true) {
-  return { id: 'u-1', role, globalPasswordAccess };
+function actor(role: UserRole = 'OPERATOR', hasPasswordAccess = true) {
+  return {
+    id: 'u-1',
+    role,
+    passwordAccess: hasPasswordAccess ? FULL_PASSWORD_ACCESS : NO_PASSWORD_ACCESS,
+  };
 }
 
 describe('RelationsService.listRelated', () => {

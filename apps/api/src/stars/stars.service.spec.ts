@@ -3,6 +3,7 @@ import { NotFoundException } from '@nestjs/common';
 import { runWithTenantContext, type TenantContext } from '@weavestream/shared/server';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { assertTenantScope } from '../prisma/tenant-scoped-models.js';
+import { FULL_PASSWORD_ACCESS, NO_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * Access-scoping coverage for `GET /me/stars`.
@@ -25,7 +26,7 @@ const SUPER_ADMIN: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 const MEMBER: AuthedUser = {
@@ -223,7 +224,7 @@ describe('StarsService password access', () => {
     ...SUPER_ADMIN,
     role: 'OPERATOR',
     globalAccess: 'FULL',
-    globalPasswordAccess: false,
+    passwordAccess: NO_PASSWORD_ACCESS,
   };
   const meta = { ip: '127.0.0.1', userAgent: 'jest' };
 
@@ -233,6 +234,24 @@ describe('StarsService password access', () => {
     expect(prisma.starredPassword.findMany.mock.calls[0]![0]!.where).toEqual({
       userId: OUTSIDER.id,
       password: { restrictedToUserIds: { has: OUTSIDER.id } },
+    });
+  });
+
+  it('hides starred passwords in a denied company and keeps the others', async () => {
+    const prisma = makePrisma();
+    const denied: AuthedUser = {
+      ...OUTSIDER,
+      passwordAccess: { byDefault: true, allowCompanyIds: [], denyCompanyIds: [COMPANY] },
+    };
+    await svcWith(prisma).list(denied);
+    expect(prisma.starredPassword.findMany.mock.calls[0]![0]!.where).toEqual({
+      userId: denied.id,
+      password: {
+        OR: [
+          { restrictedToUserIds: { isEmpty: true }, companyId: { notIn: [COMPANY] } },
+          { restrictedToUserIds: { has: denied.id } },
+        ],
+      },
     });
   });
 
@@ -290,8 +309,8 @@ describe('StarsService password access', () => {
     return { svc, prisma, audit, run };
   }
 
-  const MEMBER: AuthedUser = { ...OUTSIDER, globalAccess: 'NONE', globalPasswordAccess: true };
-  const MEMBER_OUTSIDER: AuthedUser = { ...MEMBER, globalPasswordAccess: false };
+  const MEMBER: AuthedUser = { ...OUTSIDER, globalAccess: 'NONE', passwordAccess: FULL_PASSWORD_ACCESS };
+  const MEMBER_OUTSIDER: AuthedUser = { ...MEMBER, passwordAccess: NO_PASSWORD_ACCESS };
 
   it('lets a company-only operator star and unstar a password entry they can open', async () => {
     const { svc, prisma, audit, run } = setupMember(MEMBER);

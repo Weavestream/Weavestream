@@ -1,6 +1,7 @@
 import { NotFoundException } from '@nestjs/common';
 import { RecentCompaniesService } from './recent-companies.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * Access-scoping coverage for `/me/recent-companies`.
@@ -25,7 +26,7 @@ const SUPER_ADMIN: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 const MEMBER: AuthedUser = {

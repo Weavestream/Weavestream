@@ -188,6 +188,7 @@ export class ExpirationDismissalsService {
       const p = await this.prisma.password.findFirst({
         where: { id: input.entityId, companyId },
         select: {
+          companyId: true,
           visibleToClients: true,
           restrictedToUserIds: true,
           expiresAt: true,

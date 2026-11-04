@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { passwordAccessForCompany } from '@weavestream/shared';
 import { requireMe } from '../../../../../lib/server-api/auth';
 import { getCompanyDetail } from '../../../../../lib/server-api/companies';
 import { throwUnlessFound } from '../../../../../lib/server-api/core';
@@ -54,10 +55,11 @@ export default async function CompanyPasswordsPage({
   ]);
 
   const manage = canWriteCompany(me, company.id);
-  // A user outside the global password access policy cannot create an entry
-  // that would use it (the API returns 403), so the create entry points are
-  // hidden. UI hint only — the API enforces it.
-  const canCreate = manage && me.hasPasswordAccess;
+  // A user without password access in this company (global policy or
+  // membership override) cannot create an entry that would use it (the API
+  // returns 403), so the create entry points are hidden. UI hint only — the
+  // API enforces it.
+  const canCreate = manage && passwordAccessForCompany(me.passwordAccess, company.id);
   const prefillAssetId = typeof sp.assetId === 'string' ? sp.assetId : undefined;
   const openNew = sp.new === '1';
 

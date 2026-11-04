@@ -36,7 +36,8 @@ export class MembershipCacheService {
   private static readonly VERSION = 'v2';
   // v2: bumped when the membership-role enum collapsed to FULL/READONLY.
   // v3: generation-stamped envelope.
-  private static readonly SNAPSHOT_VERSION = 'v3';
+  // v4: snapshots carry the company-level `passwordAccess` override.
+  private static readonly SNAPSHOT_VERSION = 'v4';
 
   /** Entry TTL for both caches. */
   static readonly TTL_SEC = 60;

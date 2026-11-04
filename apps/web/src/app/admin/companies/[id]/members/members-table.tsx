@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import type { MembershipRole, UserRole } from '@weavestream/shared';
+import type { MembershipPasswordAccess, MembershipRole, UserRole } from '@weavestream/shared';
 import { problemMessage } from '@weavestream/shared';
 import type { CompanyMembership as Row } from '../../../../../lib/server-api/companies';
 import { apiFetch } from '../../../../../lib/api';
@@ -23,6 +23,17 @@ import {
 } from '../../../../../components/ui';
 import { membershipRoleLabel, roleLabel } from '../../../../../lib/roles';
 import { CreateUserButton } from '../../../(global)/users/create-user-button';
+import {
+  PasswordAccessField,
+  PasswordAccessTag,
+} from '../../../../../components/memberships/password-access-field';
+import {
+  fromLocalInputValue,
+  membershipPatch,
+  toLocalInputValue,
+  type MembershipDraft,
+  type MembershipPatch,
+} from '../../../../../components/memberships/membership-patch';
 
 // RBAC v2: CLIENT_USER memberships are pinned to READONLY at the API
 // tier; every other global role can pick either. The picker here
@@ -85,7 +96,12 @@ export function MembersTable({
     router.refresh();
   }
 
-  async function add(input: { userId: string; role: MembershipRole; expiresAt: string | null }) {
+  async function add(input: {
+    userId: string;
+    role: MembershipRole;
+    expiresAt: string | null;
+    passwordAccess: MembershipPasswordAccess;
+  }) {
     setPending(true);
     const res = await apiFetch(`/companies/${companyId}/memberships`, {
       method: 'POST',
@@ -93,7 +109,10 @@ export function MembersTable({
     });
     setPending(false);
     if (!res.ok) {
-      toast.push(problemMessage(res.problem) ?? 'Could not add member.', 'danger');
+      // A cancelled step-up (password access override) is the user's choice.
+      if (!res.stepUpCancelled) {
+        toast.push(problemMessage(res.problem) ?? 'Could not add member.', 'danger');
+      }
       return false;
     }
     toast.push('Member added.', 'ok');
@@ -102,18 +121,22 @@ export function MembersTable({
     return true;
   }
 
-  async function update(
-    row: Row,
-    input: { role: MembershipRole; expiresAt: string | null },
-  ) {
+  async function update(row: Row, patch: MembershipPatch) {
+    // Nothing changed: close without a request (the API refuses an empty body).
+    if (Object.keys(patch).length === 0) {
+      setEditing(null);
+      return true;
+    }
     setPending(true);
     const res = await apiFetch(`/memberships/${row.id}`, {
       method: 'PATCH',
-      body: JSON.stringify(input),
+      body: JSON.stringify(patch),
     });
     setPending(false);
     if (!res.ok) {
-      toast.push('Update failed.', 'danger');
+      if (!res.stepUpCancelled) {
+        toast.push(problemMessage(res.problem) ?? 'Update failed.', 'danger');
+      }
       return false;
     }
     toast.push('Membership updated.', 'ok');
@@ -127,7 +150,7 @@ export function MembersTable({
     const res = await apiFetch(`/memberships/${row.id}`, { method: 'DELETE' });
     setPending(false);
     if (!res.ok) {
-      toast.push('Revoke failed.', 'danger');
+      if (!res.stepUpCancelled) toast.push('Revoke failed.', 'danger');
       return;
     }
     toast.push('Membership revoked.', 'ok');
@@ -172,6 +195,13 @@ export function MembersTable({
           {roleLabel(r.user.role)}
         </span>
       ),
+    },
+    {
+      id: 'passwordAccess',
+      header: 'Password access',
+      width: 150,
+      sortValue: (r) => r.passwordAccess,
+      render: (r) => <PasswordAccessTag value={r.passwordAccess} />,
     },
     {
       id: 'expires',
@@ -291,6 +321,9 @@ export function MembersTable({
                   global: {roleLabel(r.user.role)}
                 </span>
               </div>
+              <MobileCardRow label="Password access">
+                <PasswordAccessTag value={r.passwordAccess} />
+              </MobileCardRow>
               <MobileCardRow label="Expires" mono>
                 {r.expiresAt ? (
                   <ExpirationTag date={r.expiresAt} />
@@ -367,6 +400,13 @@ export function MembersTable({
         <p style={{ margin: 0, fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
           {revoking?.user.name} will lose access to this company immediately. They can be
           re-added later — audit history is preserved.
+          {revoking && revoking.passwordAccess !== 'inherit' && (
+            <>
+              {' '}
+              Their password access override ({revoking.passwordAccess}) ends too, and the
+              global policy applies again.
+            </>
+          )}
         </p>
       </Dialog>
     </div>
@@ -407,11 +447,13 @@ function AddDialog({
     userId: string;
     role: MembershipRole;
     expiresAt: string | null;
+    passwordAccess: MembershipPasswordAccess;
   }) => Promise<boolean>;
 }) {
   const [picked, setPicked] = useState<UserPickerValue | null>(null);
   const [role, setRole] = useState<MembershipRole>('READONLY');
   const [expiresAt, setExpiresAt] = useState('');
+  const [passwordAccess, setPasswordAccess] = useState<MembershipPasswordAccess>('inherit');
 
   // Reset local state when the dialog closes so re-opening starts
   // fresh; avoids a stale selection when an operator adds multiple
@@ -421,6 +463,7 @@ function AddDialog({
       setPicked(null);
       setRole('READONLY');
       setExpiresAt('');
+      setPasswordAccess('inherit');
     }
   }, [open]);
 
@@ -454,12 +497,15 @@ function AddDialog({
               const ok = await onSubmit({
                 userId: picked.id,
                 role,
-                expiresAt: expiresAt ? new Date(expiresAt).toISOString() : null,
+                expiresAt: fromLocalInputValue(expiresAt),
+                // Client users never carry an override (the field is hidden).
+                passwordAccess: picked.role === 'CLIENT_USER' ? 'inherit' : passwordAccess,
               });
               if (ok) {
                 setPicked(null);
                 setRole('READONLY');
                 setExpiresAt('');
+                setPasswordAccess('inherit');
               }
             }}
           >
@@ -516,6 +562,13 @@ function AddDialog({
             onChange={(e) => setExpiresAt(e.target.value)}
           />
         </Field>
+        <PasswordAccessField
+          id="m-password-access"
+          value={passwordAccess}
+          onChange={setPasswordAccess}
+          userRole={picked?.role}
+          expiresAtLocal={expiresAt}
+        />
       </div>
     </Dialog>
   );
@@ -530,13 +583,20 @@ function EditDialog({
   row: Row | null;
   pending: boolean;
   onClose: () => void;
-  onSubmit: (input: {
-    role: MembershipRole;
-    expiresAt: string | null;
-  }) => Promise<boolean>;
+  onSubmit: (patch: MembershipPatch) => Promise<boolean>;
 }) {
   const [role, setRole] = useState<MembershipRole>('READONLY');
   const [expiresAt, setExpiresAt] = useState('');
+  const [passwordAccess, setPasswordAccess] = useState<MembershipPasswordAccess>('inherit');
+
+  // The values the dialog opened with; only changed fields are sent.
+  const initial: MembershipDraft | null = row
+    ? {
+        role: row.role,
+        expiresAtLocal: toLocalInputValue(row.expiresAt),
+        passwordAccess: row.passwordAccess,
+      }
+    : null;
 
   // Re-sync local draft whenever the dialog reopens on a new row. The
   // previous version kept stale local state across rows, so editing a
@@ -545,9 +605,8 @@ function EditDialog({
   useEffect(() => {
     if (!row) return;
     setRole(row.role);
-    setExpiresAt(
-      row.expiresAt ? new Date(row.expiresAt).toISOString().slice(0, 16) : '',
-    );
+    setExpiresAt(toLocalInputValue(row.expiresAt));
+    setPasswordAccess(row.passwordAccess);
   }, [row?.id]);
 
   const allowedRoles = membershipRolesFor(row?.user.role);
@@ -575,12 +634,10 @@ function EditDialog({
             kind="primary"
             loading={pending}
             onClick={() =>
-              onSubmit({
-                role,
-                expiresAt: expiresAt
-                  ? new Date(expiresAt).toISOString()
-                  : null,
-              })
+              initial &&
+              onSubmit(
+                membershipPatch(initial, { role, expiresAtLocal: expiresAt, passwordAccess }),
+              )
             }
           >
             Save
@@ -616,6 +673,13 @@ function EditDialog({
             onChange={(e) => setExpiresAt(e.target.value)}
           />
         </Field>
+        <PasswordAccessField
+          id="m-edit-password-access"
+          value={passwordAccess}
+          onChange={setPasswordAccess}
+          userRole={row.user.role}
+          expiresAtLocal={expiresAt}
+        />
       </div>
     </Dialog>
   );

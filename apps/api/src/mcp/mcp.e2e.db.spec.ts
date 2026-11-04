@@ -20,6 +20,7 @@ import { OAuthConsentService } from '../mcp-oauth/oauth-consent.service.js';
 import { OAuthProviderService } from '../mcp-oauth/oauth-provider.service.js';
 import { McpDelegationService } from './mcp-delegation.service.js';
 import { MCP_INTERNAL_ORIGIN } from './internal-tool-api.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * The remote MCP endpoint end to end, in the real `AppModule`: every global
@@ -107,7 +108,7 @@ describeIfDb('remote MCP endpoint (DB integration, full app)', () => {
     sessionId: ID('e1'),
     mfaEnforcementCompletedAt: new Date(),
     mfaPending: false,
-    globalPasswordAccess: true,
+    passwordAccess: FULL_PASSWORD_ACCESS,
   });
 
   async function freePort(): Promise<number> {
@@ -353,6 +354,41 @@ describeIfDb('remote MCP endpoint (DB integration, full app)', () => {
       expect(text(allowed)).toContain(pw.id);
     } finally {
       policy.mockRestore();
+      await prisma.password.delete({ where: { id: pw.id } });
+    }
+  });
+
+  it("follows the owner's company membership override (issue #110 follow-up)", async () => {
+    const pw = await prisma.password.create({
+      data: {
+        id: ID('f2'),
+        companyId: CO_X,
+        name: 'MCP e2e override entry',
+        passwordCiphertext: 'not-a-real-ciphertext',
+        createdBy: USER_A,
+        updatedBy: USER_A,
+      },
+    });
+    const where = { userId: USER_A, companyId: CO_X, revokedAt: null };
+    const client = await mcpClient(await connect(USER_A, false));
+    const policy = jest.spyOn(app.get(SettingsService), 'passwordAccessPolicy');
+    try {
+      // Global policy allows everyone, but the X membership says deny.
+      // MCP reads memberships fresh, so the change applies at once.
+      policy.mockResolvedValue({ mode: 'all_users', userIds: [] });
+      await prisma.membership.updateMany({ where, data: { passwordAccess: 'deny' } });
+      const denied = await client.callTool({ name: 'list_passwords', arguments: { companyId: CO_X } });
+      expect(text(denied)).not.toContain(pw.id);
+      expect(text(denied)).not.toContain('MCP e2e override entry');
+
+      // Global policy excludes USER_A, but the X membership says allow.
+      policy.mockResolvedValue({ mode: 'selected_users', userIds: [] });
+      await prisma.membership.updateMany({ where, data: { passwordAccess: 'allow' } });
+      const allowed = await client.callTool({ name: 'list_passwords', arguments: { companyId: CO_X } });
+      expect(text(allowed)).toContain(pw.id);
+    } finally {
+      policy.mockRestore();
+      await prisma.membership.updateMany({ where, data: { passwordAccess: 'inherit' } });
       await prisma.password.delete({ where: { id: pw.id } });
     }
   });

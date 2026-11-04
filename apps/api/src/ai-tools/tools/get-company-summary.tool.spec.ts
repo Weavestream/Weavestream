@@ -2,10 +2,15 @@ import { NotFoundException } from '@nestjs/common';
 import { GetCompanySummaryAiTool } from './get-company-summary.tool.js';
 import type { AiToolExecutionContext } from '../tool-registry.js';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
+import {
+  FULL_PASSWORD_ACCESS,
+  NO_PASSWORD_ACCESS,
+  type PasswordAccessScope,
+} from '../../passwords/password-access-policy.js';
 
 function makeTool(overrides: {
   role?: string;
-  globalPasswordAccess?: boolean;
+  passwordAccess?: PasswordAccessScope;
   allowedActions?: string[];
   company?: { id: string; name: string; slug: string } | null;
 } = {}) {
@@ -40,7 +45,7 @@ function makeTool(overrides: {
     actor: {
       id: 'u-1',
       role: overrides.role ?? 'OPERATOR',
-      globalPasswordAccess: overrides.globalPasswordAccess ?? true,
+      passwordAccess: overrides.passwordAccess ?? FULL_PASSWORD_ACCESS,
     } as AuthedUser,
     tenant: {} as never,
     correlationId: 'req-1',
@@ -96,7 +101,7 @@ describe('GetCompanySummaryAiTool', () => {
   });
 
   it('counts only own-list entries for a user outside the global password policy', async () => {
-    const { tool, ctx, prisma } = makeTool({ globalPasswordAccess: false });
+    const { tool, ctx, prisma } = makeTool({ passwordAccess: NO_PASSWORD_ACCESS });
     await tool.execute(ctx, {}, 'c-1');
     expect(prisma.password.count).toHaveBeenCalledWith({
       where: {

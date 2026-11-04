@@ -13,6 +13,7 @@ import type {
 import { PasswordsService } from './passwords.service.js';
 import { passwordVaultAad } from '../crypto/secret-encryption.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS, NO_PASSWORD_ACCESS } from './password-access-policy.js';
 
 /**
  * Phase 10 — PasswordsService unit suite.
@@ -378,7 +379,7 @@ const OPERATOR: AuthedUser = {
   sessionId: 'sess-op',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 const OTHER_OPERATOR: AuthedUser = {
   ...OPERATOR,
@@ -478,8 +479,8 @@ describe('PasswordsService — list', () => {
 });
 
 describe('PasswordsService — global password access policy (issue #110)', () => {
-  const OUTSIDER: AuthedUser = { ...OPERATOR, globalPasswordAccess: false };
-  const OUTSIDE_MANAGER: AuthedUser = { ...MEMBERSHIP_MANAGER, globalPasswordAccess: false };
+  const OUTSIDER: AuthedUser = { ...OPERATOR, passwordAccess: NO_PASSWORD_ACCESS };
+  const OUTSIDE_MANAGER: AuthedUser = { ...MEMBERSHIP_MANAGER, passwordAccess: NO_PASSWORD_ACCESS };
 
   function stubs() {
     return makeStubs({

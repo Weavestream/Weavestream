@@ -2,6 +2,7 @@ import { NotFoundException } from '@nestjs/common';
 import type { Request } from 'express';
 import { SecurityService } from './security.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * Minimal Express-request stub with the surface `connectionDiagnostics`
@@ -37,7 +38,7 @@ const ADMIN: AuthedUser = {
   sessionId: 's-admin',
   mfaEnforcementCompletedAt: new Date(0),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 function makeService(args: {

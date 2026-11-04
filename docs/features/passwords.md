@@ -123,6 +123,38 @@ Rules:
 
 Changing the policy requires the settings-management permission, step-up authentication, and an interactive session. Each change is audited as `settings.password_access_policy.change`, with the before and after user IDs.
 
+### Company Password Access Override
+
+An admin can change the global policy for 1 user in 1 company. The setting is on the user's membership, on the company **Members** page (or the **Companies** list on the user's detail page):
+
+| Value | Effect in this company, on credentials without their own list |
+|---|---|
+| **Use global policy** (default) | The global policy decides |
+| **Allow** | The user can open them, even if the global policy excludes the user |
+| **Deny** | The user cannot open them, even if the global policy includes the user |
+
+Rule order, most specific first:
+
+1. A credential with its own internal-access list uses only that list.
+2. An active membership with **Allow** or **Deny** decides for its company.
+3. Otherwise, the global policy decides.
+
+Super admins always have access. Client users cannot have an override; **Visible to clients** governs them.
+
+- To give an override to an operator with global access, add the operator as a member of the company. The membership role then also applies in that company, as for every membership.
+- An override ends when its membership expires or is revoked. The user then goes back to the global policy. A revoked membership that is added again starts from **Use global policy**.
+- Bulk adds always create **Use global policy**.
+- The override applies everywhere the global policy applies: lists, detail pages, search, stars, related items, PDF exports, MCP, and API keys.
+
+These membership changes need step-up authentication and an interactive session, because they change password access:
+
+- Add a member with **Allow** or **Deny**.
+- Change the override.
+- Change the expiry of a membership with **Allow** or **Deny**.
+- Revoke a membership with **Allow** or **Deny**.
+
+A role-only change needs no step-up. The `membership.create`, `membership.update`, and `membership.revoke` audit entries include `passwordAccess` in the before and after values.
+
 ## Reveal Audit Trail
 
 Every time a credential's secret is decrypted and displayed, an entry is written to the audit log with the actor, timestamp, and IP address. This creates a tamper-resistant record of who accessed each credential and when.

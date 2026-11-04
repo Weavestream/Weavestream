@@ -3,6 +3,7 @@ import { ApiKeyService } from '../auth/api-key.service.js';
 import { lockUserForAuthorityChange } from '../auth/revoke-api-keys.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * DB-backed proof for pentest 3b3f rec. 6 review finding 1: an authority edit
@@ -34,7 +35,7 @@ const ACTOR: AuthedUser = {
   sessionId: '5bc00000-0000-4000-8000-0000000ab0f1',
   mfaEnforcementCompletedAt: null,
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 describeIfDb('UsersService.update vs. concurrent authority edits (DB)', () => {

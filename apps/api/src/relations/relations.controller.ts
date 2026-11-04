@@ -79,7 +79,7 @@ export class RelationsController {
       actor: {
         id: actor.id,
         role: actor.role,
-        globalPasswordAccess: actor.globalPasswordAccess,
+        passwordAccess: actor.passwordAccess,
       },
       companyId,
       entityType,

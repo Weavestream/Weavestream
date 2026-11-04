@@ -57,6 +57,7 @@ function membershipFor(
     role,
     expiresAt: null as Date | null,
     revokedAt: null as Date | null,
+    passwordAccess: 'inherit' as const,
   };
   if (state === 'expired') base.expiresAt = new Date('2000-01-01');
   if (state === 'revoked') base.revokedAt = new Date('2000-01-01');
@@ -199,6 +200,7 @@ describe('PermissionService.evaluate — semantic checks', () => {
       role: 'READONLY',
       expiresAt: new Date(Date.now() + 86400000),
       revokedAt: null,
+      passwordAccess: 'inherit' as const,
     };
     const ctx = { companyId: THE_COMPANY };
     expect(
@@ -225,6 +227,7 @@ describe('PermissionService.evaluate — semantic checks', () => {
       role: 'READONLY',
       expiresAt: null,
       revokedAt: null,
+      passwordAccess: 'inherit' as const,
     };
     const op = buildUser('OPERATOR', 'FULL');
     expect(
@@ -254,6 +257,7 @@ describe('PermissionService.evaluate — semantic checks', () => {
       role: 'FULL',
       expiresAt: null,
       revokedAt: null,
+      passwordAccess: 'inherit' as const,
     };
     const op = buildUser('OPERATOR', 'NONE');
     expect(
@@ -269,6 +273,7 @@ describe('PermissionService.evaluate — semantic checks', () => {
       role: 'FULL',
       expiresAt: null,
       revokedAt: new Date('2001-01-01'),
+      passwordAccess: 'inherit' as const,
     };
     const op = buildUser('OPERATOR', 'READONLY');
     expect(
@@ -289,6 +294,7 @@ describe('PermissionService.evaluate — semantic checks', () => {
       role: 'FULL',
       expiresAt: null,
       revokedAt: null,
+      passwordAccess: 'inherit' as const,
     };
     const op = buildUser('OPERATOR', 'NONE');
     expect(
@@ -545,6 +551,7 @@ describe('PermissionService.evaluate — semantic checks', () => {
       role: 'FULL',
       expiresAt: null,
       revokedAt: null,
+      passwordAccess: 'inherit' as const,
     };
     expect(
       PermissionService.evaluate(
@@ -619,6 +626,7 @@ describe('PermissionService.evaluate — semantic checks', () => {
         role: 'FULL',
         expiresAt: new Date(Date.now() + 86_400_000),
         revokedAt: null,
+        passwordAccess: 'inherit' as const,
       };
       const op = buildUser('OPERATOR', 'NONE');
       for (const action of SENSITIVE_ACTIONS) {
@@ -634,6 +642,7 @@ describe('PermissionService.evaluate — semantic checks', () => {
         role: 'FULL',
         expiresAt: new Date('2000-01-01'),
         revokedAt: null,
+        passwordAccess: 'inherit' as const,
       };
       const op = buildUser('OPERATOR', 'NONE');
       for (const action of SENSITIVE_ACTIONS) {
@@ -650,6 +659,7 @@ describe('PermissionService.evaluate — semantic checks', () => {
         role: 'READONLY',
         expiresAt: new Date(Date.now() + 86_400_000),
         revokedAt: null,
+        passwordAccess: 'inherit' as const,
       };
       expect(
         PermissionService.evaluate(op, 'asset.write', [activeReadonly], ctx)
@@ -681,6 +691,7 @@ describe('PermissionService.evaluate — semantic checks', () => {
       role: 'FULL',
       expiresAt: null,
       revokedAt: null,
+      passwordAccess: 'inherit' as const,
     };
     expect(
       PermissionService.evaluate(

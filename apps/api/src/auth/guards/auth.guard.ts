@@ -20,7 +20,8 @@ import { isInternalListenerRequest } from '../../common/internal-listener.js';
 import { DELEGATION_PREFIX, McpDelegationService } from '../../mcp/mcp-delegation.service.js';
 import { McpConnectionsService } from '../../mcp-oauth/mcp-connections.service.js';
 import { connectionAllowed } from '../../mcp-oauth/mcp-oauth.constants.js';
-import { passesGlobalPasswordPolicy } from '../../passwords/password-access-policy.js';
+import { resolvePasswordAccessScope } from '../../passwords/password-access-policy.js';
+import { PermissionService } from '../../rbac/permission.service.js';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -34,6 +35,7 @@ export class AuthGuard implements CanActivate {
     private readonly settings: SettingsService,
     private readonly delegations: McpDelegationService,
     private readonly mcpConnections: McpConnectionsService,
+    private readonly permissions: PermissionService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -95,7 +97,7 @@ export class AuthGuard implements CanActivate {
       platformCapabilities: user.platformCapabilities ?? [],
       sessionId: session.id,
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
-      globalPasswordAccess: await this.globalPasswordAccessFor(user),
+      passwordAccess: await this.passwordAccessFor(user, { fresh: false }),
       mfaPending: session.mfaPending,
     };
     return true;
@@ -159,7 +161,7 @@ export class AuthGuard implements CanActivate {
       // Nothing writes a step-up marker under it, so step-up routes refuse.
       sessionId: connection.id,
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
-      globalPasswordAccess: await this.globalPasswordAccessFor(user),
+      passwordAccess: await this.passwordAccessFor(user, { fresh: true }),
       mfaPending: false,
       mcpConnectionId: connection.id,
       apiKeyAllowWrite: connection.allowWrite,
@@ -213,7 +215,7 @@ export class AuthGuard implements CanActivate {
       platformCapabilities: user.platformCapabilities ?? [],
       sessionId: key.id,
       mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
-      globalPasswordAccess: await this.globalPasswordAccessFor(user),
+      passwordAccess: await this.passwordAccessFor(user, { fresh: true }),
       // A key is itself the second factor: it is high-entropy, revocable, and
       // was minted by an already-MFA-enrolled human. Leaving this true would
       // deadlock every token behind an interactive TOTP prompt.
@@ -234,15 +236,24 @@ export class AuthGuard implements CanActivate {
   }
 
   /**
-   * The global password access policy for this user (issue #110), through
-   * the settings 5 s cache. Resolved here once so every read path sees the
-   * same answer for the whole request.
+   * Password access scope for this user: the global password access policy
+   * (settings 5 s cache) plus their active membership overrides. Resolved
+   * here once so every read path sees the same answer for the whole
+   * request. `fresh` (API keys, MCP) reads memberships from the database,
+   * the same as `PermissionService.can()` does for programmatic principals.
+   * Super admins and client users skip the membership load: their role
+   * branches decide before the scope is consulted.
    */
-  private async globalPasswordAccessFor(user: {
-    id: string;
-    role: AuthedUser['role'];
-  }): Promise<boolean> {
-    return passesGlobalPasswordPolicy(user, await this.settings.passwordAccessPolicy());
+  private async passwordAccessFor(
+    user: { id: string; role: AuthedUser['role'] },
+    { fresh }: { fresh: boolean },
+  ): Promise<AuthedUser['passwordAccess']> {
+    const policy = await this.settings.passwordAccessPolicy();
+    if (user.role === 'SUPER_ADMIN' || user.role === 'CLIENT_USER') {
+      return resolvePasswordAccessScope(user, policy, []);
+    }
+    const memberships = await this.permissions.loadMemberships(user.id, { fresh });
+    return resolvePasswordAccessScope(user, policy, memberships);
   }
 
   /**

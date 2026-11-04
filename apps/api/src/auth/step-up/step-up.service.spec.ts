@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { StepUpService } from './step-up.service.js';
 import type { AuthedUser } from '../../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS } from '../../passwords/password-access-policy.js';
 
 const USER: AuthedUser = {
   id: 'u-1',
@@ -15,7 +16,7 @@ const USER: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 const META = { ip: '127.0.0.1', userAgent: 'jest' };
@@ -273,5 +274,30 @@ describe('StepUpService window helpers', () => {
       factor: 'password',
       expiresInSec: 0,
     });
+  });
+});
+
+describe('StepUpService.assertVerified', () => {
+  it('passes for a session with an open step-up window', async () => {
+    const { svc } = makeService({ verifiedValue: 'mfa' });
+    await expect(svc.assertVerified(USER)).resolves.toBeUndefined();
+  });
+
+  it('throws step_up_required with the factor for an unverified session', async () => {
+    const { svc } = makeService({
+      userRow: { passwordHash: 'h', mfaEnabled: false, mfaSecretEncrypted: null },
+      verifiedValue: null,
+    });
+    await expect(svc.assertVerified(USER)).rejects.toMatchObject({
+      response: { code: 'step_up_required', factor: 'password' },
+    });
+  });
+
+  it('throws for an MFA-pending session even with an open window', async () => {
+    const { svc, redis } = makeService({ verifiedValue: 'mfa' });
+    await expect(svc.assertVerified({ ...USER, mfaPending: true })).rejects.toMatchObject({
+      response: { code: 'step_up_required' },
+    });
+    expect(redis.client.get).not.toHaveBeenCalled();
   });
 });

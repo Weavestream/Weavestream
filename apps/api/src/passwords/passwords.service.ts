@@ -276,13 +276,14 @@ export class PasswordsService {
         input.restrictedToUserIds,
       );
     }
-    // An entry without its own list follows the global password access
-    // policy. A user outside that policy could not open the entry after
-    // creating it, so the create is refused (issue #110).
+    // An entry without its own list follows the user's membership override
+    // for this company, else the global password access policy. A user
+    // without that access could not open the entry after creating it, so
+    // the create is refused (issue #110).
     if (
       restrictedToUserIds.length === 0 &&
       actor.role !== 'CLIENT_USER' &&
-      !canReadPassword(actor, { visibleToClients: false, restrictedToUserIds: [] })
+      !canReadPassword(actor, { companyId, visibleToClients: false, restrictedToUserIds: [] })
     ) {
       throw new ForbiddenException('You do not have password access');
     }

@@ -12,7 +12,7 @@ import {
   type CompanyIdSource,
   type RequirePermissionMetadata,
 } from './require-permission.decorator.js';
-import { PermissionService } from './permission.service.js';
+import { PermissionService, isActiveMembership } from './permission.service.js';
 
 /**
  * Defense-in-depth: even if a permission rule permits a CONTRACTOR read,
@@ -48,10 +48,7 @@ export class ContractorAccessGuard implements CanActivate {
     });
     const now = new Date();
     const match = memberships.find(
-      (m) =>
-        m.companyId === companyId &&
-        m.revokedAt === null &&
-        (m.expiresAt === null || m.expiresAt > now),
+      (m) => m.companyId === companyId && isActiveMembership(m, now),
     );
     if (!match) {
       throw new ForbiddenException('Contractor membership is expired or revoked');

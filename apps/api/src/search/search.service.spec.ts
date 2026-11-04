@@ -7,6 +7,7 @@ import {
 } from '@weavestream/shared/server';
 import { assertTenantScope } from '../prisma/tenant-scoped-models.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS, NO_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * Unit tests for the pure helpers inside SearchService that don't
@@ -181,7 +182,7 @@ function makeActor(role: AuthedUser['role']): AuthedUser {
     sessionId: 'session-1',
     mfaEnforcementCompletedAt: null,
     mfaPending: false,
-    globalPasswordAccess: true,
+    passwordAccess: FULL_PASSWORD_ACCESS,
   } as AuthedUser;
 }
 
@@ -264,11 +265,31 @@ describe('SearchService password allow-list filter', () => {
     expect(inside.values).toContain(true);
     expect(inside.values).not.toContain(false);
 
-    const outsider = { ...makeActor('OPERATOR'), globalPasswordAccess: false };
+    const outsider = { ...makeActor('OPERATOR'), passwordAccess: NO_PASSWORD_ACCESS };
     const out = await runSearch(outsider);
     expect(out.values).toContain(false);
     // Never string-built into the SQL text.
     expect(out.sql).not.toMatch(/\b(true|false)::boolean/);
+  });
+
+  it('binds membership override company ids as uuid arrays, never as SQL text', async () => {
+    const DENIED = '99999999-9999-4999-8999-999999999999';
+    const ALLOWED = '88888888-8888-4888-8888-888888888888';
+    const actor = {
+      ...makeActor('OPERATOR'),
+      passwordAccess: { byDefault: true, allowCompanyIds: [ALLOWED], denyCompanyIds: [DENIED] },
+    };
+    const { sql, values } = await runSearch(actor);
+    expect(sql).toContain('::uuid[]');
+    expect(sql).toContain('CASE WHEN');
+    expect(sql).toContain('si.company_id = ANY(');
+    expect(sql).toContain('p.company_id = ANY(');
+    expect(sql).not.toContain(DENIED);
+    expect(sql).not.toContain(ALLOWED);
+    // Password branch + upload branch each bind both lists.
+    expect(values.filter((v) => Array.isArray(v) && v.includes(DENIED))).toHaveLength(2);
+    expect(values.filter((v) => Array.isArray(v) && v.includes(ALLOWED))).toHaveLength(2);
+    expect(sql).not.toMatch(/\b(true|false)::boolean/);
   });
 
   it('hides files attached to a password entry the actor cannot open', async () => {

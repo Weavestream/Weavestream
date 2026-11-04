@@ -10,6 +10,7 @@ import { OAuthProviderService } from './oauth-provider.service.js';
 import { OAuthConsentService } from './oauth-consent.service.js';
 import { OAuthProviderController } from './oauth-provider.controller.js';
 import { McpAccessTokenGuard } from '../mcp/mcp-access-token.guard.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * The remote MCP authorization server end to end, against Postgres: the real
@@ -49,7 +50,7 @@ const actorOf = (id: string): AuthedUser => ({
   sessionId: `${id.slice(0, -4)}e001`,
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 });
 
 const b64url = (b: Buffer | string) => Buffer.from(b).toString('base64url');

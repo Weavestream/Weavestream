@@ -16,6 +16,7 @@ import type { AuthedUser } from '../../common/current-user.decorator.js';
 import { PasswordService } from '../password.service.js';
 import { MfaService } from '../mfa.service.js';
 import { MfaBackupCodeService } from '../mfa-backup-code.service.js';
+import { StepUpRequiredException } from './step-up-required.exception.js';
 
 /**
  * Step-up (re-authentication) state, shared by `StepUpGuard` and the
@@ -49,6 +50,20 @@ export class StepUpService {
   async isVerified(sessionId: string): Promise<boolean> {
     const v = await this.redis.client.get(this.key(sessionId));
     return v !== null;
+  }
+
+  /**
+   * Throw `StepUpRequiredException` unless this session has a fresh
+   * step-up. The one implementation of the check: `StepUpGuard` calls it
+   * for `@RequireStepUp()` routes, and handlers call it directly when the
+   * decision needs data the guard cannot see (for example the current row).
+   * An MFA-pending session can never satisfy step-up; it gets the
+   * challenge, so the client prompts rather than silently failing.
+   */
+  async assertVerified(user: Pick<AuthedUser, 'id' | 'sessionId' | 'mfaPending'>): Promise<void> {
+    if (user.mfaPending || !(await this.isVerified(user.sessionId))) {
+      throw new StepUpRequiredException(await this.requiredFactor(user.id));
+    }
   }
 
   async markVerified(sessionId: string, factor: StepUpFactor): Promise<void> {

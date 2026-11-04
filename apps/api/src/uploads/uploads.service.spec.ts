@@ -15,6 +15,7 @@ import { Readable } from 'node:stream';
 import type { Upload } from '@prisma/client';
 import sharp from 'sharp';
 import { UploadsService } from './uploads.service.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 function baseUpload(over: Partial<Upload> = {}): Upload {
   return {
@@ -844,8 +845,8 @@ describe('UploadsService.assertReadable (CLIENT_USER gate)', () => {
   }
 
   const clientActor = { id: 'u1', role: 'CLIENT_USER' } as never;
-  const operatorActor = { id: 'u1', role: 'OPERATOR', globalPasswordAccess: true } as never;
-  const otherOperatorActor = { id: 'u2', role: 'OPERATOR', globalPasswordAccess: true } as never;
+  const operatorActor = { id: 'u1', role: 'OPERATOR', passwordAccess: FULL_PASSWORD_ACCESS } as never;
+  const otherOperatorActor = { id: 'u2', role: 'OPERATOR', passwordAccess: FULL_PASSWORD_ACCESS } as never;
 
   it('allows OPERATOR to stream an upload attached to an invisible article', async () => {
     const { service, storage } = makeService({
@@ -1176,7 +1177,7 @@ describe('UploadsService attachment parent invariants (WS-013)', () => {
     return { service, prisma, storage, redis };
   }
 
-  const operator = { id: 'user-1', role: 'OPERATOR', globalPasswordAccess: true } as never;
+  const operator = { id: 'user-1', role: 'OPERATOR', passwordAccess: FULL_PASSWORD_ACCESS } as never;
   const baseInit = { filename: 'a.png', mimeType: 'image/png', sizeBytes: 100 };
   const meta = { ip: '127.0.0.1', userAgent: 'jest' };
 
@@ -1532,7 +1533,7 @@ describe('UploadsService.paginatedList CLIENT_USER filter', () => {
       },
     ]);
     const res = await service.listPhotos('c1', {
-      actor: { id: 'op', role: 'OPERATOR', globalPasswordAccess: true } as never,
+      actor: { id: 'op', role: 'OPERATOR', passwordAccess: FULL_PASSWORD_ACCESS } as never,
       limit: 50,
       includeNonLatest: true,
     });
@@ -1558,7 +1559,7 @@ describe('UploadsService.paginatedList CLIENT_USER filter', () => {
 
     // Operator on the allow-list ('other-op') sees the attachment.
     const allowListed = await service.listPhotos('c1', {
-      actor: { id: 'other-op', role: 'OPERATOR', globalPasswordAccess: true } as never,
+      actor: { id: 'other-op', role: 'OPERATOR', passwordAccess: FULL_PASSWORD_ACCESS } as never,
       limit: 50,
       includeNonLatest: true,
     });
@@ -1575,7 +1576,7 @@ describe('UploadsService.paginatedList CLIENT_USER filter', () => {
 });
 
 describe('UploadsService.confirm — streamed hashing + storage-read races', () => {
-  const operator = { id: 'user-1', role: 'OPERATOR', globalPasswordAccess: true } as never;
+  const operator = { id: 'user-1', role: 'OPERATOR', passwordAccess: FULL_PASSWORD_ACCESS } as never;
   const auditMeta = { ip: '127.0.0.1', userAgent: 'jest' };
 
   // These cases deliberately drive the text/* + UTF-8 BOM fast-path,
@@ -1692,7 +1693,7 @@ describe('UploadsService.confirm — streamed hashing + storage-read races', () 
 });
 
 describe('UploadsService.confirm — magic-byte validation + image thumbnail (real file-type/sharp)', () => {
-  const operator = { id: 'user-1', role: 'OPERATOR', globalPasswordAccess: true } as never;
+  const operator = { id: 'user-1', role: 'OPERATOR', passwordAccess: FULL_PASSWORD_ACCESS } as never;
   const auditMeta = { ip: '127.0.0.1', userAgent: 'jest' };
   const docxMime =
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -2040,7 +2041,7 @@ describe('UploadsService.restore / restoreInfo', () => {
   }
 
   const sa = { id: 'admin-1', role: 'SUPER_ADMIN' } as never;
-  const operator = { id: 'user-1', role: 'OPERATOR', globalPasswordAccess: true } as never;
+  const operator = { id: 'user-1', role: 'OPERATOR', passwordAccess: FULL_PASSWORD_ACCESS } as never;
   const meta = { ip: '127.0.0.1', userAgent: 'jest' };
 
   // ---- restore ----
@@ -2203,7 +2204,7 @@ describe('UploadsService.restore / restoreInfo', () => {
 });
 
 describe('UploadsService.confirm — signature-less declared types (real file-type)', () => {
-  const operator = { id: 'user-1', role: 'OPERATOR', globalPasswordAccess: true } as never;
+  const operator = { id: 'user-1', role: 'OPERATOR', passwordAccess: FULL_PASSWORD_ACCESS } as never;
   const auditMeta = { ip: '127.0.0.1', userAgent: 'jest' };
   const jsonBody = Buffer.from('{\n  "hostname": "dc-01",\n  "cores": 8\n}\n');
   // A minimal real PNG — `file-type` reports image/png from its magic

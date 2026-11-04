@@ -3,6 +3,7 @@ import { FoldersService } from './folders.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import type { SerializedFolderNode } from './folders.service.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * DB-backed guard for the CLIENT_USER folder-visibility rule (Phase 2b):
@@ -51,7 +52,7 @@ const CLIENT: AuthedUser = {
   sessionId: '2bf00000-0000-4000-8000-00000000e001',
   mfaEnforcementCompletedAt: null,
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 const OPERATOR: AuthedUser = {

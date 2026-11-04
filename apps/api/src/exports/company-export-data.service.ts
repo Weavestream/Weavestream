@@ -4,6 +4,7 @@ import {
   integrationProvenanceSchema,
   ipInCidr,
   normalizeIpv4V4,
+  readMembershipPasswordAccess,
   reconstructionCompletenessCountsSchema,
   type IntegrationSyncState,
   type IntegrationTargetKind,
@@ -12,8 +13,8 @@ import {
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import {
-  passesGlobalPasswordPolicy,
   passwordReadWhereFor,
+  resolvePasswordAccessScope,
 } from '../passwords/password-access-policy.js';
 import { readPasswordAccessPolicy } from '../settings/settings.service.js';
 import {
@@ -383,8 +384,9 @@ export class CompanyExportDataService {
   // -------------------------------------------------------------------------
 
   /**
-   * Build the requester's password access from FRESH rows (the user and the
-   * global policy), not from the moment the job was queued. Fails closed:
+   * Build the requester's password access from FRESH rows (the user, the
+   * global policy and their membership in THIS company), not from the
+   * moment the job was queued. Fails closed:
    * a missing requester, or one that no longer exists or is inactive, gets
    * no password entries at all.
    */
@@ -398,7 +400,7 @@ export class CompanyExportDataService {
       );
       return null;
     }
-    const [user, settings] = await Promise.all([
+    const [user, settings, memberships] = await Promise.all([
       this.prisma.user.findUnique({
         where: { id: requestedBy },
         select: { id: true, role: true, isActive: true },
@@ -406,6 +408,12 @@ export class CompanyExportDataService {
       this.prisma.systemSetting.findUnique({
         where: { id: 'singleton' },
         select: { passwordAccessMode: true, passwordAccessUserIds: true },
+      }),
+      // Only this company matters for a single-company export. The active
+      // check (not revoked, not expired) runs in resolvePasswordAccessScope.
+      this.prisma.membership.findMany({
+        where: { userId: requestedBy, companyId },
+        select: { companyId: true, revokedAt: true, expiresAt: true, passwordAccess: true },
       }),
     ]);
     if (!user || !user.isActive) {
@@ -418,7 +426,14 @@ export class CompanyExportDataService {
     return passwordReadWhereFor({
       id: user.id,
       role: user.role,
-      globalPasswordAccess: passesGlobalPasswordPolicy(user, policy),
+      passwordAccess: resolvePasswordAccessScope(
+        user,
+        policy,
+        memberships.map((m) => ({
+          ...m,
+          passwordAccess: readMembershipPasswordAccess(m.passwordAccess),
+        })),
+      ),
     });
   }
 

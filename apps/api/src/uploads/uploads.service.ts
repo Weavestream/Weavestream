@@ -1528,6 +1528,7 @@ export class UploadsService {
               },
               select: {
                 id: true,
+                companyId: true,
                 visibleToClients: true,
                 restrictedToUserIds: true,
               },
@@ -1535,6 +1536,7 @@ export class UploadsService {
           : Promise.resolve(
               [] as Array<{
                 id: string;
+                companyId: string;
                 visibleToClients: boolean;
                 restrictedToUserIds: string[];
               }>,
@@ -1902,6 +1904,7 @@ export class UploadsService {
           where: { id: attachedToId, companyId },
           select: {
             id: true,
+            companyId: true,
             visibleToClients: true,
             restrictedToUserIds: true,
           },
@@ -1959,6 +1962,7 @@ export class UploadsService {
           },
           select: {
             id: true,
+            companyId: true,
             visibleToClients: true,
             restrictedToUserIds: true,
           },

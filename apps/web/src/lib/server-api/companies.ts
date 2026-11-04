@@ -2,6 +2,7 @@ import { cache } from 'react';
 import type {
   CompanyLogo,
   CompanyType,
+  MembershipPasswordAccess,
   MembershipRole,
 } from '@weavestream/shared';
 import { serverApiFetch, type ServerApiResponse } from './core';
@@ -55,6 +56,8 @@ export type CompanyMembership = {
   id: string;
   role: MembershipRole;
   expiresAt: string | null;
+  /** Company-level password access override. */
+  passwordAccess: MembershipPasswordAccess;
   createdAt: string;
   updatedAt: string;
   user: {

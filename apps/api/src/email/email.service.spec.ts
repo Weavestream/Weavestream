@@ -4,6 +4,7 @@ import { MAX_ALERT_RECIPIENTS } from '@weavestream/shared';
 import { EmailService, capRecipients } from './email.service.js';
 import { EmailNotConfiguredError } from './email-settings.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 jest.mock('nodemailer', () => ({
   __esModule: true,
@@ -21,7 +22,7 @@ const ACTOR: AuthedUser = {
   sessionId: 's-1',
   mfaEnforcementCompletedAt: new Date(),
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 const META = { ip: '127.0.0.1', userAgent: 'jest' };

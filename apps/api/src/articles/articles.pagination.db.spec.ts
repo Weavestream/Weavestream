@@ -1,6 +1,7 @@
 import { ArticlesService } from './articles.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
 
 /**
  * DB-backed regression guard for cursor pagination over the articles
@@ -41,7 +42,7 @@ const OPERATOR: AuthedUser = {
   sessionId: '2ba00000-0000-4000-8000-00000000e001',
   mfaEnforcementCompletedAt: null,
   mfaPending: false,
-  globalPasswordAccess: true,
+  passwordAccess: FULL_PASSWORD_ACCESS,
 };
 
 describeIfDb('articles list cursor pagination (DB integration)', () => {

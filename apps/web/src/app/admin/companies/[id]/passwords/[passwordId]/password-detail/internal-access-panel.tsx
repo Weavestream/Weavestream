@@ -27,12 +27,12 @@ import { InternalUserChecklist } from '../../../../../../../components/passwords
 const UNRESTRICTED_COPY: Record<PasswordAccessMode, { title: string; body: string; option: string }> = {
   all_users: {
     title: 'All internal users',
-    body: 'Any internal user with normal company access can see this credential.',
+    body: 'Any internal user with normal company access can see this credential. Company membership settings can allow or deny individual users.',
     option: 'All internal users with company access',
   },
   selected_users: {
     title: 'Global policy (selected users)',
-    body: 'Only the users in the global password access policy, and super admins, can see this credential.',
+    body: 'Only the users in the global password access policy, and super admins, can see this credential. Company membership settings can allow or deny individual users.',
     option: 'Use the global policy (selected users)',
   },
 };

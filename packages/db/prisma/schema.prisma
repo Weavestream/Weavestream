@@ -347,6 +347,12 @@ model Membership {
   createdAt DateTime       @default(now()) @map("created_at")
   updatedAt DateTime       @default(now()) @updatedAt @map("updated_at")
   revokedAt DateTime?      @map("revoked_at")
+  // Company-level password access override: `inherit` (default, use the
+  // global password access policy), `allow` or `deny`. An entry with its
+  // own allow-list ignores it. Ends with the membership (expiry/revoke).
+  // CHECK constraint in migration 0091, read through
+  // `membershipPasswordAccessValues`.
+  passwordAccess String    @default("inherit") @map("password_access")
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)

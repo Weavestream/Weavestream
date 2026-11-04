@@ -12,7 +12,6 @@ import {
   type RequireStepUpMetadata,
 } from './require-step-up.decorator.js';
 import { StepUpService } from './step-up.service.js';
-import { StepUpRequiredException } from './step-up-required.exception.js';
 
 /**
  * Global guard that enforces `@RequireStepUp()`.
@@ -47,11 +46,7 @@ export class StepUpGuard implements CanActivate {
       throw new ForbiddenException('Unauthenticated');
     }
 
-    // An MFA-pending session can never satisfy step-up; treat as a
-    // required challenge so the client prompts rather than silently 403s.
-    if (user.mfaPending || !(await this.stepUp.isVerified(user.sessionId))) {
-      throw new StepUpRequiredException(await this.stepUp.requiredFactor(user.id));
-    }
+    await this.stepUp.assertVerified(user);
     return true;
   }
 }

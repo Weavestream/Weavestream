@@ -33,7 +33,7 @@ import {
 } from '../../../../../../components/integrations/provenance-badge';
 import { recentRelative as relative } from '../../../../../../lib/relative-time';
 import { getEffectiveTimezone } from '../../../../../../lib/date-format';
-import { formatDateTime } from '@weavestream/shared';
+import { formatDateTime, passwordAccessForCompany } from '@weavestream/shared';
 import { IntegrationSections } from '../../../../../../components/integrations/integration-sections';
 import { assetSourcesLabel } from '../../../../../../lib/asset-sources';
 
@@ -154,7 +154,7 @@ export default async function AssetDetailPage({
               companyId={companyId}
               assetId={asset.id}
               mode="admin"
-              canCreate={me.hasPasswordAccess}
+              canCreate={passwordAccessForCompany(me.passwordAccess, companyId)}
             />
 
             <AttachmentsPanel

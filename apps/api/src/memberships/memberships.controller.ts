@@ -18,7 +18,7 @@ import {
   type MembershipRole,
   type UpdateMembershipInput,
 } from '@weavestream/shared';
-import { MembershipsService } from './memberships.service.js';
+import { MembershipsService, type MembershipChangeGate } from './memberships.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { AuthedOnly } from '../rbac/require-permission.decorator.js';
 import { ZodBody } from '../common/zod-validation.pipe.js';
@@ -27,6 +27,11 @@ import { ipOf, userAgentOf as uaOf } from '../common/request-meta.js';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
+import { StepUpService } from '../auth/step-up/step-up.service.js';
+import {
+  membershipChangeNeedsStepUp,
+  type MembershipStepUpState,
+} from './membership-step-up.js';
 
 /**
  * Consolidated membership endpoints. The membership id alone doesn't
@@ -39,6 +44,7 @@ export class MembershipsController {
     private readonly memberships: MembershipsService,
     private readonly permissions: PermissionService,
     private readonly prisma: PrismaService,
+    private readonly stepUp: StepUpService,
   ) {}
 
   @Get()
@@ -89,10 +95,17 @@ export class MembershipsController {
     @Req() req: Request,
   ) {
     await this.assertCanManage(user, id);
-    return this.memberships.update(user, id, dto, {
-      ip: ipOf(req),
-      userAgent: uaOf(req),
-    });
+    // Step-up is decided on the current row, not by `@RequireStepUp`: the
+    // guard runs before the handler and cannot see the row. The service
+    // runs this gate on the LOCKED row inside the write transaction, so a
+    // concurrent change cannot slip between the decision and the write.
+    return this.memberships.update(
+      user,
+      id,
+      dto,
+      { ip: ipOf(req), userAgent: uaOf(req) },
+      this.stepUpGate(user, (current) => membershipChangeNeedsStepUp(current, dto)),
+    );
   }
 
   @Delete(':id')
@@ -105,13 +118,29 @@ export class MembershipsController {
     @Req() req: Request,
   ) {
     await this.assertCanManage(user, id);
-    return this.memberships.revoke(user, id, {
-      ip: ipOf(req),
-      userAgent: uaOf(req),
-    });
+    return this.memberships.revoke(
+      user,
+      id,
+      { ip: ipOf(req), userAgent: uaOf(req) },
+      this.stepUpGate(user, (current) => membershipChangeNeedsStepUp(current, 'revoke')),
+    );
   }
 
-  private async assertCanManage(user: AuthedUser, membershipId: string) {
+  /** Asks for step-up when `needsStepUp` says the change requires it. */
+  private stepUpGate(
+    user: AuthedUser,
+    needsStepUp: (current: MembershipStepUpState) => boolean,
+  ): MembershipChangeGate {
+    return async (current) => {
+      if (needsStepUp(current)) await this.stepUp.assertVerified(user);
+    };
+  }
+
+  /**
+   * Authorize a change to one membership (`membership.manage` on its
+   * company). The step-up decision is made later, on the locked row.
+   */
+  private async assertCanManage(user: AuthedUser, membershipId: string): Promise<void> {
     const row = await this.prisma.membership.findUnique({
       where: { id: membershipId },
       select: { companyId: true },

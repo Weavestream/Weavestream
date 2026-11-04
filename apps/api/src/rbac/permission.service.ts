@@ -1,9 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import type {
-  GlobalAccess,
-  MembershipRole,
-  PlatformCapability,
-  UserRole,
+import {
+  readMembershipPasswordAccess,
+  type GlobalAccess,
+  type MembershipPasswordAccess,
+  type MembershipRole,
+  type PlatformCapability,
+  type UserRole,
 } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { MembershipCacheService } from '../cache/membership-cache.service.js';
@@ -15,6 +17,19 @@ export interface MembershipSnapshot {
   role: MembershipRole;
   expiresAt: Date | null;
   revokedAt: Date | null;
+  /** Company-level password access override (`inherit` / `allow` / `deny`). */
+  passwordAccess: MembershipPasswordAccess;
+}
+
+/**
+ * A membership counts only while it is not revoked and not expired. The
+ * one definition of "active" for role resolution and password overrides.
+ */
+export function isActiveMembership(
+  m: Pick<MembershipSnapshot, 'revokedAt' | 'expiresAt'>,
+  now: Date = new Date(),
+): boolean {
+  return m.revokedAt === null && (m.expiresAt === null || m.expiresAt > now);
 }
 
 export interface PermissionInput {
@@ -70,16 +85,19 @@ export class PermissionService {
     return this.cache.readThrough(
       userId,
       MembershipCacheService.snapshotKey(userId),
-      () =>
-        this.prisma.membership.findMany({
-          where: { userId },
-          select: {
-            companyId: true,
-            role: true,
-            expiresAt: true,
-            revokedAt: true,
-          },
-        }),
+      async () =>
+        (
+          await this.prisma.membership.findMany({
+            where: { userId },
+            select: {
+              companyId: true,
+              role: true,
+              expiresAt: true,
+              revokedAt: true,
+              passwordAccess: true,
+            },
+          })
+        ).map((r) => ({ ...r, passwordAccess: readMembershipPasswordAccess(r.passwordAccess) })),
       { fresh, revive: reviveSnapshots },
     );
   }
@@ -216,10 +234,7 @@ export function resolveEffectiveAccess(
   now: Date = new Date(),
 ): GlobalAccess | null {
   const membership = memberships.find(
-    (m) =>
-      m.companyId === companyId &&
-      m.revokedAt === null &&
-      (m.expiresAt === null || m.expiresAt > now),
+    (m) => m.companyId === companyId && isActiveMembership(m, now),
   );
   if (membership) return membership.role;
 
@@ -309,10 +324,12 @@ function reviveSnapshots(raw: unknown): MembershipSnapshot[] {
     role: MembershipRole;
     expiresAt: string | null;
     revokedAt: string | null;
+    passwordAccess?: unknown;
   }>).map((r) => ({
     companyId: r.companyId,
     role: r.role,
     expiresAt: r.expiresAt ? new Date(r.expiresAt) : null,
     revokedAt: r.revokedAt ? new Date(r.revokedAt) : null,
+    passwordAccess: readMembershipPasswordAccess(r.passwordAccess),
   }));
 }
