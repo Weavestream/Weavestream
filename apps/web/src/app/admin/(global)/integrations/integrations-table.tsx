@@ -13,6 +13,7 @@ import {
   syncCronSortMinutes,
 } from '../../../../components/integrations/sync-schedule';
 import { shortRelative as relative } from '../../../../lib/relative-time';
+import { credentialsReady } from './integration-credentials';
 
 /**
  * Phase 11 — table view for the global integration list.
@@ -208,12 +209,14 @@ export function IntegrationsTable({
         id: 'secret',
         header: 'Credentials',
         width: 110,
-        sortValue: (r) => (r.hasSecret ? 1 : 0),
+        sortValue: (r) => (r.hasSecret ? 2 : credentialsReady(r) ? 1 : 0),
         render: (r) =>
           r.hasSecret ? (
             <Tag tone="ok">
               configured
             </Tag>
+          ) : credentialsReady(r) ? (
+            <Tag>not needed</Tag>
           ) : (
             <Tag tone="warn">
               missing
@@ -254,6 +257,8 @@ export function IntegrationsTable({
               <Tag tone="ok">
                 creds
               </Tag>
+            ) : credentialsReady(r) ? (
+              <Tag>no creds needed</Tag>
             ) : (
               <Tag tone="warn">
                 no creds

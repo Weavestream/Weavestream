@@ -127,13 +127,24 @@ export async function downloadApiFile(
       : undefined;
     return { ok: false, status: res.status, problem };
   }
-  const blob = await res.blob();
+  saveBlob(
+    await res.blob(),
+    filenameFromContentDisposition(res.headers.get('content-disposition')) ?? fallbackName,
+  );
+  return { ok: true, truncated: res.headers.get('x-export-truncated') === 'true' };
+}
+
+/**
+ * Save an in-memory file through a temporary download link. Used for
+ * API downloads above and for files the page builds itself (a Custom
+ * API definition export).
+ */
+export function saveBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement('a');
     a.href = url;
-    a.download =
-      filenameFromContentDisposition(res.headers.get('content-disposition')) ?? fallbackName;
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -141,7 +152,6 @@ export async function downloadApiFile(
     // Revoke after the click has queued the download.
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
-  return { ok: true, truncated: res.headers.get('x-export-truncated') === 'true' };
 }
 
 /**

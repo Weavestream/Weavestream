@@ -8,6 +8,7 @@ import type {
   IntegrationDto,
 } from '@weavestream/shared';
 import { Btn, Icon, Tag } from '../../../../../components/ui';
+import { credentialsReady } from '../integration-credentials';
 import { CreateMappingDialog } from './create-mapping-dialog';
 import { MappingDetailDialog } from './mapping-detail-dialog';
 
@@ -42,6 +43,7 @@ export function OrgsTab({
     (r) => r.assetLayoutId && r.fieldMappingCount > 0,
   );
   const hasConfiguredResource = configuredResources.length > 0;
+  const ready = credentialsReady(integration);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -81,20 +83,20 @@ export function OrgsTab({
           size="sm"
           icon={Icon.plus}
           onClick={() => setCreateOpen(true)}
-          disabled={!integration.hasSecret}
+          disabled={!ready}
         >
           Add mapping
         </Btn>
       </header>
 
-      {!integration.hasSecret && (
+      {!ready && (
         <Tag tone="warn">
           {driver?.oauth
             ? 'Connect a client tenant on the Connections tab before mapping organizations.'
             : <>Add credentials in the “Credentials &amp; schedule” tab before mapping organizations.</>}
         </Tag>
       )}
-      {integration.hasSecret && !hasConfiguredResource && (
+      {ready && !hasConfiguredResource && (
         <Tag tone="warn">
           No resource is fully configured yet — open a resource tab to pick a
           layout and project upstream fields. Syncs run only for resources with

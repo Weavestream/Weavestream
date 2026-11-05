@@ -268,3 +268,19 @@ describe('IntegrationsService.loadDriverContext', () => {
     await expect(setup('custom-api', api(), null).service.loadSavedCredentials(ID)).resolves.toMatchObject({ driver: 'custom-api', secret: null });
   });
 });
+
+describe('IntegrationDto.credentialsRequired', () => {
+  it('is false only for a definition that needs no secret', async () => {
+    const required = (driver: string, config: Record<string, unknown>) =>
+      setup(driver, config, null).service.get(ID).then((dto) => dto.credentialsRequired);
+    await expect(required('custom-api', api({ auth: { method: 'none' } }))).resolves.toBe(false);
+    await expect(required('custom-api', api({ auth: { method: 'none' }, headers: [{ name: 'X-Tenant', secret: true }] }))).resolves.toBe(true);
+    await expect(required('custom-api', api())).resolves.toBe(true);
+    // An invalid definition keeps the default: a secret is required.
+    await expect(required('custom-api', { version: 1 })).resolves.toBe(true);
+    await expect(required('breeze', {})).resolves.toBe(true);
+    await expect(required('google-workspace', {})).resolves.toBe(true);
+    await expect(required('cloudflare', {})).resolves.toBe(true);
+    await expect(required('no-such-driver', {})).resolves.toBe(true);
+  });
+});

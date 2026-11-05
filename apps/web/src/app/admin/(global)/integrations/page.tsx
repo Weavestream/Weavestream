@@ -32,11 +32,6 @@ export default async function IntegrationsPage() {
   ]);
   const integrations = listRes.data ?? [];
   const drivers = driversRes.data?.drivers ?? [];
-  // Drivers configured by an API definition (Custom API) have no editor in
-  // this UI yet, so they are not offered for new integrations. The table
-  // keeps every driver so existing rows still show their label. The Custom
-  // API editor work (Session B) removes this filter.
-  const creatableDrivers = drivers.filter((d) => !d.capabilities.apiDefinition);
 
   return (
     <>
@@ -47,10 +42,10 @@ export default async function IntegrationsPage() {
         ]}
         title="Integrations"
         description="Connect external systems and sync their data with companies in Weavestream. Removing an integration keeps its assets in Weavestream."
-        actions={<CreateIntegrationButton drivers={creatableDrivers} existing={integrations} />}
+        actions={<CreateIntegrationButton drivers={drivers} existing={integrations} />}
       />
       <PageBody>
-        <AvailableIntegrationsGallery drivers={creatableDrivers} />
+        <AvailableIntegrationsGallery drivers={drivers} />
         <Panel
           title={`${integrations.length} ${
             integrations.length === 1 ? 'integration' : 'integrations'

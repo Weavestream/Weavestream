@@ -12,8 +12,8 @@ jest.mock('../../../../../components/ui', () => ({
 jest.mock('./create-mapping-dialog', () => ({ CreateMappingDialog: () => <div>mapping dialog</div> }));
 jest.mock('./mapping-detail-dialog', () => ({ MappingDetailDialog: () => <div>mapping detail</div> }));
 
-const integration = (hasSecret: boolean) => ({
-  id: 'integration-1', hasSecret,
+const integration = (hasSecret: boolean, credentialsRequired = true) => ({
+  id: 'integration-1', hasSecret, credentialsRequired,
   resources: [{ enabled: true, assetLayoutId: 'layout', fieldMappingCount: 1, resourceLabel: 'Sites' }],
 }) as never;
 
@@ -23,6 +23,12 @@ describe('OrgsTab', () => {
     expect(screen.getByText(/No company mappings yet/i)).toBeInTheDocument();
     expect(screen.getByText(/Add credentials/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add mapping' })).toBeDisabled();
+  });
+
+  it('allows mapping without a secret when the definition needs none (Custom API, no authentication)', () => {
+    render(<OrgsTab integration={integration(false, false)} mappings={[]} driver={{ capabilities: { listSourceOrgs: true } } as never} />);
+    expect(screen.getByRole('button', { name: 'Add mapping' })).toBeEnabled();
+    expect(screen.queryByText(/Add credentials/i)).not.toBeInTheDocument();
   });
 
   it('opens the descriptor-driven mapping action when credentials exist', () => {

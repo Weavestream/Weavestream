@@ -53,6 +53,8 @@ Select an integration below for provider-specific setup guides, resource capabil
 
 [!card title="Cloudflare" text="Manage Zero Trust Gateway IP lists with drift repair, and sync every domain on the account into Domains." icon="plug" layout="compact"](/integrations/cloudflare/)
 
+[!card title="Custom API" text="Read inventory from any JSON-over-HTTPS API that has no built-in integration: describe the API in a form, test each part, and sync its records into assets (read-only)." icon="plug" layout="compact"](/integrations/custom-api/)
+
 [!card title="Google Workspace" text="One-click connect per customer to sync users, licences, storage, groups, domains and devices (read-only)." icon="plug" layout="compact"](/integrations/google-workspace/)
 
 [!card title="Level RMM" text="Sync Level RMM devices per top-level group: hardware, OS and network facts fill your layout fields; status, storage, security, patches and alerts show on the asset (read-only)." icon="plug" layout="compact"](/integrations/level/)

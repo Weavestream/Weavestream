@@ -549,6 +549,20 @@ export const CUSTOM_API_AUTH_SECRET_KEYS: Readonly<Record<CustomApiAuthMethod, r
   oauth_client_credentials: ['clientId', 'clientSecret'],
 };
 
+const CUSTOM_API_SECRET_KEY_LABELS: Readonly<Record<string, string>> = {
+  token: 'Token',
+  value: 'Header value',
+  password: 'Password',
+  clientId: 'Client ID',
+  clientSecret: 'Client secret',
+};
+
+/** The UI label of a secret-bundle key: "Token", or "Header x-tenant" for a secret header. */
+export function customApiSecretKeyLabel(key: string): string {
+  if (Object.hasOwn(CUSTOM_API_SECRET_KEY_LABELS, key)) return CUSTOM_API_SECRET_KEY_LABELS[key]!;
+  return key.startsWith('header:') ? `Header ${key.slice('header:'.length)}` : key;
+}
+
 /**
  * Exactly the keys the secret bundle of this definition holds: the auth
  * method's keys, then `header:<lowercase name>` for each secret header.

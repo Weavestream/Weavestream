@@ -774,6 +774,12 @@ export const integrationDtoSchema = z.object({
    */
   effectiveSyncCron: z.string().nullable(),
   hasSecret: z.boolean(),
+  /**
+   * False when the saved config needs no secret to run (a Custom API
+   * definition with no authentication). The UI treats such an
+   * integration as having its credentials. Derived on the server.
+   */
+  credentialsRequired: z.boolean(),
   /** Last 4 chars of every secret value, by key — used for masked display. */
   secretMask: z.record(z.string(), z.string()).nullable(),
   /**

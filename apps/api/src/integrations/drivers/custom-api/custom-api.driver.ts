@@ -4,6 +4,7 @@ import {
   CUSTOM_API_RESOURCE_KEYS,
   customApiDefinitionSchema,
   customApiRequiredSecretKeys,
+  customApiSecretKeyLabel,
   type CustomApiDefinition,
   type CustomApiResourceKey,
   type DriverDescriptor,
@@ -77,14 +78,6 @@ export function definitionOf(config: Record<string, unknown> | null | undefined)
   return parsed.data;
 }
 
-const SECRET_KEY_LABELS: Readonly<Record<string, string>> = {
-  token: 'Token',
-  value: 'Header value',
-  password: 'Password',
-  clientId: 'Client ID',
-  clientSecret: 'Client secret',
-};
-
 export class CustomApiDriver implements IntegrationDriver {
   readonly key = CUSTOM_API_DRIVER_KEY;
 
@@ -147,7 +140,7 @@ export class CustomApiDriver implements IntegrationDriver {
     const missing = required.filter((key) => typeof values[key] !== 'string' || values[key] === '' || (values[key] as string).length > 8_192);
     const extra = present.filter((key) => !required.includes(key));
     if (missing.length > 0 || extra.length > 0) {
-      const names = required.map((key) => SECRET_KEY_LABELS[key] ?? `Header ${key.slice('header:'.length)}`);
+      const names = required.map(customApiSecretKeyLabel);
       throw new BadRequestException(`The credentials do not match the authentication of this definition. Enter all of: ${names.join(', ')}.`);
     }
   }
@@ -184,7 +177,7 @@ export class CustomApiDriver implements IntegrationDriver {
     if (definition.organizations.mode === 'single') {
       const first = enabledResources(definition)[0];
       if (!first) {
-        throw new CustomApiRequestError('Turn on Devices or Other assets in the API definition, then check again.', null);
+        throw new CustomApiRequestError('The saved API definition has no resource turned on. Turn on Devices or Other assets, save, then check again.', null);
       }
       await fetchListPage(call, resourceListSpec(first.resource), {}, null);
     }

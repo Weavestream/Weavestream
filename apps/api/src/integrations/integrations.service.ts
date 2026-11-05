@@ -699,10 +699,7 @@ export class IntegrationsService {
       // A driver whose config needs no credentials (Custom API with no
       // authentication) runs with an empty bundle; every other driver
       // keeps refusing to run without one.
-      const driver = this.drivers.has(row.driver) && this.drivers.kindOf(row.driver) === 'pull'
-        ? this.drivers.get(row.driver)
-        : null;
-      return driver?.requiresSecret?.(config) === false
+      return !this.requiresSecretFor(row.driver, config)
         ? { config, secret: {}, credentialVersion: 'no-secret|no-app' }
         : { config, secret: null, credentialVersion: 'no-secret|no-app' };
     }
@@ -711,6 +708,17 @@ export class IntegrationsService {
       secret: this.decryptSavedSecret(row.id, row.secret.ciphertext),
       credentialVersion: `${row.secret.id}@${row.secret.updatedAt.toISOString()}|no-app`,
     };
+  }
+
+  /**
+   * Whether this config needs a saved secret to run. Only a pull driver
+   * can say no (`requiresSecret` false, Custom API with no
+   * authentication); OAuth, security and unknown drivers always need one.
+   */
+  private requiresSecretFor(driverKey: string, config: Record<string, unknown>): boolean {
+    if (!this.drivers.has(driverKey) || this.drivers.kindOf(driverKey) !== 'pull') return true;
+    if (this.drivers.describe(driverKey).oauth) return true;
+    return this.drivers.get(driverKey).requiresSecret?.(config) !== false;
   }
 
   /**
@@ -1794,6 +1802,7 @@ export class IntegrationsService {
       effectiveSyncCron: row.syncCron ?? defaultCron,
       // OAuth drivers: "has credentials" means at least one client tenant is connected.
       hasSecret: descriptor?.oauth ? (row._count?.connections ?? 0) > 0 : Boolean(row.secret),
+      credentialsRequired: this.requiresSecretFor(row.driver, (row.config ?? {}) as Record<string, unknown>),
       secretMask,
       resources,
       lastRunAt: row.lastRunAt ? row.lastRunAt.toISOString() : null,

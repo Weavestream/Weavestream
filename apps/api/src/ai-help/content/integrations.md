@@ -4,7 +4,7 @@
 <!-- aliases: integration overview | rmm sync | import devices | external inventory | connectors -->
 <!-- requires: integration.manage -->
 
-Action1, NinjaOne, UniFi, Google Workspace, Microsoft 365, Level RMM, and Breeze are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
+Action1, NinjaOne, UniFi, Google Workspace, Microsoft 365, Level RMM, Breeze, and Custom API are pull integrations. A connection stores provider credentials and configuration. Upstream organizations map to Weavestream companies. Enabled resources select target asset layouts, match keys, and field projections to create, claim, or update assets during sync runs.
 
 Match keys claim existing unclaimed assets instead of duplicating them. Once linked, integration sync records preserve identity across runs.
 
@@ -107,6 +107,25 @@ Under **Organizations**, each top-level Level group maps to one company; devices
 6. Run a **Dry run**, inspect run history and gaps, then run an incremental or full sync.
 
 Use **Completeness** tab to track synchronized current, manually documented, secret blocked, missing, stale, and sync error states. Blank schedules default to every 15 minutes. See `docs/integrations/breeze.md` for details.
+
+## Configure a Custom API integration
+<!-- aliases: custom api | generic api | json api | homegrown app | internal cmdb | api definition | import definition | export definition -->
+<!-- requires: integration.manage -->
+
+**Custom API** reads inventory from a JSON-over-HTTPS API that has no built-in integration. It is read-only.
+
+1. Open **Admin → Integrations** and select **New integration**.
+2. In **Driver**, pick **Custom API**. Enter a **Display name**, the **Base URL** (must start with https://), the authentication **Method**, and its credentials.
+3. Select **Create integration**. It starts paused with one organization and both resources turned off.
+4. On **Credentials & schedule**, complete the **API definition**: **Organizations** (**From an endpoint**, **From a field on each record**, or **One organization**), then **Devices**, **Other assets**, or both: the request, **Records path**, **Pages**, and the paths in each record.
+5. Select **Test** in each section. It shows the first records and the keys of the first record. Click a key to put its path in the path input you selected last. In endpoint mode, a resource **Test** needs an organization: pick one from the last Organizations test, or type its id.
+6. Select **Save changes**, map organizations on **Organizations**, and pick layouts on **Map layouts**.
+
+**Test connection** checks the saved definition, not the form. It is off while the definition or the credentials have unsaved changes; the **Test** button in each section uses the form.
+
+Authentication methods: **Bearer token**, **API key header**, **User name and password**, **OAuth client credentials**, and **No authentication**. Mark a header **Secret** to store its value with the credentials. Changing the **Base URL** or **Token URL** to another host needs the credentials again in the same save. With **No authentication**, no credentials are needed and the list shows **not needed**.
+
+**Export definition** downloads the definition as JSON without any secret. **Import definition** (also **Import definition…** in the create dialog) checks a file and fills the form; nothing is saved until you select **Save changes** or **Create integration**.
 
 ## Configure the Cloudflare integration
 <!-- aliases: connect cloudflare | cloudflare gateway list | zero trust ip list | register cloudflare list | register cloudflare gateway ip list | cloudflare domains | cloudflare registrar sync -->
