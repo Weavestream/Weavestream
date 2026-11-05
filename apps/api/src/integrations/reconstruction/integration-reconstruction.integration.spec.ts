@@ -1196,7 +1196,6 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     ['transport timeout', { error: new Error('deterministic timeout') }],
     ['malformed response', { body: '{not-json' }],
     ['unknown schema', { body: { ...envelope([]), schemaVersion: '2' } }],
-    ['invalid record', { body: envelope([{ ...deviceRecord(), hostname: null }]) }],
   ] as const)('preserves persisted last-known-good state after %s', async (_label, frame) => {
     const before = await persistedDeviceState(prisma);
     installFetchScript([frame]);
@@ -1219,6 +1218,73 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     })).resolves.toMatchObject({ status: 'failed', totals: { errors: 1 } });
 
     expect(await persistedDeviceState(prisma)).toEqual(before);
+  });
+
+  // An unreadable record is a validation gap, not a page failure (see "Breeze
+  // upgrades" in docs/integrations/breeze.md). The run still fails as
+  // incomplete, and the native asset, checkpoint, and stale state stay as they were.
+  it('preserves persisted last-known-good state after an unreadable record', async () => {
+    const before = await persistedDeviceState(prisma);
+    installFetchScript([{ body: envelope([{ ...deviceRecord(), hostname: null }]) }]);
+    const runId = await createQueuedRun(prisma, 'incremental');
+    const runner = buildRunner(
+      prisma,
+      audit,
+      provenance,
+      new BreezeDriver(new BreezePartnerApiClient()),
+      await buildAssetWriter(prisma, audit),
+    );
+
+    await expect(runner.runMapping({
+      syncRunId: runId,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      dryRun: false,
+      actorId: ids.actor,
+      mode: 'incremental',
+    })).resolves.toMatchObject({
+      status: 'failed',
+      error: 'Resource evaluation was incomplete; last-known-good reconciliation state was preserved.',
+      totals: { fetched: 0, created: 0, updated: 0, blocked: 1, errors: 0 },
+    });
+
+    const after = await persistedDeviceState(prisma);
+    expect(after.asset).toEqual(before.asset);
+    // The page writes a non-authoritative checkpoint that does not move the
+    // high-water mark, so the next incremental run fetches the record again.
+    expect(after.checkpoint).toMatchObject({
+      authoritative: false,
+      cursor: null,
+      highWaterAt: before.checkpoint?.highWaterAt ?? null,
+      lastCompletedAt: before.checkpoint?.lastCompletedAt ?? null,
+      lastFullCompletedAt: before.checkpoint?.lastFullCompletedAt ?? null,
+    });
+    expect(after.staleAuditCount).toBe(before.staleAuditCount);
+    // The binding is marked blocked but keeps its target and last synced data.
+    expect(after.binding).toMatchObject({
+      assetId: before.binding.assetId,
+      externalId: before.binding.externalId,
+      lastSyncedAt: before.binding.lastSyncedAt,
+      checksum: before.binding.checksum,
+      sourceUpdatedAt: before.binding.sourceUpdatedAt,
+      state: 'blocked',
+      staleSince: null,
+    });
+    expect(after.activeGapCount).toBe(before.activeGapCount + 1);
+    await expect(prisma.integrationReconstructionGap.findFirstOrThrow({
+      where: {
+        integrationCompanyMappingId: ids.mappingA,
+        resourceId: ids.devices,
+        resolvedAt: null,
+      },
+    })).resolves.toMatchObject({
+      kind: 'validation',
+      details: expect.objectContaining({
+        reasonCode: 'unreadable_source_record',
+        fieldPaths: ['hostname'],
+        sourceId: DEVICE,
+      }),
+    });
   });
 
   it('persists a committed page cursor, suppresses stale, and resumes after a repeated cursor failure', async () => {
