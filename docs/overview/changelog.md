@@ -13,6 +13,31 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-11-05
+
+### Added
+
+- **Custom API integration.** Read records from a JSON-over-HTTPS API that has no built-in integration. In **Admin → Integrations → New integration**, pick **Custom API** and describe the API in a form: authentication (none, bearer token, header, basic, or OAuth client credentials), extra headers, where the organizations are, where the records are, how pages work, and which path in each record holds each field. The driver is read-only and pull only. See [Custom API Integration](/integrations/custom-api/).
+- **One Items resource for any kind of record.** Items can be devices, users, licenses, or anything else. On **Items fields**, pick the **Target asset layout**, map each field to a layout field, and set the match keys. On the first sync, an item links to an asset you already have when the match value is equal. One integration fills one layout; add a second Custom API integration for a second kind of record.
+- **Test each part of a definition.** Each section has a **Test** button that reads the first page and shows the parsed records, the value each path found, and the keys of the first record. Click a key to fill the path input you selected last. Each test is audited as `integration.custom_api.test`, without values, headers, or secrets.
+- **Import and export definitions.** **Import definition** and **Export definition** move a definition between instances as JSON. The file never holds a secret. The browser checks an imported file and lists each problem with its path before anything is saved.
+- **Open records in the source app.** An optional link template gives each synced record an **Open in** link.
+
+### Changed
+
+- **Integrations that need no credentials show it.** The integration list shows **not needed** in the Credentials column, and the Organizations tab allows mappings, when the definition uses no authentication.
+
+### Security
+
+- **Saved credentials do not follow a host change.** Changing the base URL (or the Custom API token URL) to a different host for Action1, Breeze, NinjaOne, UniFi, or Custom API requires the credentials again in the same save. Weavestream refuses to send saved credentials to a new host.
+- **Custom API requests stay on the configured host.** Every request path is joined to the HTTPS base URL and cannot leave its host or path prefix. Redirects are refused, the timeout covers the whole response body, and response size is limited.
+- **Credentials stay write-only.** Custom API credentials are stored encrypted and are never shown again, logged, or exported. Test results hide values under keys that name a credential.
+- **Each Custom API integration has its own asset identity.** Records from 2 Custom API integrations with the same record ID never share an asset.
+
+### Upgrade notes
+
+- Update the **API, web, and worker together**. No migrations and no new environment variables are required.
+
 ## [1.12.0] - 2026-11-04
 
 ### Added
