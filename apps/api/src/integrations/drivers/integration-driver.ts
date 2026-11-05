@@ -268,11 +268,23 @@ export interface IntegrationDriver {
   /** Optional generic bootstrap metadata; drivers never write destinations directly. */
   readonly recommendedDestinations?: Readonly<Record<string, RecommendedDestination>>;
 
-  /** Optional strict persistence-boundary validation for driver-specific bundles. */
+  /**
+   * Optional strict persistence-boundary validation for driver-specific
+   * bundles. On update the service passes the effective pair: the saved
+   * config or secret where the request does not replace it, null for a
+   * cleared or absent secret.
+   */
   validateConfiguration?(
     config: Record<string, unknown> | null | undefined,
     secret: Record<string, unknown> | null | undefined,
   ): void;
+
+  /**
+   * Whether this config needs a stored secret to run. Absent means true.
+   * A driver that answers false (Custom API with no authentication) runs
+   * with an empty secret when none is saved.
+   */
+  requiresSecret?(config: Record<string, unknown>): boolean;
 
   /**
    * Validate a freshly-submitted (config, secret) pair against the

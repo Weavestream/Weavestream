@@ -192,6 +192,8 @@ export class UniFiSiteManagerDriver implements IntegrationDriver {
       },
     ],
     setupGuide: UNIFI_SETUP_GUIDE,
+    // The key goes to baseUrl: moving it to a new host needs the key again.
+    secretBoundConfigKeys: ['baseUrl'],
     resources: [
       {
         key: UNIFI_RESOURCE_DEVICES,

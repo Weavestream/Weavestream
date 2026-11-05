@@ -51,6 +51,7 @@ import type { RecommendedDestination } from './drivers/integration-driver.js';
 import { integrationAssetExternalSource } from './integration-asset-source.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { scanSensitiveMaterial } from './sensitive-material.js';
+import { SECRET_BOUND_ORIGIN_MESSAGE, secretBoundOriginsChanged } from './secret-bound-config.js';
 import { IntegrationOAuthAppService } from './oauth/integration-oauth-app.service.js';
 import { IntegrationOAuthService } from './oauth/integration-oauth.service.js';
 import { isAdminConsent, type OAuthClientCredentials } from './oauth/oauth-token.js';
@@ -382,9 +383,11 @@ export class IntegrationsService {
     input: UpdateIntegrationInput,
     meta: AuditMeta,
   ): Promise<IntegrationDto> {
+    // The driver never changes, so this read only picks the descriptor;
+    // everything that is compared or validated is read again under the lock.
     const existing = await this.prisma.integration.findUnique({
       where: { id },
-      include: { secret: true },
+      select: { driver: true },
     });
     if (!existing) throw new NotFoundException(`Integration ${id} not found`);
     const descriptor = this.drivers.describe(existing.driver);
@@ -392,22 +395,26 @@ export class IntegrationsService {
 
     if (input.config) {
       this.validateDriverPayload(descriptor, input.config, input.secret);
-      this.validateDriverConfiguration(existing.driver, input.config, input.secret);
     } else if (input.secret) {
       this.validateDriverPayload(descriptor, null, input.secret);
-      this.validateDriverConfiguration(existing.driver, null, input.secret);
     }
 
-    const before = {
-      name: existing.name,
-      status: existing.status,
-      config: existing.config,
-      syncCron: existing.syncCron,
-      hasSecret: Boolean(existing.secret),
-    };
-
     let secretMutated = false;
-    await this.prisma.$transaction(async (tx) => {
+    const before = await this.prisma.$transaction(async (tx) => {
+      // Lock first, then read, validate and write: two concurrent saves run
+      // one after the other, so a save can never combine the host of one
+      // request with the credentials of the other (secretBoundConfigKeys).
+      await tx.$executeRaw`SELECT id FROM integrations WHERE id = ${id}::uuid FOR UPDATE`;
+      const saved = await tx.integration.findUnique({
+        where: { id },
+        include: { secret: true },
+      });
+      if (!saved) throw new NotFoundException(`Integration ${id} not found`);
+      // A name/status/schedule-only save keeps config and secret as they are.
+      if (input.config || input.secret || input.clearSecret) {
+        this.validateEffectiveState(descriptor, saved, input);
+      }
+
       await tx.integration.update({
         where: { id },
         data: {
@@ -435,6 +442,13 @@ export class IntegrationsService {
         });
         secretMutated = true;
       }
+      return {
+        name: saved.name,
+        status: saved.status,
+        config: saved.config,
+        syncCron: saved.syncCron,
+        hasSecret: Boolean(saved.secret),
+      };
     });
 
     const fresh = await this.get(id);
@@ -620,34 +634,81 @@ export class IntegrationsService {
     /** Non-secret marker of the secret row and OAuth app; see `IntegrationContext.credentialVersion`. */
     credentialVersion: string;
   }> {
-    const row = await this.prisma.integration.findUnique({
-      where: { id },
-      include: { secret: true },
-    });
+    const row = await this.readCredentialSnapshot(id);
     if (!row) throw new NotFoundException(`Integration ${id} not found`);
     const oauth = this.drivers.has(row.driver) ? this.drivers.describe(row.driver).oauth : undefined;
     if (oauth) return this.loadConnectionContext(row, oauth, scope);
-    if (!row.secret) {
+    const saved = this.decodeSavedCredentials(row);
+    if (!saved.secret) {
       throw new BadRequestException('Integration has no credential bundle configured.');
     }
-    let secret: Record<string, unknown>;
-    try {
-      secret = this.decryptJsonObject(row.secret.ciphertext, integrationSecretAad(row.id));
-    } catch (e) {
-      this.logger.error(
-        { err: (e as Error).message, integrationId: id },
-        'failed to decrypt integration secret',
-      );
-      throw new ConflictException(
-        'Stored integration secret could not be decrypted (key rotated?).',
-      );
-    }
-
     return {
       integrationId: row.id,
       driver: row.driver,
-      config: (row.config ?? {}) as Record<string, unknown>,
-      secret,
+      config: saved.config,
+      secret: saved.secret,
+      credentialVersion: saved.credentialVersion,
+    };
+  }
+
+  /**
+   * The saved config and secret of a non-OAuth integration, from one
+   * snapshot (see readCredentialSnapshot). `secret` is null when none is
+   * saved and the driver needs one; a driver whose config needs no secret
+   * (`requiresSecret` false) gets `{}`. For the Custom API Test route,
+   * which compares a draft against the saved state.
+   */
+  async loadSavedCredentials(id: string): Promise<{
+    integrationId: string;
+    driver: string;
+    config: Record<string, unknown>;
+    secret: Record<string, unknown> | null;
+    credentialVersion: string;
+  }> {
+    const row = await this.readCredentialSnapshot(id);
+    if (!row) throw new NotFoundException(`Integration ${id} not found`);
+    if (this.drivers.has(row.driver) && this.drivers.describe(row.driver).oauth) {
+      throw new BadRequestException('This integration connects with OAuth.');
+    }
+    return { integrationId: row.id, driver: row.driver, ...this.decodeSavedCredentials(row) };
+  }
+
+  /**
+   * Reads the integration row and its secret row as one consistent pair.
+   * Prisma loads `include` relations with a second SQL query, so outside a
+   * transaction a concurrent save can commit between the two and pair the
+   * old config (host A) with the new secret (for host B). Repeatable read
+   * gives both queries one snapshot. The transaction holds no locks and
+   * ends before the caller decrypts or sends anything.
+   */
+  private readCredentialSnapshot(id: string) {
+    return this.prisma.$transaction(
+      (tx) => tx.integration.findUnique({ where: { id }, include: { secret: true } }),
+      { isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead },
+    );
+  }
+
+  private decodeSavedCredentials(row: {
+    id: string;
+    driver: string;
+    config: unknown;
+    secret: { id: string; ciphertext: string; updatedAt: Date } | null;
+  }): { config: Record<string, unknown>; secret: Record<string, unknown> | null; credentialVersion: string } {
+    const config = (row.config ?? {}) as Record<string, unknown>;
+    if (!row.secret) {
+      // A driver whose config needs no credentials (Custom API with no
+      // authentication) runs with an empty bundle; every other driver
+      // keeps refusing to run without one.
+      const driver = this.drivers.has(row.driver) && this.drivers.kindOf(row.driver) === 'pull'
+        ? this.drivers.get(row.driver)
+        : null;
+      return driver?.requiresSecret?.(config) === false
+        ? { config, secret: {}, credentialVersion: 'no-secret|no-app' }
+        : { config, secret: null, credentialVersion: 'no-secret|no-app' };
+    }
+    return {
+      config,
+      secret: this.decryptSavedSecret(row.id, row.secret.ciphertext),
       credentialVersion: `${row.secret.id}@${row.secret.updatedAt.toISOString()}|no-app`,
     };
   }
@@ -1582,6 +1643,61 @@ export class IntegrationsService {
   ): void {
     if (this.drivers.kindOf(driverKey) !== 'pull') return;
     this.drivers.get(driverKey).validateConfiguration?.(config, secret);
+  }
+
+  /**
+   * Update-time checks against the state locked in the caller's
+   * transaction: a secret-bound URL may move to a new origin only with a
+   * full new secret, and the driver validates the effective pair (the
+   * request's config/secret where it replaces them, the saved ones where
+   * it does not; a cleared secret is null). The new secret replaces the
+   * bundle whole; it is never merged with the saved one.
+   */
+  private validateEffectiveState(
+    descriptor: DriverDescriptor,
+    saved: { id: string; driver: string; config: unknown; secret: { ciphertext: string } | null },
+    input: UpdateIntegrationInput,
+  ): void {
+    const savedConfig = (saved.config ?? {}) as Record<string, unknown>;
+    const effectiveConfig = input.config ?? savedConfig;
+    let savedSecret: Record<string, unknown> | null | undefined;
+    const readSavedSecret = () => {
+      if (savedSecret === undefined) {
+        savedSecret = saved.secret ? this.decryptSavedSecret(saved.id, saved.secret.ciphertext) : null;
+      }
+      return savedSecret;
+    };
+    if (
+      !input.secret &&
+      !input.clearSecret &&
+      secretBoundOriginsChanged(descriptor, savedConfig, effectiveConfig) &&
+      // With no saved credential values there is nothing to send to the new host.
+      Object.keys(readSavedSecret() ?? {}).length > 0
+    ) {
+      throw new BadRequestException(SECRET_BOUND_ORIGIN_MESSAGE);
+    }
+    if (this.drivers.kindOf(saved.driver) !== 'pull') return;
+    const driver = this.drivers.get(saved.driver);
+    if (!driver.validateConfiguration) return;
+    let effectiveSecret: Record<string, unknown> | null = null;
+    if (input.clearSecret) effectiveSecret = null;
+    else if (input.secret) effectiveSecret = input.secret;
+    else effectiveSecret = readSavedSecret();
+    driver.validateConfiguration(effectiveConfig, effectiveSecret);
+  }
+
+  private decryptSavedSecret(integrationId: string, ciphertext: string): Record<string, unknown> {
+    try {
+      return this.decryptJsonObject(ciphertext, integrationSecretAad(integrationId));
+    } catch (e) {
+      this.logger.error(
+        { err: (e as Error).message, integrationId },
+        'failed to decrypt integration secret',
+      );
+      throw new ConflictException(
+        'Stored integration secret could not be decrypted (key rotated?).',
+      );
+    }
   }
 
   private resourceInclude() {

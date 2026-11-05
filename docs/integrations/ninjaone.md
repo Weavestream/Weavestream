@@ -131,6 +131,8 @@ Source: NinjaOne's [How to Set Up an API Server in NinjaOne](https://www.ninjaon
 5. Select **Create**. New integrations start paused.
 6. On **Credentials & schedule**, press **Test connection**, then **Check setup**.
 
+If you change the **API Base URL** to a different host, enter the Client ID and Client Secret again in the same save. Weavestream refuses to send saved credentials to a new host.
+
 ### Step 4: Map each NinjaOne organization to a company
 
 Open **Organizations** and map each NinjaOne organization to its Weavestream company. Organizations that you do not map are not synced.

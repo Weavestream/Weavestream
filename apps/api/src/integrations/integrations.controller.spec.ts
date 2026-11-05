@@ -234,9 +234,12 @@ describe('IntegrationsService secret boundary', () => {
       _count: { companyMappings: 0 },
     });
     const tx = {
+      // update() locks the row and reads it again inside the transaction.
+      $executeRaw: jest.fn(async () => 0),
       integration: {
         create: jest.fn().mockResolvedValue(row()),
         update: jest.fn().mockResolvedValue(row()),
+        findUnique: jest.fn(async () => row()),
       },
       integrationResource: { create: jest.fn() },
       integrationSecret: {

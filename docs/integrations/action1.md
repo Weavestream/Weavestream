@@ -89,6 +89,8 @@ Source: the host table in Action1's [PSAction1 module](https://github.com/Action
 5. Select **Create**. New integrations start paused.
 6. On **Credentials & schedule**, press **Test connection**, then **Check setup**.
 
+If you change the **API Base URL** to a different host, enter the Client ID and Client Secret again in the same save. Weavestream refuses to send saved credentials to a new host.
+
 ### Step 4: Map each Action1 organization to a company
 
 Open **Organizations** and map each Action1 organization to its Weavestream company. If an organization is missing, check that the role from step 1 covers it.

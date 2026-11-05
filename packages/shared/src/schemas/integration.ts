@@ -556,6 +556,13 @@ export const driverDescriptorSchema = z
   oauth: driverOAuthDescriptorSchema.optional(),
   /** Optional step-by-step provider setup guide rendered in the UI. */
   setupGuide: setupGuideSchema.optional(),
+  /**
+   * Dotted `config` keys that hold a URL the stored secret is sent to
+   * (e.g. `baseUrl`, `auth.tokenUrl`). A save that moves any of them to a
+   * new origin must carry a full new secret, so a stored key is never sent
+   * to a host it was not entered for. Absent: no binding.
+   */
+  secretBoundConfigKeys: z.array(z.string().min(1).max(128)).max(8).optional(),
   /** Driver capabilities surfaced to the UI. */
   capabilities: z.object({
     /**
@@ -592,6 +599,12 @@ export const driverDescriptorSchema = z
      * provide.
      */
     reconstructionCompleteness: z.boolean().default(false),
+    /**
+     * The driver's config is an API definition (Custom API), edited with
+     * the definition editor instead of `DriverFieldsEditor`. The UI reads
+     * this flag and never checks a driver key. Absent means false.
+     */
+    apiDefinition: z.boolean().optional(),
   }),
   })
   .superRefine((driver, ctx) => {

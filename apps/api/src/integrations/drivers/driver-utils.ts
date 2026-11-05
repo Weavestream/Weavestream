@@ -21,6 +21,13 @@ export interface FetchWithRetryOpts {
   correlationId: string;
   serviceName: string;
   /**
+   * Keep `timeoutMs` running until the body is read, not only the headers
+   * (see SafeFetchOptions). Set it for hosts an operator chooses freely.
+   */
+  timeoutCoversBody?: boolean;
+  /** Body size cap; absent keeps the safeFetch default. */
+  maxResponseBytes?: number;
+  /**
    * Space every attempt (retries included) at least `minIntervalMs` apart
    * across all callers that share `key`, so a provider that rate-limits
    * per account is never sent a burst.
@@ -105,6 +112,8 @@ export async function fetchWithRetry(
         body: opts.body,
         redirect: opts.redirect ?? 'error',
         timeoutMs: opts.timeoutMs,
+        ...(opts.timeoutCoversBody ? { timeoutCoversBody: true } : {}),
+        ...(opts.maxResponseBytes !== undefined ? { maxResponseBytes: opts.maxResponseBytes } : {}),
       });
       if (res.status === 429) {
         const retryAfterRaw = res.headers.get('Retry-After');

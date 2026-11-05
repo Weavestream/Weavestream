@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { IntegrationsController } from './integrations.controller.js';
+import { CustomApiTestController } from './custom-api-test.controller.js';
 import { IntegrationsCoreModule } from './integrations-core.module.js';
 import { IntegrationSyncQueueRegistrar } from './integration-sync-queue.registrar.js';
 import { CloudflareListsController } from './cloudflare/cloudflare-lists.controller.js';
@@ -33,6 +34,7 @@ import { IntegrationPriorityService } from './integration-priority.service.js';
   imports: [IntegrationsCoreModule, AssetLayoutsModule, AssetsModule],
   controllers: [
     IntegrationsController,
+    CustomApiTestController,
     CloudflareListsController,
     TicketsGlobalController,
     IntegrationOAuthController,

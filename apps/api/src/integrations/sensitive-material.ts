@@ -66,6 +66,16 @@ export function scanSensitiveMaterial(root: unknown): SensitiveMaterialScan {
   return 'safe';
 }
 
+/**
+ * True for a property name that names a credential (`password`,
+ * `apiToken`, `client_secret`, ...), with the same normalization the scan
+ * applies to keys. For a value read out of its object (a Test sample), so
+ * the key context is not lost.
+ */
+export function isSensitiveKey(key: string): boolean {
+  return sensitiveKeyPattern.test(key.replace(/[^a-z0-9]/gi, '').toLowerCase());
+}
+
 export function containsSensitiveMaterial(value: unknown): boolean {
   return scanSensitiveMaterial(value) !== 'safe';
 }

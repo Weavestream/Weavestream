@@ -30,6 +30,7 @@ export * from './markdown.js';
 export * from './article-patch.js';
 export * from './article-proposal.js';
 export * from './ip-match.js';
+export * from './custom-api-path.js';
 export * from './ipv6.js';
 export * from './tag-chips.js';
 export * from './internal-token.js';

@@ -187,6 +187,8 @@ export class Action1Driver implements IntegrationDriver {
       },
     ],
     setupGuide: ACTION1_SETUP_GUIDE,
+    // The key goes to baseUrl: moving it to a new host needs the key again.
+    secretBoundConfigKeys: ['baseUrl'],
     resources: [
       {
         key: 'records',

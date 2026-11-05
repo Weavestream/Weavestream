@@ -27,6 +27,8 @@ A deliberately narrower integration may omit a scope only when every resource th
 
 Use the public Breeze origin as **Breeze URL**, for example `https://breeze.example.com`. Do not add credentials, query parameters, fragments, or `/api/v1/partner-api` to the value. Weavestream validates and appends the allowlisted Partner API paths and sends the key only in `X-API-Key`; redirects do not receive the key. The Partner API surface (`/api/v1/partner-api/...`, introduced in the July 2026 Breeze release) must exist on the deployment — on an older Breeze every partner request 404s, so upgrade Breeze first.
 
+If you change the **Breeze URL** to a different host, enter the Partner API key again in the same save. Weavestream refuses to send a saved key to a new host.
+
 ### Private Breeze deployments
 
 Outbound integration requests use Weavestream's SSRF and DNS-rebinding guard. Private, loopback, link-local, metadata, multicast, and other non-public destinations are blocked by default. If Breeze is intentionally private, add only its required network ranges to `EGRESS_ALLOWED_PRIVATE_CIDRS`, restart the API and worker, and test the connection. Never disable the guard broadly. DNS is resolved and pinned for each request, and a redirect is revalidated rather than treated as an allowlist bypass.

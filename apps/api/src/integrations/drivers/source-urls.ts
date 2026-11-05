@@ -1,4 +1,5 @@
 import { action1EndpointUrl } from './action1/action1.sections.js';
+import { customApiRecordUrl } from './custom-api/custom-api.records.js';
 import { levelDeviceUrl } from './level/level.sections.js';
 import { ninjaoneDeviceUrl } from './ninjaone/ninjaone.sections.js';
 
@@ -13,6 +14,7 @@ type SourceUrlContext = { externalOrgId: string; resourceKey: string; sourceKind
  */
 const SOURCE_URLS: Readonly<Record<string, (sourceId: string, ctx: SourceUrlContext) => string | undefined>> = {
   action1: action1EndpointUrl,
+  'custom-api': customApiRecordUrl,
   level: levelDeviceUrl,
   ninjaone: ninjaoneDeviceUrl,
 };

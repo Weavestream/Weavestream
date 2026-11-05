@@ -183,6 +183,10 @@ export const AUDIT_ACTIONS = {
     secretUpdate: 'integration.secret.update',
     testConnection: 'integration.test_connection',
     setupCheck: 'integration.setup_check',
+    // Custom API definition Test (one page read). `after` carries the
+    // section, outcome, record count or HTTP status and the correlation id;
+    // never a value, a header or a secret. No entity id for a draft.
+    customApiTest: 'integration.custom_api.test',
     companyMappingCreate: 'integration.company_mapping.create',
     companyMappingUpdate: 'integration.company_mapping.update',
     companyMappingDelete: 'integration.company_mapping.delete',

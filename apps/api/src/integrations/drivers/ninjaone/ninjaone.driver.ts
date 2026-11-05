@@ -392,6 +392,8 @@ export class NinjaOneDriver implements IntegrationDriver {
       },
     ],
     setupGuide: NINJAONE_SETUP_GUIDE,
+    // The key goes to baseUrl: moving it to a new host needs the key again.
+    secretBoundConfigKeys: ['baseUrl'],
     resources: [
       // Primary resource — agented endpoints (workstations / servers
       // running the NinjaOne agent). Default match key suggestion is

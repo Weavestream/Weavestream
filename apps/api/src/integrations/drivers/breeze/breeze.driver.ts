@@ -226,6 +226,8 @@ export class BreezeDriver implements IntegrationDriver {
       },
     ],
     secretFields: [{ key: 'apiKey', label: 'Partner API key', kind: 'password', required: true }],
+    // The key goes to baseUrl: moving it to a new host needs the key again.
+    secretBoundConfigKeys: ['baseUrl'],
     resources: [
       resource('sites', 'Sites', 'asset', { sourceEndpoint: '/sites' }),
       resource('devices', 'Devices', 'asset', { sourceEndpoint: '/devices' }, ['sites']),

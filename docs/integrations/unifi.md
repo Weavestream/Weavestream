@@ -65,6 +65,8 @@ See Ubiquiti's [Site Manager API: Getting Started](https://developer.ui.com/site
 4. Select **Create**. New integrations start paused.
 5. On **Credentials & schedule**, press **Test connection**, then **Check setup**.
 
+If you change the **API Base URL** to a different host, enter the API key again in the same save. Weavestream refuses to send a saved key to a new host.
+
 ### Step 3: Map each UniFi console to a company
 
 Open **Organizations**. Each UniFi console (Site Manager calls it a host) that the key can see is listed. Map each one to its Weavestream company.

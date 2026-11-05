@@ -21,6 +21,7 @@ export * from './password-folder.js';
 export * from './password-generator.js';
 export * from './integration.js';
 export * from './integration-section.js';
+export * from './custom-api.js';
 export * from './alert.js';
 export * from './subnet.js';
 export * from './ip-rule.js';
