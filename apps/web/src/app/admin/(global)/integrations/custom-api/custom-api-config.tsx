@@ -1,7 +1,7 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
-import type { DriverDescriptor, IntegrationCompanyMappingDto, IntegrationDto } from '@weavestream/shared';
+import { useState, type ReactNode } from 'react';
+import type { IntegrationCompanyMappingDto, IntegrationDto } from '@weavestream/shared';
 import { saveBlob } from '../../../../../lib/api';
 import { Btn, Icon, Tag } from '../../../../../components/ui';
 import { DefinitionEditor } from './definition-editor';
@@ -24,7 +24,6 @@ import { CustomApiSecretInputs } from './secret-inputs';
  */
 export function CustomApiConfig({
   integration,
-  driver,
   mappings,
   draft,
   onDraftChange,
@@ -37,7 +36,6 @@ export function CustomApiConfig({
   testConnection,
 }: {
   integration: IntegrationDto;
-  driver: DriverDescriptor;
   mappings: IntegrationCompanyMappingDto[];
   draft: CustomApiDraft;
   onDraftChange: (next: CustomApiDraft) => void;
@@ -50,13 +48,6 @@ export function CustomApiConfig({
   testConnection: ReactNode;
 }) {
   const [importOpen, setImportOpen] = useState(false);
-  const standardFieldLabels = useMemo(
-    () =>
-      Object.fromEntries(
-        (driver.resources.find((r) => r.key === 'devices')?.standardFields ?? []).map((f) => [f.sourceField, f.label]),
-      ),
-    [driver],
-  );
   const savedMode = (draftFromConfig(integration.config).organizations as { mode?: string } | undefined)?.mode;
   const modeWarning =
     mappings.length > 0 && savedMode && savedMode !== draft.organizations.mode
@@ -151,7 +142,6 @@ export function CustomApiConfig({
         integrationId={integration.id}
         testSecret={testSecret}
         credentials={credentials}
-        standardFieldLabels={standardFieldLabels}
         modeWarning={modeWarning}
       />
       <ImportDefinitionDialog open={importOpen} onClose={() => setImportOpen(false)} onImport={onDraftChange} />

@@ -104,7 +104,7 @@ function api(overrides: Partial<CustomApiDefinitionInput> = {}): Record<string, 
     headers: [],
     organizations: { mode: 'single' },
     resources: {
-      devices: {
+      items: {
         enabled: true,
         request: { path: '/devices' },
         recordsPath: 'devices',

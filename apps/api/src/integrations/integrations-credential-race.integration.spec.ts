@@ -45,7 +45,7 @@ function definition(baseUrl: string) {
     auth: { method: 'bearer' },
     organizations: { mode: 'single' },
     resources: {
-      devices: { enabled: true, request: { path: '/devices' }, recordsPath: 'devices', idPath: 'id', namePath: 'name', matchPath: 'serial' },
+      items: { enabled: true, request: { path: '/devices' }, recordsPath: 'devices', idPath: 'id', namePath: 'name', matchPath: 'serial' },
     },
   }) as unknown as Record<string, unknown>;
 }
@@ -274,7 +274,7 @@ describeIfDb('Integration credential binding on PostgreSQL', () => {
         { values: { INTEGRATION_HTTP_TIMEOUT_MS: 5_000, INTEGRATION_HTTP_MAX_RETRIES: 0, INTEGRATION_HTTP_BACKOFF_MS: 1 } } as never,
         { log: jest.fn() } as never,
       );
-      const body = { definition: definition(HOST_A), section: 'devices' } as unknown as CustomApiTestRequest;
+      const body = { definition: definition(HOST_A), section: 'items' } as unknown as CustomApiTestRequest;
       const response = await controller.testSaved(ACTOR, id, body, { ip: '127.0.0.1', headers: {}, socket: {} } as never);
       expect(response.ok).toBe(true);
       expect(sent).toHaveLength(1);

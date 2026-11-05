@@ -24,8 +24,7 @@ const customApi = {
   configFields: [],
   secretFields: [{ key: 'token', label: 'Token', kind: 'password', required: false }],
   resources: [
-    { key: 'devices', standardFields: [{ sourceField: 'hostname', label: 'Hostname' }] },
-    { key: 'other_assets' },
+    { key: 'items' },
   ],
   capabilities: { kind: 'pull', apiDefinition: true },
 } as never;
@@ -37,8 +36,7 @@ const definition = {
   headers: [],
   organizations: { mode: 'single' },
   resources: {
-    devices: { enabled: true, request: { method: 'GET', path: '/devices', query: {} }, recordsPath: 'devices', idPath: 'id', namePath: 'name', matchPath: 'serial' },
-    other_assets: { enabled: false },
+    items: { enabled: true, request: { method: 'GET', path: '/devices', query: {} }, recordsPath: 'devices', idPath: 'id', namePath: 'name', matchPath: 'serial' },
   },
 };
 
@@ -167,10 +165,10 @@ describe('CredentialsTab with an API definition (Custom API)', () => {
   it('turns off Test connection while the definition has unsaved changes, because it checks the saved one', () => {
     renderTab();
     expect(screen.getByRole('button', { name: 'Test connection' })).toBeEnabled();
-    fireEvent.click(screen.getByLabelText(/Read other assets from this API/));
+    fireEvent.click(screen.getByLabelText(/Read items from this API/));
     expect(screen.getByRole('button', { name: 'Test connection' })).toBeDisabled();
     expect(screen.getByText(/Test connection checks the saved definition. Save changes first/)).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText(/Read other assets from this API/));
+    fireEvent.click(screen.getByLabelText(/Read items from this API/));
     expect(screen.getByRole('button', { name: 'Test connection' })).toBeEnabled();
     expect(screen.queryByText(/Test connection checks the saved definition/)).not.toBeInTheDocument();
   });
@@ -208,7 +206,7 @@ describe('CredentialsTab POST body (Custom API)', () => {
     ...definition,
     resources: {
       ...definition.resources,
-      devices: { ...definition.resources.devices, request: { method: 'POST', path: '/devices/search', query: {}, body } },
+      items: { ...definition.resources.items, request: { method: 'POST', path: '/devices/search', query: {}, body } },
     },
   });
 
@@ -232,7 +230,7 @@ describe('CredentialsTab POST body (Custom API)', () => {
     expect(body).toHaveValue('{ "all": false }');
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(apiFetch).toHaveBeenCalled());
-    expect(patchBody().config.resources.devices.request.body).toEqual({ all: false });
+    expect(patchBody().config.resources.items.request.body).toEqual({ all: false });
   });
 
   it('shows the imported body when one POST definition replaces another, and keeps it on later edits', async () => {
@@ -254,7 +252,7 @@ describe('CredentialsTab POST body (Custom API)', () => {
     expect(screen.getByLabelText('Body (JSON)')).toHaveValue(JSON.stringify({ fresh: 2 }, null, 2));
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(apiFetch).toHaveBeenCalled());
-    expect(patchBody().config.resources.devices.request.body).toEqual({ fresh: 2 });
+    expect(patchBody().config.resources.items.request.body).toEqual({ fresh: 2 });
   });
 });
 

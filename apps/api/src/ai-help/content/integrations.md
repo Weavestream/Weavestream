@@ -109,17 +109,18 @@ Under **Organizations**, each top-level Level group maps to one company; devices
 Use **Completeness** tab to track synchronized current, manually documented, secret blocked, missing, stale, and sync error states. Blank schedules default to every 15 minutes. See `docs/integrations/breeze.md` for details.
 
 ## Configure a Custom API integration
-<!-- aliases: custom api | generic api | json api | homegrown app | internal cmdb | api definition | import definition | export definition -->
+<!-- aliases: custom api | generic api | json api | homegrown app | internal cmdb | api definition | import definition | export definition | custom api items | items fields -->
 <!-- requires: integration.manage -->
 
-**Custom API** reads inventory from a JSON-over-HTTPS API that has no built-in integration. It is read-only.
+**Custom API** reads records from a JSON-over-HTTPS API that has no built-in integration. It is read-only. Its one resource, **Items**, holds the records of any kind (devices, users, licenses). One integration fills one asset layout.
 
 1. Open **Admin → Integrations** and select **New integration**.
 2. In **Driver**, pick **Custom API**. Enter a **Display name**, the **Base URL** (must start with https://), the authentication **Method**, and its credentials.
-3. Select **Create integration**. It starts paused with one organization and both resources turned off.
-4. On **Credentials & schedule**, complete the **API definition**: **Organizations** (**From an endpoint**, **From a field on each record**, or **One organization**), then **Devices**, **Other assets**, or both: the request, **Records path**, **Pages**, and the paths in each record.
+3. Select **Create integration**. It starts paused with one organization and **Items** turned off.
+4. On **Credentials & schedule**, complete the **API definition**: **Organizations** (**From an endpoint**, **From a field on each record**, or **One organization**), then **Items**: the request, **Records path**, **Pages**, the **Id path** and **Name path**, an optional **Match value path**, and the **Fields** (each with a key, label, path, and type).
 5. Select **Test** in each section. It shows the first records and the keys of the first record. Click a key to put its path in the path input you selected last. In endpoint mode, a resource **Test** needs an organization: pick one from the last Organizations test, or type its id.
-6. Select **Save changes**, map organizations on **Organizations**, and pick layouts on **Map layouts**.
+6. Select **Save changes** and map organizations on **Organizations**.
+7. On **Items fields**, turn on **Sync this resource on every run**, pick the **Target asset layout**, map **Name**, **Match key**, and each field to a layout field, and set the match keys.
 
 **Test connection** checks the saved definition, not the form. It is off while the definition or the credentials have unsaved changes; the **Test** button in each section uses the form.
 

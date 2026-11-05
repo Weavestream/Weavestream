@@ -17,7 +17,7 @@ A **Custom API** integration in **One organization** mode lists one organization
 <!-- aliases: resource fields | target layout | integration layout | devices layout | endpoints layout | enable resource -->
 <!-- requires: integration.manage -->
 
-Open the integration’s resource tab, such as **Endpoints fields**, **Agent devices fields**, **Devices fields**, or **Clients fields**.
+Open the integration’s resource tab, such as **Endpoints fields**, **Agent devices fields**, **Devices fields**, **Clients fields**, or **Items fields** (Custom API).
 
 1. Enable **Sync this resource on every run** if the resource should participate.
 2. Under **Target asset layout**, select the global layout into which that resource will write assets.

@@ -31,8 +31,7 @@ const ORG_MODES: Array<{ value: OrgMode; label: string; hint: string }> = [
 
 /**
  * The API definition editor (Credentials tab of a Custom API integration).
- * Sections: Connection, Authentication, Headers, Organizations, Devices,
- * Other assets. `credentials` renders the secret inputs after Headers,
+ * Sections: Connection, Authentication, Headers, Organizations, Items. `credentials` renders the secret inputs after Headers,
  * because secret headers add secret keys. Every value is validated with
  * the shared schema by the caller (`issues`).
  */
@@ -43,7 +42,6 @@ export function DefinitionEditor({
   integrationId,
   testSecret,
   credentials,
-  standardFieldLabels,
   modeWarning,
 }: {
   value: CustomApiDraft;
@@ -53,28 +51,27 @@ export function DefinitionEditor({
   /** The secret bundle a Test sends; omitted means the saved secret. */
   testSecret?: Record<string, string>;
   credentials: ReactNode;
-  standardFieldLabels: Record<string, string>;
   /** Shown under the organization mode, for example when mappings use the old mode. */
   modeWarning?: string | null;
 }) {
-  // A resource turned off keeps its settings for this session, so turning
-  // it back on does not lose the admin's paths.
-  const stash = useRef<Partial<Record<'devices' | 'other_assets', DraftResource>>>({});
+  // Items turned off keeps its settings for this session, so turning it
+  // back on does not lose the admin's paths.
+  const stash = useRef<DraftResource | null>(null);
   const [orgResult, setOrgResult] = useState<{ records: CustomApiTestRecord[]; keys: CustomApiTestKey[] } | null>(null);
   const testDisabledReason =
     issues.size > 0 ? 'Fix the problems in the definition, then test.' : null;
   const headers = value.headers ?? [];
   const orgs = value.organizations;
 
-  const setResource = (key: 'devices' | 'other_assets', next: DraftResource | { enabled: false }) =>
-    onChange({ ...value, resources: { ...value.resources, [key]: next } });
-  const toggleResource = (key: 'devices' | 'other_assets', enabled: boolean) => {
-    const current = value.resources[key];
+  const setItems = (next: DraftResource | { enabled: false }) =>
+    onChange({ ...value, resources: { ...value.resources, items: next } });
+  const toggleItems = (enabled: boolean) => {
+    const current = value.resources.items;
     if (enabled) {
-      setResource(key, stash.current[key] ?? (key === 'devices' ? emptyResource('devices') : emptyResource('other_assets')));
+      setItems(stash.current ?? emptyResource());
     } else {
-      if (current?.enabled) stash.current[key] = current;
-      setResource(key, { enabled: false });
+      if (current?.enabled) stash.current = current;
+      setItems({ enabled: false });
     }
   };
 
@@ -178,7 +175,7 @@ export function DefinitionEditor({
             </>
           )}
           {orgs.mode === 'field' && (
-            <p style={helpStyle}>Set the organization id path on each resource below. Test reads the first page of the first resource that has it.</p>
+            <p style={helpStyle}>Set the organization id path under Items below. Test reads the first page of Items.</p>
           )}
           {orgs.mode === 'single' && (
             <p style={helpStyle}>Every record belongs to one organization, “All records”. Map it to a company on the Organizations tab.</p>
@@ -193,22 +190,17 @@ export function DefinitionEditor({
           />
         </section>
 
-        {(['devices', 'other_assets'] as const).map((key) => (
-          <ResourceSection
-            key={key}
-            resourceKey={key}
-            value={(value.resources[key] ?? { enabled: false }) as DraftResource | { enabled: false }}
-            onToggle={(enabled) => toggleResource(key, enabled)}
-            onChange={(next) => setResource(key, next)}
-            issues={issues}
-            definition={value}
-            standardFieldLabels={standardFieldLabels}
-            organizations={orgResult?.records ?? []}
-            integrationId={integrationId}
-            testSecret={testSecret}
-            testDisabledReason={testDisabledReason}
-          />
-        ))}
+        <ResourceSection
+          value={(value.resources.items ?? { enabled: false }) as DraftResource | { enabled: false }}
+          onToggle={toggleItems}
+          onChange={setItems}
+          issues={issues}
+          definition={value}
+          organizations={orgResult?.records ?? []}
+          integrationId={integrationId}
+          testSecret={testSecret}
+          testDisabledReason={testDisabledReason}
+        />
       </div>
     </PathTargetProvider>
   );

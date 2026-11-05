@@ -1,18 +1,18 @@
 ---
 label: Custom API
 icon: plug
-description: Read inventory from any JSON-over-HTTPS API that has no built-in integration. You describe the API in a form; Weavestream syncs its records into assets.
+description: Read records from any JSON-over-HTTPS API that has no built-in integration. You describe the API in a form; Weavestream syncs its records into the asset layout you pick.
 ---
 
 # Custom API Integration
 
-**Custom API** reads inventory from a JSON API that has no built-in Weavestream integration: a homegrown app, a small RMM, an internal CMDB. You describe the API in a form: how to sign in, where the organizations are, where the records are, how pages work, and which path in each record holds each field. Weavestream then syncs those records like every other integration: company mapping, field mappings, **Map layouts**, **Differences**, priority, schedule, runs, and the read-only section on the asset page.
+**Custom API** reads records from a JSON API that has no built-in Weavestream integration: a homegrown app, a small RMM, an internal CMDB, the users of a mail server. You describe the API in a form: how to sign in, where the organizations are, where the records are, how pages work, and which path in each record holds each field. Weavestream then syncs those records like every other integration: company mapping, field mappings, priority, schedule, runs, and the read-only section on the asset page.
 
 The driver is **read-only** and **pull only**. Weavestream calls the API; the API never holds a Weavestream key.
 
 ## Overview & Features
 
-- **Two resources**: **Devices** (matched on serial number, with standard fields such as hostname and model) and **Other assets** (any other record type). Turn off a resource the API does not have.
+- **One resource, any kind of record**: **Items** are the records the API lists: devices, users, licenses, or anything else. You pick the asset layout they go into and map each field on the **Items fields** tab. One integration fills one layout; a second kind of record needs a second Custom API integration.
 - **Test as you go**: each section has a **Test** button. It reads the first page and shows the parsed records, the value each path found, and the keys of the first record. Click a key to put its path in the path input you selected last.
 - **Import and export**: a definition can be exported as JSON and imported on another instance. The file never holds a secret.
 - **Open in link**: an optional link template opens each record in the source app.
@@ -22,11 +22,11 @@ The driver is **read-only** and **pull only**. Weavestream calls the API; the AP
 
 1. Open **Admin → Integrations** and select **New integration**.
 2. In **Driver**, pick **Custom API**. Enter a **Display name**, the **Base URL**, and the **Method** of authentication, then its credentials.
-3. Select **Create integration**. The integration starts paused, with one organization ("All records") and both resources turned off.
-4. On **Credentials & schedule**, complete the **API definition**: **Organizations**, then **Devices**, **Other assets**, or both. Select **Test** in each section.
+3. Select **Create integration**. The integration starts paused, with one organization ("All records") and **Items** turned off.
+4. On **Credentials & schedule**, complete the **API definition**: **Organizations**, then **Items**. Select **Test** in each section.
 5. Select **Save changes**. **Test connection** checks the saved definition, so it is off while the form has unsaved changes.
 6. On **Organizations**, map each organization to a company.
-7. On **Map layouts**, pick the layout for each resource and the field to match on.
+7. On **Items fields**, turn on **Sync this resource on every run**, pick the **Target asset layout**, map each field to a layout field, and set the match keys.
 8. Select **Dry run**, then **Run sync now**. Set **Status** to Active for scheduled syncs.
 
 To start from a file, select **Import definition…** in the create dialog (or **Import definition** on the Credentials tab). The browser checks the file and lists each problem with its path. Nothing is saved until you select **Create integration** or **Save changes**. In the create dialog, an imported definition can be tested with the credentials you typed before you create it.
@@ -97,19 +97,18 @@ A next URL on another host or outside the Base URL path stops the run. A page, c
 
 A path is dotted keys with optional indexes: `data.items`, `system.serial`, `addresses[0].value`, `["odd key"].value`. No wildcards or filters. A path that finds an object or a list gives no value and a Test warning.
 
-### Devices and Other assets
+### Items
 
-| Field | Devices | Other assets |
-|---|---|---|
-| **Id path**, **Name path** | Required | Required |
-| Match | **Serial number path** (required) | **Match value path** (optional) |
-| **Standard fields** | Hostname, manufacturer, model, operating system, CPU, RAM, storage, MAC address, IP address, role (each optional) | — |
-| **Extra fields** (up to 64) | Shown in the section on the asset | Mapped on the resource's field mappings tab, and shown in the section |
-| **Open in link** | Optional HTTPS template with `{id}` | Same |
+| Field | Rules |
+|---|---|
+| **Id path**, **Name path** | Required |
+| **Match value path** | Optional. The value that links an item to an asset you already have, such as a serial number or an email address. |
+| **Fields** (up to 64) | Each has a **Key** (`agent_version`), a **Label**, a **Path**, and a **Type** (TEXT, NUMBER, BOOLEAN, DATE, DATETIME, URL, EMAIL, IP_ADDRESS). The keys `name` and `match_key` are used by Weavestream. |
+| **Open in link** | Optional HTTPS template with `{id}` |
 
-An extra field has a **Key** (`agent_version`), a **Label**, a **Path**, and a **Type** (TEXT, NUMBER, BOOLEAN, DATE, DATETIME, URL, EMAIL, IP_ADDRESS). One integration fills one kind of other asset; a second kind needs a second Custom API integration.
+On **Items fields**, the source fields are **Name**, **Match key** (when a match value path is set), and each field. Map them to the fields of the layout you picked. Each field also shows in the **Custom API** section on the asset.
 
-**Read devices from this API** (or other assets) says whether the API has such records. The resource tab still decides whether a run syncs the resource. A resource turned off in the definition is skipped with a warning, and its existing assets are left as they are.
+**Read items from this API** says whether the definition reads items. **Sync this resource on every run** on the **Items fields** tab still decides whether a run syncs them. When Items is turned off in the definition, a run skips it with a warning, and the existing assets are left as they are.
 
 ## Limits
 
@@ -117,7 +116,7 @@ An extra field has a **Key** (`agent_version`), a **Label**, a **Path**, and a *
 |---|---|
 | Definition size | 64 KiB |
 | Headers | 16 |
-| Extra fields per resource | 64 |
+| Fields | 64 |
 | Path length | 256 characters, 16 parts |
 | Records per page | 10,000 |
 | Records in memory (organization from a field) | 200,000 per resource |
@@ -143,7 +142,7 @@ Test samples whose key or value looks like a secret are shown as `••••`.
     "pagination": { "style": "none" }
   },
   "resources": {
-    "devices": {
+    "items": {
       "enabled": true,
       "request": { "method": "GET", "path": "/api/v1/devices", "query": { "group": "{orgId}", "cursor": "{cursor}" } },
       "recordsPath": "devices",
@@ -151,11 +150,14 @@ Test samples whose key or value looks like a secret are shown as `••••`.
       "idPath": "id",
       "namePath": "name",
       "matchPath": "system.serial",
-      "standardFields": { "hostname": "hostname", "model": "system.model", "ip_address": "system.privateIp" },
-      "extraFields": [{ "key": "last_contact", "label": "Last contact", "path": "lastContactAt", "type": "DATETIME" }],
+      "fields": [
+        { "key": "hostname", "label": "Hostname", "path": "hostname", "type": "TEXT" },
+        { "key": "model", "label": "Model", "path": "system.model", "type": "TEXT" },
+        { "key": "ip_address", "label": "IP address", "path": "system.privateIp", "type": "IP_ADDRESS" },
+        { "key": "last_contact", "label": "Last contact", "path": "lastContactAt", "type": "DATETIME" }
+      ],
       "recordUrl": "https://inventory.example.com/devices/{id}"
-    },
-    "other_assets": { "enabled": false }
+    }
   }
 }
 ```
@@ -169,8 +171,7 @@ Test samples whose key or value looks like a secret are shown as `••••`.
   "auth": { "method": "header", "headerName": "X-API-Key" },
   "organizations": { "mode": "single" },
   "resources": {
-    "devices": { "enabled": false },
-    "other_assets": {
+    "items": {
       "enabled": true,
       "request": { "method": "GET", "path": "/items", "query": { "page": "{page}", "per_page": "{limit}" } },
       "recordsPath": "data",
@@ -178,7 +179,7 @@ Test samples whose key or value looks like a secret are shown as `••••`.
       "idPath": "id",
       "namePath": "title",
       "matchPath": "assetTag",
-      "extraFields": [
+      "fields": [
         { "key": "location", "label": "Location", "path": "location.name", "type": "TEXT" },
         { "key": "purchased", "label": "Purchased", "path": "purchaseDate", "type": "DATE" }
       ]

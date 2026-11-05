@@ -314,7 +314,6 @@ export function CredentialsTab({
       {driver && plan && (
         <CustomApiConfig
           integration={integration}
-          driver={driver}
           mappings={mappings}
           draft={draftFromConfig(config)}
           onDraftChange={(next: CustomApiDraft) => setConfig(next as unknown as Record<string, unknown>)}

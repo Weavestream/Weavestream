@@ -2,8 +2,7 @@
 
 import { useState } from 'react';
 import {
-  CUSTOM_API_DEVICE_STANDARD_FIELDS,
-  CUSTOM_API_EXTRA_FIELD_TYPES,
+  CUSTOM_API_FIELD_TYPES,
   CUSTOM_API_LIMITS,
   type CustomApiTestKey,
   type CustomApiTestRecord,
@@ -11,8 +10,7 @@ import {
 import { Btn, CheckboxOption, Field, Icon, Input, Select } from '../../../../../components/ui';
 import {
   type CustomApiDraft,
-  type DraftDevices,
-  type DraftExtraField,
+  type DraftField,
   type DraftIssues,
   type DraftResource,
 } from './definition-draft';
@@ -20,49 +18,28 @@ import { PathInput, sampleFor } from './path-input';
 import { PaginationFields, RequestFields, rowStyle, subLabelStyle } from './request-fields';
 import { TestOrgPicker, TestPanel } from './test-panel';
 
-type ResourceKey = 'devices' | 'other_assets';
-
-const COPY: Record<ResourceKey, { title: string; toggle: string; matchLabel: string; matchHelp: string }> = {
-  devices: {
-    title: 'Devices',
-    toggle: 'Read devices from this API',
-    matchLabel: 'Serial number path',
-    matchHelp: 'Devices match existing assets by serial number.',
-  },
-  other_assets: {
-    title: 'Other assets',
-    toggle: 'Read other assets from this API',
-    matchLabel: 'Match value path (optional)',
-    matchHelp: 'Records match existing assets by this value.',
-  },
-};
-
 /**
- * One resource of the definition: on/off, request, paths and the Open in
- * link, with its own **Test**. Turning a resource off here means "the API
- * has no such records"; the resource tab still decides whether a run
- * syncs it.
+ * Items, the one resource of the definition: on/off, request, paths, the
+ * fields and the Open in link, with its own **Test**. The admin maps the
+ * fields to any asset layout on the Items fields tab; nothing here is
+ * specific to a record type.
  */
 export function ResourceSection({
-  resourceKey,
   value,
   onToggle,
   onChange,
   issues,
   definition,
-  standardFieldLabels,
   organizations,
   integrationId,
   testSecret,
   testDisabledReason,
 }: {
-  resourceKey: ResourceKey;
   value: DraftResource | { enabled: false };
   onToggle: (enabled: boolean) => void;
   onChange: (next: DraftResource) => void;
   issues: DraftIssues;
   definition: CustomApiDraft;
-  standardFieldLabels: Record<string, string>;
   /** The last Organizations Test result, for the organization picker. */
   organizations: CustomApiTestRecord[];
   integrationId: string | null;
@@ -71,35 +48,30 @@ export function ResourceSection({
 }) {
   const [keys, setKeys] = useState<CustomApiTestKey[] | undefined>(undefined);
   const [orgId, setOrgId] = useState('');
-  const copy = COPY[resourceKey];
-  const id = `ca-${resourceKey}`;
-  const at = `resources.${resourceKey}`;
+  const id = 'ca-items';
+  const at = 'resources.items';
   const mode = definition.organizations.mode;
 
   return (
     <section style={sectionStyle} aria-labelledby={`${id}-title`}>
       <h4 id={`${id}-title`} style={headingStyle}>
-        {copy.title}
+        Items
       </h4>
       <CheckboxOption
         checked={value.enabled}
         onChange={onToggle}
-        label={copy.toggle}
-        hint="Off: the API has no such records. The resource tab still decides whether a run syncs this resource."
+        label="Read items from this API"
+        hint="The records the API lists, of any kind. You pick their asset layout and map each field on the Items fields tab."
       />
       {value.enabled && (
         <EnabledResource
           id={id}
           at={at}
-          resourceKey={resourceKey}
           value={value}
           onChange={onChange}
           issues={issues}
           mode={mode}
           keys={keys}
-          standardFieldLabels={standardFieldLabels}
-          matchLabel={copy.matchLabel}
-          matchHelp={copy.matchHelp}
         />
       )}
       {value.enabled && (
@@ -110,7 +82,7 @@ export function ResourceSection({
           <TestPanel
             integrationId={integrationId}
             definition={definition}
-            section={resourceKey}
+            section="items"
             secret={testSecret}
             orgId={mode === 'endpoint' ? orgId.trim() || undefined : undefined}
             disabledReason={
@@ -128,27 +100,19 @@ export function ResourceSection({
 function EnabledResource({
   id,
   at,
-  resourceKey,
   value,
   onChange,
   issues,
   mode,
   keys,
-  standardFieldLabels,
-  matchLabel,
-  matchHelp,
 }: {
   id: string;
   at: string;
-  resourceKey: ResourceKey;
   value: DraftResource;
   onChange: (next: DraftResource) => void;
   issues: DraftIssues;
   mode: CustomApiDraft['organizations']['mode'];
   keys: CustomApiTestKey[] | undefined;
-  standardFieldLabels: Record<string, string>;
-  matchLabel: string;
-  matchHelp: string;
 }) {
   const path = (key: string, label: string, current: string | undefined, set: (next: string) => void, help?: string) => (
     <PathInput
@@ -161,10 +125,8 @@ function EnabledResource({
       onChange={set}
     />
   );
-  // An imported definition may leave out `standardFields` (its default is {}).
-  const standard: Partial<Record<string, string>> = (value as DraftDevices).standardFields ?? {};
-  const extraFields = value.extraFields ?? [];
-  const setExtra = (next: DraftExtraField[]) => onChange({ ...value, extraFields: next });
+  const fields = value.fields ?? [];
+  const setFields = (next: DraftField[]) => onChange({ ...value, fields: next });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -194,7 +156,13 @@ function EnabledResource({
       <div style={gridStyle}>
         {path('idPath', 'Id path', value.idPath, (idPath) => onChange({ ...value, idPath }))}
         {path('namePath', 'Name path', value.namePath, (namePath) => onChange({ ...value, namePath }))}
-        {path('matchPath', matchLabel, value.matchPath, (matchPath) => onChange({ ...value, matchPath }), matchHelp)}
+        {path(
+          'matchPath',
+          'Match value path (optional)',
+          value.matchPath,
+          (matchPath) => onChange({ ...value, matchPath }),
+          'Items match existing assets by this value. Pick the layout field it matches on the Items fields tab.',
+        )}
         {mode !== 'single' &&
           path(
             'orgIdPath',
@@ -210,45 +178,25 @@ function EnabledResource({
             onChange({ ...value, orgNamePath }),
           )}
       </div>
-      {resourceKey === 'devices' && (
-        <>
-          <span style={subLabelStyle}>Standard fields (optional)</span>
-          <div style={gridStyle}>
-            {CUSTOM_API_DEVICE_STANDARD_FIELDS.map((field) => (
-              <PathInput
-                key={field}
-                id={`${id}-std-${field}`}
-                label={standardFieldLabels[field] ?? field}
-                value={standard[field] ?? ''}
-                error={issues.get(`${at}.standardFields.${field}`)}
-                sample={sampleFor(keys, standard[field] ?? '')}
-                onChange={(next) => onChange({ ...value, standardFields: { ...standard, [field]: next } } as DraftDevices)}
-              />
-            ))}
-          </div>
-        </>
-      )}
-      <span style={subLabelStyle}>
-        {resourceKey === 'devices' ? 'Extra fields (shown on the asset)' : 'Extra fields (mapped on the field mappings tab)'}
-      </span>
-      {extraFields.map((field, index) => (
+      <span style={subLabelStyle}>Fields (mapped on the Items fields tab)</span>
+      {fields.map((field, index) => (
         <div key={index} style={{ ...rowStyle, paddingBottom: 8, borderBottom: '1px solid var(--line)' }}>
-          <Field label="Key" htmlFor={`${id}-x${index}-key`} error={issues.get(`${at}.extraFields.${index}.key`)} style={{ flex: '1 1 140px' }}>
+          <Field label="Key" htmlFor={`${id}-x${index}-key`} error={issues.get(`${at}.fields.${index}.key`)} style={{ flex: '1 1 140px' }}>
             <Input
               id={`${id}-x${index}-key`}
               value={field.key}
               placeholder="agent_version"
               autoComplete="off"
               style={{ fontFamily: 'var(--font-mono)' }}
-              onChange={(e) => setExtra(extraFields.map((f, i) => (i === index ? { ...f, key: e.target.value } : f)))}
+              onChange={(e) => setFields(fields.map((f, i) => (i === index ? { ...f, key: e.target.value } : f)))}
             />
           </Field>
-          <Field label="Label" htmlFor={`${id}-x${index}-label`} error={issues.get(`${at}.extraFields.${index}.label`)} style={{ flex: '1 1 140px' }}>
+          <Field label="Label" htmlFor={`${id}-x${index}-label`} error={issues.get(`${at}.fields.${index}.label`)} style={{ flex: '1 1 140px' }}>
             <Input
               id={`${id}-x${index}-label`}
               value={field.label}
               autoComplete="off"
-              onChange={(e) => setExtra(extraFields.map((f, i) => (i === index ? { ...f, label: e.target.value } : f)))}
+              onChange={(e) => setFields(fields.map((f, i) => (i === index ? { ...f, label: e.target.value } : f)))}
             />
           </Field>
           <div style={{ flex: '2 1 180px' }}>
@@ -256,9 +204,9 @@ function EnabledResource({
               id={`${id}-x${index}-path`}
               label="Path"
               value={field.path}
-              error={issues.get(`${at}.extraFields.${index}.path`)}
+              error={issues.get(`${at}.fields.${index}.path`)}
               sample={sampleFor(keys, field.path)}
-              onChange={(next) => setExtra(extraFields.map((f, i) => (i === index ? { ...f, path: next } : f)))}
+              onChange={(next) => setFields(fields.map((f, i) => (i === index ? { ...f, path: next } : f)))}
             />
           </div>
           <Field label="Type" htmlFor={`${id}-x${index}-type`} style={{ flex: '0 1 130px' }}>
@@ -266,10 +214,10 @@ function EnabledResource({
               id={`${id}-x${index}-type`}
               value={field.type}
               onChange={(e) =>
-                setExtra(extraFields.map((f, i) => (i === index ? { ...f, type: e.target.value as DraftExtraField['type'] } : f)))
+                setFields(fields.map((f, i) => (i === index ? { ...f, type: e.target.value as DraftField['type'] } : f)))
               }
             >
-              {CUSTOM_API_EXTRA_FIELD_TYPES.map((type) => (
+              {CUSTOM_API_FIELD_TYPES.map((type) => (
                 <option key={type} value={type}>
                   {type}
                 </option>
@@ -280,9 +228,9 @@ function EnabledResource({
             kind="ghost"
             size="sm"
             icon={Icon.trash}
-            aria-label={`Remove extra field ${index + 1}`}
+            aria-label={`Remove field ${index + 1}`}
             style={{ marginTop: 22 }}
-            onClick={() => setExtra(extraFields.filter((_, i) => i !== index))}
+            onClick={() => setFields(fields.filter((_, i) => i !== index))}
           />
         </div>
       ))}
@@ -291,10 +239,10 @@ function EnabledResource({
           kind="ghost"
           size="sm"
           icon={Icon.plus}
-          disabled={extraFields.length >= CUSTOM_API_LIMITS.extraFieldsPerResource}
-          onClick={() => setExtra([...extraFields, { key: '', label: '', path: '', type: 'TEXT' }])}
+          disabled={fields.length >= CUSTOM_API_LIMITS.fieldsPerResource}
+          onClick={() => setFields([...fields, { key: '', label: '', path: '', type: 'TEXT' }])}
         >
-          Add extra field
+          Add field
         </Btn>
       </div>
       <Field

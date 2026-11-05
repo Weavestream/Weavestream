@@ -298,7 +298,8 @@ export class IntegrationSyncRunnerService {
     const driver = this.drivers.get(mapping.integration.driver);
     const claimUnboundMatches = driver.descriptor?.resources?.some(
       (candidate) =>
-        candidate.key === resource.resourceKey && candidate.matchSuggestions !== undefined,
+        candidate.key === resource.resourceKey &&
+        (candidate.matchSuggestions !== undefined || candidate.matchFirst === true),
     ) ?? false;
     // Opt-in difference tracking: resources that fill standard layout fields.
     const recordFieldDiffs = driver.descriptor?.resources?.some(

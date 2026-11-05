@@ -26,7 +26,7 @@ describe('Custom API draft helpers', () => {
   it('starts a new integration with a definition the shared schema accepts', () => {
     const draft = newDefinition('https://inventory.example.com', { method: 'bearer' });
     expect(customApiDefinitionSchema.safeParse(cleanDefinition(draft)).success).toBe(true);
-    expect(draft).toMatchObject({ version: 1, organizations: { mode: 'single' }, resources: { devices: { enabled: false }, other_assets: { enabled: false } } });
+    expect(draft).toMatchObject({ version: 1, organizations: { mode: 'single' }, resources: { items: { enabled: false } } });
     expect(issuesOf(draft).size).toBe(0);
   });
 
@@ -34,33 +34,31 @@ describe('Custom API draft helpers', () => {
     const draft = saved({
       headers: [{ name: 'X-Empty', value: '' }],
       resources: {
-        devices: { ...emptyResource('devices'), request: { method: 'GET', path: '/d', query: { q: '' } }, idPath: 'id', namePath: 'name', matchPath: 'serial' },
-        other_assets: { enabled: false },
+        items: { ...emptyResource(), request: { method: 'GET', path: '/d', query: { q: '' } }, idPath: 'id', namePath: 'name', matchPath: 'serial' },
       },
     });
-    const clean = cleanDefinition(draft) as { headers: unknown[]; resources: { devices: Record<string, unknown> } };
+    const clean = cleanDefinition(draft) as { headers: unknown[]; resources: { items: Record<string, unknown> } };
     expect(clean.headers).toEqual([{ name: 'X-Empty', value: '' }]);
-    expect(clean.resources.devices.request).toEqual({ method: 'GET', path: '/d', query: { q: '' } });
-    expect(clean.resources.devices.recordsPath).toBe('');
-    expect(clean.resources.devices).not.toHaveProperty('orgIdPath');
-    expect(clean.resources.devices).not.toHaveProperty('recordUrl');
+    expect(clean.resources.items.request).toEqual({ method: 'GET', path: '/d', query: { q: '' } });
+    expect(clean.resources.items.recordsPath).toBe('');
+    expect(clean.resources.items).not.toHaveProperty('orgIdPath');
+    expect(clean.resources.items).not.toHaveProperty('recordUrl');
     expect(issuesOf(draft).size).toBe(0);
   });
 
   it('refuses a POST body that is not valid JSON at the body path', () => {
     const draft = saved({
       resources: {
-        devices: {
-          ...emptyResource('devices'),
+        items: {
+          ...emptyResource(),
           request: { method: 'POST', path: '/d', query: {}, body: new InvalidJsonBody('{ nope') },
           idPath: 'id',
           namePath: 'name',
           matchPath: 'serial',
         },
-        other_assets: { enabled: false },
       },
     });
-    expect(issuesOf(draft).get('resources.devices.request.body')).toBe('The body must be plain JSON.');
+    expect(issuesOf(draft).get('resources.items.request.body')).toBe('The body must be plain JSON.');
   });
 
   it('keys issues by their schema path', () => {
@@ -103,8 +101,8 @@ describe('Custom API draft helpers', () => {
     expect(createTestSection(saved())).toBeNull();
     expect(createTestSection(saved({ organizations: { mode: 'field' } }))).toBe('organizations');
     expect(
-      createTestSection(saved({ resources: { devices: { enabled: false }, other_assets: emptyResource('other_assets') } })),
-    ).toBe('other_assets');
+      createTestSection(saved({ resources: { items: emptyResource() } })),
+    ).toBe('items');
   });
 
   it('makes a safe download name', () => {
@@ -169,7 +167,7 @@ describe('customApiSavePlan', () => {
   });
 
   it('sees no change when the saved config has its keys in another order (PostgreSQL JSONB)', () => {
-    const draft = saved({ resources: { devices: { ...emptyResource('devices'), idPath: 'id', namePath: 'name', matchPath: 'serial' }, other_assets: { enabled: false } } });
+    const draft = saved({ resources: { items: { ...emptyResource(), idPath: 'id', namePath: 'name', matchPath: 'serial' } } });
     const reversed = (value: unknown): unknown =>
       value && typeof value === 'object' && !Array.isArray(value)
         ? Object.fromEntries(Object.entries(value).reverse().map(([k, v]) => [k, reversed(v)]))
@@ -186,16 +184,15 @@ describe('DuplicateQueryNames', () => {
   it('is refused at the query path, so Save, Test and Export stay blocked', () => {
     const draft = saved({
       resources: {
-        devices: {
-          ...emptyResource('devices'),
+        items: {
+          ...emptyResource(),
           request: { method: 'GET', path: '/devices', query: new DuplicateQueryNames([['page', '1'], ['page', '2']]) as never },
           idPath: 'id',
           namePath: 'name',
           matchPath: 'serial',
         },
-        other_assets: { enabled: false },
       },
     });
-    expect([...issuesOf(draft).keys()]).toEqual(['resources.devices.request.query']);
+    expect([...issuesOf(draft).keys()]).toEqual(['resources.items.request.query']);
   });
 });

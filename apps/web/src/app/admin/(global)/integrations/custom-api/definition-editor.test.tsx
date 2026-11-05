@@ -21,7 +21,7 @@ jest.mock('../../../../../lib/hooks/use-is-mobile', () => ({ useIsMobile: () => 
 
 const devicesOk: CustomApiTestResponse = {
   ok: true,
-  section: 'devices',
+  section: 'items',
   recordCount: 12,
   hasMore: true,
   records: [
@@ -67,14 +67,13 @@ function endpointDraft(): CustomApiDraft {
       pagination: { style: 'none' },
     },
     resources: {
-      devices: {
-        ...emptyResource('devices'),
+      items: {
+        ...emptyResource(),
         request: { method: 'GET', path: '/groups/{orgId}/devices', query: {} },
         idPath: 'id',
         namePath: 'name',
         matchPath: 'serial',
       },
-      other_assets: { enabled: false },
     },
   };
 }
@@ -90,7 +89,6 @@ function Harness({ initial, testSecret }: { initial: CustomApiDraft; testSecret?
         integrationId="integration-1"
         testSecret={testSecret}
         credentials={<div>credentials slot</div>}
-        standardFieldLabels={{ hostname: 'Hostname', model: 'Model' }}
       />
       <output data-testid="draft">{JSON.stringify(draft)}</output>
     </>
@@ -108,7 +106,7 @@ describe('DefinitionEditor', () => {
   it('renders the sections in order, with the credentials after Headers', () => {
     render(<Harness initial={endpointDraft()} />);
     const headings = screen.getAllByRole('heading', { level: 4 }).map((h) => h.textContent);
-    expect(headings).toEqual(['Connection', 'Authentication', 'Headers', 'Organizations', 'Devices', 'Other assets']);
+    expect(headings).toEqual(['Connection', 'Authentication', 'Headers', 'Organizations', 'Items']);
     expect(screen.getByText('credentials slot')).toBeInTheDocument();
   });
 
@@ -126,7 +124,7 @@ describe('DefinitionEditor', () => {
 
   it('keeps 2 query parameters with the same name as rows, in order, and blocks the definition', () => {
     render(<Harness initial={endpointDraft()} />);
-    const devices = within(screen.getByRole('heading', { name: 'Devices' }).closest('section')!);
+    const devices = within(screen.getByRole('heading', { name: 'Items' }).closest('section')!);
     const add = () => fireEvent.click(devices.getByRole('button', { name: 'Add query parameter' }));
     const set = (label: string, value: string) => fireEvent.change(devices.getByLabelText(label), { target: { value } });
     add();
@@ -144,15 +142,15 @@ describe('DefinitionEditor', () => {
     expect(devices.getByLabelText('Query parameter 1 name')).toHaveValue('page');
     expect(devices.getByLabelText('Query parameter 2 name')).toHaveValue('1');
     expect(devices.queryByText(/same name/)).not.toBeInTheDocument();
-    expect(draftOf().resources.devices).toMatchObject({ request: { query: { page: '{page}', 1: '2' } } });
+    expect(draftOf().resources.items).toMatchObject({ request: { query: { page: '{page}', 1: '2' } } });
   });
 
   it('keeps a turned-off resource’s paths for when it is turned on again', () => {
     render(<Harness initial={endpointDraft()} />);
-    fireEvent.click(screen.getByLabelText(/Read devices from this API/));
-    expect(draftOf().resources.devices).toEqual({ enabled: false });
-    fireEvent.click(screen.getByLabelText(/Read devices from this API/));
-    expect(draftOf().resources.devices).toMatchObject({ enabled: true, matchPath: 'serial' });
+    fireEvent.click(screen.getByLabelText(/Read items from this API/));
+    expect(draftOf().resources.items).toEqual({ enabled: false });
+    fireEvent.click(screen.getByLabelText(/Read items from this API/));
+    expect(draftOf().resources.items).toMatchObject({ enabled: true, matchPath: 'serial' });
   });
 
   it('marks a secret header and never keeps its value in the definition', () => {
@@ -168,7 +166,7 @@ describe('DefinitionEditor', () => {
   it('tests a resource in endpoint mode with a picked or typed organization id', async () => {
     apiFetch.mockResolvedValueOnce({ ok: true, status: 200, data: orgsOk }).mockResolvedValue({ ok: true, status: 200, data: devicesOk });
     render(<Harness initial={endpointDraft()} />);
-    const devices = screen.getByRole('region', { name: 'Devices' });
+    const devices = screen.getByRole('region', { name: 'Items' });
     expect(within(devices).getByRole('button', { name: 'Test' })).toBeDisabled();
     expect(within(devices).getByText('Pick or type an organization id to test with.')).toBeInTheDocument();
 
@@ -181,7 +179,7 @@ describe('DefinitionEditor', () => {
     fireEvent.click(within(devices).getByRole('button', { name: 'Test' }));
     await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
     expect(apiFetch.mock.calls[1][0]).toBe('/admin/integrations/integration-1/custom-api/test');
-    expect(JSON.parse(apiFetch.mock.calls[1][1].body)).toMatchObject({ section: 'devices', orgId: 'org-1' });
+    expect(JSON.parse(apiFetch.mock.calls[1][1].body)).toMatchObject({ section: 'items', orgId: 'org-1' });
     expect(JSON.parse(apiFetch.mock.calls[1][1].body)).not.toHaveProperty('secret');
 
     // A typed id works too (a sample may be masked or cut).
@@ -194,9 +192,9 @@ describe('DefinitionEditor', () => {
   it('sends no organization id outside endpoint mode, and the typed bundle when given', async () => {
     apiFetch.mockResolvedValue({ ok: true, status: 200, data: devicesOk });
     const draft = { ...endpointDraft(), organizations: { mode: 'single' as const } };
-    (draft.resources.devices as { request: { path: string } }).request.path = '/devices';
+    (draft.resources.items as { request: { path: string } }).request.path = '/devices';
     render(<Harness initial={draft} testSecret={{ token: 'typed' }} />);
-    const devices = screen.getByRole('region', { name: 'Devices' });
+    const devices = screen.getByRole('region', { name: 'Items' });
     expect(within(devices).queryByLabelText('Organization id')).not.toBeInTheDocument();
     fireEvent.click(within(devices).getByRole('button', { name: 'Test' }));
     await waitFor(() => expect(apiFetch).toHaveBeenCalled());
@@ -208,16 +206,16 @@ describe('DefinitionEditor', () => {
   it('puts a clicked key into the last path input the admin selected, and shows samples', async () => {
     apiFetch.mockResolvedValue({ ok: true, status: 200, data: devicesOk });
     const draft = { ...endpointDraft(), organizations: { mode: 'single' as const } };
-    (draft.resources.devices as { request: { path: string } }).request.path = '/devices';
+    (draft.resources.items as { request: { path: string } }).request.path = '/devices';
     render(<Harness initial={draft} />);
-    const devices = screen.getByRole('region', { name: 'Devices' });
+    const devices = screen.getByRole('region', { name: 'Items' });
     fireEvent.click(within(devices).getByRole('button', { name: 'Test' }));
     await screen.findByText('12 records on the first page. More pages: yes.');
     expect(screen.getAllByText('no value').length).toBeGreaterThan(0);
 
-    fireEvent.focus(within(devices).getByLabelText('Serial number path'));
+    fireEvent.focus(within(devices).getByLabelText('Match value path (optional)'));
     fireEvent.click(screen.getByRole('button', { name: /system\.serial/ }));
-    expect(draftOf().resources.devices).toMatchObject({ matchPath: 'system.serial' });
+    expect(draftOf().resources.items).toMatchObject({ matchPath: 'system.serial' });
     expect(within(devices).getByText('First record: SN-1')).toBeInTheDocument();
     // A masked key shows the mask, never a value.
     expect(screen.getByRole('button', { name: /apiToken/ })).toHaveTextContent('••••');
@@ -299,7 +297,7 @@ describe('TestPanel', () => {
   it('renders records as cards at phone width', async () => {
     mobile = true;
     apiFetch.mockResolvedValue({ ok: true, status: 200, data: devicesOk });
-    panel({ section: 'devices', secret: undefined });
+    panel({ section: 'items', secret: undefined });
     fireEvent.click(screen.getByRole('button', { name: 'Test' }));
     await screen.findByText('12 records on the first page. More pages: yes.');
     expect(screen.queryByRole('table')).not.toBeInTheDocument();

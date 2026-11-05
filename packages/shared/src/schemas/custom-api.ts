@@ -17,7 +17,7 @@ export const CUSTOM_API_LIMITS = {
   /** Serialized definition size. */
   definitionBytes: 64 * 1024,
   headers: 16,
-  extraFieldsPerResource: 64,
+  fieldsPerResource: 64,
   queryParams: 32,
   /** Serialized POST body template size. */
   bodyBytes: 16 * 1024,
@@ -37,25 +37,11 @@ export const CUSTOM_API_LIMITS = {
   tokenResponseBytes: 64 * 1024,
 } as const;
 
-export const CUSTOM_API_RESOURCE_KEYS = ['devices', 'other_assets'] as const;
+/** The one resource of a definition: the records the API lists, which the admin maps to any asset layout. */
+export const CUSTOM_API_RESOURCE_KEYS = ['items'] as const;
 export type CustomApiResourceKey = (typeof CUSTOM_API_RESOURCE_KEYS)[number];
 
-/** Standard fields a Devices definition may fill (the STANDARD_FIELDS keys of the Devices pattern). */
-export const CUSTOM_API_DEVICE_STANDARD_FIELDS = [
-  'hostname',
-  'manufacturer',
-  'model',
-  'operating_system',
-  'cpu',
-  'ram',
-  'storage',
-  'mac_address',
-  'ip_address',
-  'role',
-] as const;
-export type CustomApiDeviceStandardField = (typeof CUSTOM_API_DEVICE_STANDARD_FIELDS)[number];
-
-export const CUSTOM_API_EXTRA_FIELD_TYPES = [
+export const CUSTOM_API_FIELD_TYPES = [
   'TEXT',
   'NUMBER',
   'BOOLEAN',
@@ -65,7 +51,7 @@ export const CUSTOM_API_EXTRA_FIELD_TYPES = [
   'EMAIL',
   'IP_ADDRESS',
 ] as const;
-export type CustomApiExtraFieldType = (typeof CUSTOM_API_EXTRA_FIELD_TYPES)[number];
+export type CustomApiFieldType = (typeof CUSTOM_API_FIELD_TYPES)[number];
 
 /** Placeholders a request may use. `{updatedSince}` is not in v1: syncs are full. */
 export const CUSTOM_API_PLACEHOLDERS = ['orgId', 'cursor', 'page', 'offset', 'limit'] as const;
@@ -265,14 +251,9 @@ export type CustomApiOrganizationMode = CustomApiOrganizations['mode'];
 
 const FIELD_KEY_RE = /^[a-z][a-z0-9]*(_[a-z0-9]+)*$/;
 /** Source field keys the driver itself writes; an extra field may not reuse them. */
-const RESERVED_FIELD_KEYS: ReadonlySet<string> = new Set([
-  'name',
-  'match_key',
-  'serial_number',
-  ...CUSTOM_API_DEVICE_STANDARD_FIELDS,
-]);
+const RESERVED_FIELD_KEYS: ReadonlySet<string> = new Set(['name', 'match_key']);
 
-const extraFieldSchema = z
+const itemFieldSchema = z
   .object({
     key: z
       .string()
@@ -286,10 +267,10 @@ const extraFieldSchema = z
       .max(80)
       .refine((value) => !CONTROL_RE.test(value) && !/<[a-z!/?]/i.test(value), 'A label is plain text.'),
     path: requiredPathSchema,
-    type: z.enum(CUSTOM_API_EXTRA_FIELD_TYPES),
+    type: z.enum(CUSTOM_API_FIELD_TYPES),
   })
   .strict();
-export type CustomApiExtraField = z.infer<typeof extraFieldSchema>;
+export type CustomApiField = z.infer<typeof itemFieldSchema>;
 
 /** Optional record link: HTTPS, `{id}` is the only placeholder. */
 const recordUrlSchema = z
@@ -314,13 +295,6 @@ const recordUrlSchema = z
     }
   });
 
-const standardFieldsSchema = z
-  .object(Object.fromEntries(CUSTOM_API_DEVICE_STANDARD_FIELDS.map((key) => [key, requiredPathSchema.optional()])) as Record<
-    CustomApiDeviceStandardField,
-    z.ZodOptional<typeof requiredPathSchema>
-  >)
-  .strict();
-
 const resourceShape = {
   enabled: z.literal(true),
   request: requestSchema,
@@ -331,24 +305,13 @@ const resourceShape = {
   /** The record's own organization id; required in `field` mode, the IDOR backstop in `endpoint` mode. */
   orgIdPath: requiredPathSchema.optional(),
   orgNamePath: requiredPathSchema.optional(),
-  extraFields: z.array(extraFieldSchema).max(CUSTOM_API_LIMITS.extraFieldsPerResource).default([]),
+  fields: z.array(itemFieldSchema).max(CUSTOM_API_LIMITS.fieldsPerResource).default([]),
   recordUrl: recordUrlSchema.optional(),
 } as const;
 
 const disabledResourceSchema = z.object({ enabled: z.literal(false) }).strict();
 
-const devicesSchema = z.discriminatedUnion('enabled', [
-  z
-    .object({
-      ...resourceShape,
-      matchPath: requiredPathSchema,
-      standardFields: standardFieldsSchema.default({}),
-    })
-    .strict(),
-  disabledResourceSchema,
-]);
-
-const otherAssetsSchema = z.discriminatedUnion('enabled', [
+const itemsSchema = z.discriminatedUnion('enabled', [
   z
     .object({
       ...resourceShape,
@@ -358,9 +321,7 @@ const otherAssetsSchema = z.discriminatedUnion('enabled', [
   disabledResourceSchema,
 ]);
 
-export type CustomApiDevicesResource = Extract<z.infer<typeof devicesSchema>, { enabled: true }>;
-export type CustomApiOtherAssetsResource = Extract<z.infer<typeof otherAssetsSchema>, { enabled: true }>;
-export type CustomApiResource = CustomApiDevicesResource | CustomApiOtherAssetsResource;
+export type CustomApiResource = Extract<z.infer<typeof itemsSchema>, { enabled: true }>;
 
 /** Placeholders each pagination style feeds. */
 function paginationPlaceholders(pagination: CustomApiPagination): Set<string> {
@@ -474,8 +435,7 @@ export const customApiDefinitionSchema = z
     organizations: organizationsSchema,
     resources: z
       .object({
-        devices: devicesSchema.default({ enabled: false }),
-        other_assets: otherAssetsSchema.default({ enabled: false }),
+        items: itemsSchema.default({ enabled: false }),
       })
       .strict(),
   })
@@ -525,8 +485,8 @@ export const customApiDefinitionSchema = z
         ctx.addIssue({ code: 'custom', path: ['resources', key, 'orgIdPath'], message: 'Organization from a field needs the organization id path on every resource.' });
       }
       const keys = new Set<string>();
-      resource.extraFields.forEach((field, index) => {
-        if (keys.has(field.key)) ctx.addIssue({ code: 'custom', path: ['resources', key, 'extraFields', index, 'key'], message: `"${field.key}" is listed twice.` });
+      resource.fields.forEach((field, index) => {
+        if (keys.has(field.key)) ctx.addIssue({ code: 'custom', path: ['resources', key, 'fields', index, 'key'], message: `"${field.key}" is listed twice.` });
         keys.add(field.key);
       });
     }

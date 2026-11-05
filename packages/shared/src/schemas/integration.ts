@@ -214,6 +214,12 @@ const resourceDescriptorBaseShape = {
     .strict()
     .optional(),
   /**
+   * Opts the resource into match-first without guided layout matching:
+   * the admin picks the layout and match keys on the resource tab. A
+   * resource with `matchSuggestions` is already match-first.
+   */
+  matchFirst: z.boolean().optional(),
+  /**
    * Source fields the driver writes into layout fields (normally the name
    * and the match key). Everything else a record carries goes into its
    * integration `section`. "Create new layout" only creates these fields.

@@ -798,6 +798,15 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
       expect(without.writer.write.mock.calls[0]![0].claimUnboundMatches).toBe(false);
     });
 
+    it('opts a resource declaring matchFirst into match-first without guided matching (Custom API Items)', async () => {
+      const ctx = arrange(validSection, false);
+      (ctx.driver.descriptor as Record<string, unknown>).resources = [{ key: 'users', matchFirst: true }];
+      await run(ctx.service);
+      const writeCtx = ctx.writer.write.mock.calls[0]![0];
+      expect(writeCtx.claimUnboundMatches).toBe(true);
+      expect(writeCtx.coBindSources ?? []).toEqual([]);
+    });
+
     it('marks the binding adopted when the writer adopted an operator asset', async () => {
       const { service, tx, writer } = arrange(validSection, true);
       const base = writer.write.getMockImplementation()!;
@@ -1878,9 +1887,14 @@ describe('Breeze foundational asset composition', () => {
   const manualField = '00000000-0000-4000-8000-000000000108';
   const manualOnlyField = '00000000-0000-4000-8000-000000000109';
 
-  it('namespaces Breeze identities without changing established driver sources', () => {
+  it('namespaces Breeze and Custom API identities without changing established driver sources', () => {
     expect(integrationAssetExternalSource('breeze', integrationA)).toBe(
       `breeze:${integrationA}`,
+    );
+    // 2 Custom API integrations can both send record id 1.
+    expect(integrationAssetExternalSource('custom-api', integrationA)).toBe(`custom-api:${integrationA}`);
+    expect(integrationAssetExternalSource('custom-api', integrationB)).not.toBe(
+      integrationAssetExternalSource('custom-api', integrationA),
     );
     for (const driver of ['action1', 'ninjaone', 'unifi']) {
       expect(integrationAssetExternalSource(driver, integrationA)).toBe(driver);

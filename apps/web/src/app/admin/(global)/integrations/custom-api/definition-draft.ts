@@ -24,7 +24,7 @@ export type DraftIssues = Map<string, string>;
 
 /**
  * The definition a new integration starts with when nothing is imported:
- * one organization, both resources off. The admin completes it on the
+ * one organization, Items off. The admin completes it on the
  * Credentials tab.
  */
 export function newDefinition(baseUrl: string, auth: CustomApiDraftAuth): CustomApiDraft {
@@ -34,7 +34,7 @@ export function newDefinition(baseUrl: string, auth: CustomApiDraftAuth): Custom
     auth,
     headers: [],
     organizations: { mode: 'single' },
-    resources: { devices: { enabled: false }, other_assets: { enabled: false } },
+    resources: { items: { enabled: false } },
   };
 }
 
@@ -191,10 +191,8 @@ export function exportFileName(name: string): string {
 type EndpointOrganizations = Extract<CustomApiDraft['organizations'], { mode: 'endpoint' }>;
 export type DraftRequest = EndpointOrganizations['request'];
 export type DraftPagination = NonNullable<EndpointOrganizations['pagination']>;
-export type DraftDevices = Extract<NonNullable<CustomApiDraft['resources']['devices']>, { enabled: true }>;
-export type DraftOtherAssets = Extract<NonNullable<CustomApiDraft['resources']['other_assets']>, { enabled: true }>;
-export type DraftResource = DraftDevices | DraftOtherAssets;
-export type DraftExtraField = NonNullable<DraftResource['extraFields']>[number];
+export type DraftResource = Extract<NonNullable<CustomApiDraft['resources']['items']>, { enabled: true }>;
+export type DraftField = NonNullable<DraftResource['fields']>[number];
 
 export function emptyRequest(): DraftRequest {
   return { method: 'GET', path: '', query: {} };
@@ -221,23 +219,20 @@ export function emptyOrganizations(mode: CustomApiDraft['organizations']['mode']
     : { mode };
 }
 
-export function emptyResource(key: 'devices'): DraftDevices;
-export function emptyResource(key: 'other_assets'): DraftOtherAssets;
-export function emptyResource(key: 'devices' | 'other_assets'): DraftResource {
-  const base = {
-    enabled: true as const,
+export function emptyResource(): DraftResource {
+  return {
+    enabled: true,
     request: emptyRequest(),
     recordsPath: '',
-    pagination: { style: 'none' as const },
+    pagination: { style: 'none' },
     idPath: '',
     namePath: '',
     matchPath: '',
     orgIdPath: '',
     orgNamePath: '',
-    extraFields: [],
+    fields: [],
     recordUrl: '',
   };
-  return key === 'devices' ? { ...base, standardFields: {} } : base;
 }
 
 export interface CustomApiSavePlan {
@@ -322,10 +317,8 @@ export function customApiCreatePayload(
     : { config: cleanDefinition(draft) };
 }
 
-/** The section a create-dialog Test reads: the organizations, or in single mode the first enabled resource. */
-export function createTestSection(draft: CustomApiDraft): 'organizations' | 'devices' | 'other_assets' | null {
+/** The section a create-dialog Test reads: the organizations, or in single mode Items when it is on. */
+export function createTestSection(draft: CustomApiDraft): 'organizations' | 'items' | null {
   if (draft.organizations.mode !== 'single') return 'organizations';
-  if (draft.resources.devices?.enabled) return 'devices';
-  if (draft.resources.other_assets?.enabled) return 'other_assets';
-  return null;
+  return draft.resources.items?.enabled ? 'items' : null;
 }

@@ -28,7 +28,7 @@ function definition(overrides: Partial<CustomApiDefinitionInput> = {}): CustomAp
       pagination: { style: 'none' },
     },
     resources: {
-      devices: {
+      items: {
         enabled: true,
         request: { method: 'GET', path: '/api/v1/devices', query: { group: '{orgId}', cursor: '{cursor}' } },
         recordsPath: 'devices',
@@ -36,14 +36,13 @@ function definition(overrides: Partial<CustomApiDefinitionInput> = {}): CustomAp
         idPath: 'id',
         namePath: 'name',
         matchPath: 'system.serial',
-        standardFields: { hostname: 'hostname', manufacturer: 'system.manufacturer', ip_address: 'system.privateIp' },
-        extraFields: [
+        fields: [
+          { key: 'hostname', label: 'Hostname', path: 'hostname', type: 'TEXT' },
           { key: 'agent_version', label: 'Agent version', path: 'agentVersion', type: 'TEXT' },
           { key: 'last_contact', label: 'Last contact', path: 'lastContactAt', type: 'DATETIME' },
         ],
         recordUrl: 'https://app.example.com/devices/{id}',
       },
-      other_assets: { enabled: false },
     },
     ...overrides,
   };
@@ -54,15 +53,15 @@ function issues(input: unknown): string[] {
   return result.success ? [] : result.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`);
 }
 
-function withDevices(patch: Record<string, unknown>): CustomApiDefinitionInput {
+function withItems(patch: Record<string, unknown>): CustomApiDefinitionInput {
   const base = definition();
-  return { ...base, resources: { ...base.resources, devices: { ...(base.resources.devices as object), ...patch } as never } };
+  return { ...base, resources: { items: { ...(base.resources.items as object), ...patch } as never } };
 }
 
 describe('customApiDefinitionSchema', () => {
   it('accepts the spec example and fills defaults', () => {
     const parsed = customApiDefinitionSchema.parse(definition());
-    expect(parsed.resources.other_assets).toEqual({ enabled: false });
+    expect(customApiDefinitionSchema.parse({ ...definition(), resources: {} }).resources.items).toEqual({ enabled: false });
     expect(parsed.organizations.mode === 'endpoint' && parsed.organizations.pagination).toEqual({ style: 'none' });
   });
 
@@ -138,13 +137,13 @@ describe('customApiDefinitionSchema', () => {
     });
 
     it('refuses unknown placeholders and {updatedSince}', () => {
-      expect(issues(withDevices({ request: { path: '/d/{nope}', query: { cursor: '{cursor}' } } })).join()).toMatch(/\{nope\} is not a placeholder/);
-      expect(issues(withDevices({ request: { path: '/d', query: { cursor: '{cursor}', since: '{updatedSince}' } } })).join()).toMatch(/updatedSince/);
+      expect(issues(withItems({ request: { path: '/d/{nope}', query: { cursor: '{cursor}' } } })).join()).toMatch(/\{nope\} is not a placeholder/);
+      expect(issues(withItems({ request: { path: '/d', query: { cursor: '{cursor}', since: '{updatedSince}' } } })).join()).toMatch(/updatedSince/);
     });
 
     it('allows {orgId} in endpoint mode only', () => {
-      expect(issues(withDevices({ request: { path: '/groups/{orgId}/devices', query: { cursor: '{cursor}' } } }))).toEqual([]);
-      const single = { ...withDevices({}), organizations: { mode: 'single' } } as CustomApiDefinitionInput;
+      expect(issues(withItems({ request: { path: '/groups/{orgId}/devices', query: { cursor: '{cursor}' } } }))).toEqual([]);
+      const single = { ...withItems({}), organizations: { mode: 'single' } } as CustomApiDefinitionInput;
       expect(issues(single).join()).toMatch(/\{orgId\} cannot be used here/);
       const orgRequest = definition({
         organizations: { mode: 'endpoint', request: { path: '/groups/{orgId}' }, idPath: 'id', namePath: 'name' },
@@ -153,79 +152,69 @@ describe('customApiDefinitionSchema', () => {
     });
 
     it('needs the pagination placeholder in the request', () => {
-      expect(issues(withDevices({ request: { path: '/d', query: { group: '{orgId}' } } })).join()).toMatch(/cursor pagination needs \{cursor\}/);
-      expect(issues(withDevices({ request: { path: '/d', query: { group: '{orgId}', p: '{page}' } }, pagination: { style: 'page', pageSize: 100 } }))).toEqual([]);
-      expect(issues(withDevices({ request: { path: '/d', query: { group: '{orgId}', p: '{page}' } }, pagination: { style: 'offset', pageSize: 100 } })).join()).toMatch(/\{page\} cannot be used/);
+      expect(issues(withItems({ request: { path: '/d', query: { group: '{orgId}' } } })).join()).toMatch(/cursor pagination needs \{cursor\}/);
+      expect(issues(withItems({ request: { path: '/d', query: { group: '{orgId}', p: '{page}' } }, pagination: { style: 'page', pageSize: 100 } }))).toEqual([]);
+      expect(issues(withItems({ request: { path: '/d', query: { group: '{orgId}', p: '{page}' } }, pagination: { style: 'offset', pageSize: 100 } })).join()).toMatch(/\{page\} cannot be used/);
     });
 
     it('allows placeholders in POST body string values only', () => {
-      const ok = withDevices({ request: { method: 'POST', path: '/d', body: { group: '{orgId}', after: '{cursor}', n: 5 } } });
+      const ok = withItems({ request: { method: 'POST', path: '/d', body: { group: '{orgId}', after: '{cursor}', n: 5 } } });
       expect(issues(ok)).toEqual([]);
-      const inKey = withDevices({ request: { method: 'POST', path: '/d', body: { '{orgId}': 1, after: '{cursor}' } } });
+      const inKey = withItems({ request: { method: 'POST', path: '/d', body: { '{orgId}': 1, after: '{cursor}' } } });
       expect(issues(inKey).join()).toMatch(/not in keys/);
-      const getBody = withDevices({ request: { method: 'GET', path: '/d', query: { c: '{cursor}' }, body: { a: 1 } } });
+      const getBody = withItems({ request: { method: 'GET', path: '/d', query: { c: '{cursor}' }, body: { a: 1 } } });
       expect(issues(getBody).join()).toMatch(/Only a POST/);
     });
 
     it('refuses a query string or a backslash in the request path', () => {
-      expect(issues(withDevices({ request: { path: '/d?x={cursor}' } })).join()).toMatch(/Query/);
-      expect(issues(withDevices({ request: { path: '/d\\x', query: { c: '{cursor}' } } })).join()).toMatch(/\\/);
-      expect(issues(withDevices({ request: { path: 'd', query: { c: '{cursor}' } } })).join()).toMatch(/starts with \//);
+      expect(issues(withItems({ request: { path: '/d?x={cursor}' } })).join()).toMatch(/Query/);
+      expect(issues(withItems({ request: { path: '/d\\x', query: { c: '{cursor}' } } })).join()).toMatch(/\\/);
+      expect(issues(withItems({ request: { path: 'd', query: { c: '{cursor}' } } })).join()).toMatch(/starts with \//);
     });
   });
 
   describe('resources', () => {
-    it('needs a match path on Devices but not on Other assets', () => {
-      expect(issues(withDevices({ matchPath: undefined })).length).toBeGreaterThan(0);
-      const other = definition({
-        resources: {
-          devices: { enabled: false },
-          other_assets: { enabled: true, request: { path: '/licenses', query: { g: '{orgId}' } }, idPath: 'id', namePath: 'name' },
-        },
-      });
-      expect(issues(other)).toEqual([]);
+    it('makes the match path optional', () => {
+      expect(issues(withItems({ matchPath: undefined }))).toEqual([]);
     });
 
-    it('refuses standard fields on Other assets and unknown standard fields on Devices', () => {
-      const other = definition({
-        resources: {
-          devices: { enabled: false },
-          other_assets: { enabled: true, request: { path: '/x' }, idPath: 'id', namePath: 'name', standardFields: { hostname: 'h' } } as never,
-        },
+    it('refuses an old resource key and standard fields', () => {
+      const old = definition({
+        resources: { devices: { enabled: true, request: { path: '/x' }, idPath: 'id', namePath: 'name' } } as never,
       });
-      expect(issues(other).length).toBeGreaterThan(0);
-      expect(issues(withDevices({ standardFields: { imei: 'x' } })).length).toBeGreaterThan(0);
+      expect(issues(old).join()).toMatch(/Unrecognized key/);
+      expect(issues(withItems({ standardFields: { hostname: 'h' } })).length).toBeGreaterThan(0);
     });
 
     it('needs orgIdPath on each enabled resource in field mode', () => {
       const field = { ...definition(), organizations: { mode: 'field' } } as CustomApiDefinitionInput;
-      const devices = { ...(field.resources.devices as object), request: { path: '/d', query: { c: '{cursor}' } } };
-      expect(issues({ ...field, resources: { ...field.resources, devices } }).join()).toMatch(/organization id path/);
-      expect(issues({ ...field, resources: { ...field.resources, devices: { ...devices, orgIdPath: 'groupId' } } })).toEqual([]);
+      const items = { ...(field.resources.items as object), request: { path: '/d', query: { c: '{cursor}' } } };
+      expect(issues({ ...field, resources: { items } }).join()).toMatch(/organization id path/);
+      expect(issues({ ...field, resources: { items: { ...items, orgIdPath: 'groupId' } } })).toEqual([]);
     });
 
-    it('checks extra fields: key form, reserved keys, duplicates, type and the limit', () => {
+    it('checks fields: key form, reserved keys, duplicates, type and the limit', () => {
       const field = (key: string, type = 'TEXT') => ({ key, label: 'L', path: 'p', type });
-      expect(issues(withDevices({ extraFields: [field('AgentVersion')] })).join()).toMatch(/lower-case/);
-      expect(issues(withDevices({ extraFields: [field('name')] })).join()).toMatch(/used by Weavestream/);
-      expect(issues(withDevices({ extraFields: [field('hostname')] })).join()).toMatch(/used by Weavestream/);
-      expect(issues(withDevices({ extraFields: [field('a'), field('a')] })).join()).toMatch(/twice/);
-      expect(issues(withDevices({ extraFields: [field('a', 'FILE')] })).length).toBeGreaterThan(0);
-      const many = Array.from({ length: CUSTOM_API_LIMITS.extraFieldsPerResource + 1 }, (_, i) => field(`f${i}`));
-      expect(issues(withDevices({ extraFields: many })).length).toBeGreaterThan(0);
-      expect(issues(withDevices({ extraFields: many.slice(0, CUSTOM_API_LIMITS.extraFieldsPerResource) }))).toEqual([]);
+      expect(issues(withItems({ fields: [field('AgentVersion')] })).join()).toMatch(/lower-case/);
+      expect(issues(withItems({ fields: [field('name')] })).join()).toMatch(/used by Weavestream/);
+      expect(issues(withItems({ fields: [field('match_key')] })).join()).toMatch(/used by Weavestream/);
+      expect(issues(withItems({ fields: [field('a'), field('a')] })).join()).toMatch(/twice/);
+      expect(issues(withItems({ fields: [field('a', 'FILE')] })).length).toBeGreaterThan(0);
+      const many = Array.from({ length: CUSTOM_API_LIMITS.fieldsPerResource + 1 }, (_, i) => field(`f${i}`));
+      expect(issues(withItems({ fields: many })).length).toBeGreaterThan(0);
+      expect(issues(withItems({ fields: many.slice(0, CUSTOM_API_LIMITS.fieldsPerResource) }))).toEqual([]);
     });
 
     it('checks paths with the path grammar', () => {
-      expect(issues(withDevices({ idPath: 'a..b' })).join()).toMatch(/empty key/);
-      expect(issues(withDevices({ namePath: '__proto__' })).join()).toMatch(/not allowed/);
-      expect(issues(withDevices({ idPath: '' })).join()).toMatch(/Enter a path/);
+      expect(issues(withItems({ idPath: 'a..b' })).join()).toMatch(/empty key/);
+      expect(issues(withItems({ namePath: '__proto__' })).join()).toMatch(/not allowed/);
+      expect(issues(withItems({ idPath: '' })).join()).toMatch(/Enter a path/);
     });
   });
 
   describe('Open in link', () => {
     it('allows another HTTPS host than the Base URL', () => {
-      expect(issues(withDevices({ recordUrl: 'https://app.other.example/d/{id}?tab=1' }))).toEqual([]);
+      expect(issues(withItems({ recordUrl: 'https://app.other.example/d/{id}?tab=1' }))).toEqual([]);
     });
 
     it.each([
@@ -235,39 +224,37 @@ describe('customApiDefinitionSchema', () => {
       ['https://{id}.example.com/', /host/],
       ['https://u:p@app.example.com/{id}', /user name/],
     ])('refuses %s', (recordUrl, message) => {
-      expect(issues(withDevices({ recordUrl })).join()).toMatch(message);
+      expect(issues(withItems({ recordUrl })).join()).toMatch(message);
     });
   });
 
   it('refuses a definition over 64 KiB', () => {
     const query = Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`q${i}`, i === 0 ? '{cursor}' : 'x'.repeat(1_000)]));
-    const extraFields = Array.from({ length: 64 }, (_, i) => ({ key: `f${i}`, label: 'L'.repeat(80), path: `a${'b'.repeat(200)}`, type: 'TEXT' }));
+    const fields = Array.from({ length: 64 }, (_, i) => ({ key: `f${i}`, label: 'L'.repeat(80), path: `a${'b'.repeat(200)}`, type: 'TEXT' }));
     const base = definition();
     const big = {
       ...base,
-      resources: {
-        devices: { ...(base.resources.devices as object), extraFields, request: { path: '/d', query } },
-        other_assets: { enabled: true, request: { path: '/o', query }, pagination: { style: 'cursor', cursorPath: 'n' }, idPath: 'id', namePath: 'name', extraFields },
-      },
+      organizations: { ...base.organizations, request: { path: '/o', query } },
+      resources: { items: { ...(base.resources.items as object), fields, request: { path: '/d', query } } },
     };
     expect(issues(big).join()).toMatch(/64 KiB/);
   });
 
   it('endpoint mode: each resource must be scoped to the organization, by {orgId} or an organization id path', () => {
-    const unscoped = withDevices({ request: { path: '/api/v1/devices', query: { cursor: '{cursor}' } } });
+    const unscoped = withItems({ request: { path: '/api/v1/devices', query: { cursor: '{cursor}' } } });
     expect(issues(unscoped)).toEqual([
-      'resources.devices.request.path: Each organization needs its own records. Put {orgId} in the request, or set the organization id path.',
+      'resources.items.request.path: Each organization needs its own records. Put {orgId} in the request, or set the organization id path.',
     ]);
-    expect(issues(withDevices({ request: { path: '/api/v1/devices', query: { cursor: '{cursor}' } }, orgIdPath: 'groupId' }))).toEqual([]);
-    expect(issues(withDevices({ request: { path: '/api/v1/groups/{orgId}/devices', query: { cursor: '{cursor}' } } }))).toEqual([]);
-    expect(issues(withDevices({ request: { method: 'POST', path: '/api/v1/devices', query: { cursor: '{cursor}' }, body: { filter: { group: '{orgId}' } } } }))).toEqual([]);
+    expect(issues(withItems({ request: { path: '/api/v1/devices', query: { cursor: '{cursor}' } }, orgIdPath: 'groupId' }))).toEqual([]);
+    expect(issues(withItems({ request: { path: '/api/v1/groups/{orgId}/devices', query: { cursor: '{cursor}' } } }))).toEqual([]);
+    expect(issues(withItems({ request: { method: 'POST', path: '/api/v1/devices', query: { cursor: '{cursor}' }, body: { filter: { group: '{orgId}' } } } }))).toEqual([]);
     // Single mode has one organization, so no scoping is needed.
-    expect(issues({ ...withDevices({ request: { path: '/api/v1/devices', query: { cursor: '{cursor}' } } }), organizations: { mode: 'single' } })).toEqual([]);
+    expect(issues({ ...withItems({ request: { path: '/api/v1/devices', query: { cursor: '{cursor}' } } }), organizations: { mode: 'single' } })).toEqual([]);
   });
 
   it('allows at most 32 query parameters', () => {
     const query = Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`q${i}`, i === 0 ? '{cursor}' : 'x']));
-    expect(issues(withDevices({ request: { path: '/d', query } })).join()).toMatch(/32 query/);
+    expect(issues(withItems({ request: { path: '/d', query } })).join()).toMatch(/32 query/);
   });
 });
 
@@ -285,7 +272,7 @@ describe('customApiRequiredSecretKeys', () => {
 
 describe('customApiTestRequestSchema', () => {
   it('accepts a section test and refuses an unknown section', () => {
-    expect(customApiTestRequestSchema.safeParse({ definition: definition(), section: 'devices', orgId: 'g1' }).success).toBe(true);
+    expect(customApiTestRequestSchema.safeParse({ definition: definition(), section: 'items', orgId: 'g1' }).success).toBe(true);
     expect(customApiTestRequestSchema.safeParse({ definition: definition(), section: 'tickets' }).success).toBe(false);
   });
 });

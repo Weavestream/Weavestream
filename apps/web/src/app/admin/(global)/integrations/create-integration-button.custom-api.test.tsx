@@ -37,7 +37,7 @@ const imported = {
     namePath: 'name',
   },
   resources: {
-    devices: { enabled: true, request: { path: '/groups/{orgId}/devices' }, idPath: 'id', namePath: 'name', matchPath: 'serial' },
+    items: { enabled: true, request: { path: '/groups/{orgId}/devices' }, idPath: 'id', namePath: 'name', matchPath: 'serial' },
   },
 };
 
@@ -86,7 +86,7 @@ describe('CreateIntegrationButton with Custom API', () => {
         auth: { method: 'bearer' },
         headers: [],
         organizations: { mode: 'single' },
-        resources: { devices: { enabled: false }, other_assets: { enabled: false } },
+        resources: { items: { enabled: false } },
       },
       secret: { token: 'tok' },
       status: 'PAUSED',

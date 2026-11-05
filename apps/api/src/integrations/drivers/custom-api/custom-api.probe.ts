@@ -1,5 +1,4 @@
 import {
-  CUSTOM_API_DEVICE_STANDARD_FIELDS,
   CUSTOM_API_LIMITS,
   listScalarPaths,
   parsePath,
@@ -14,7 +13,6 @@ import {
   type PathPart,
 } from '@weavestream/shared';
 import { DriverAuthError, DriverRateLimitError, type IntegrationContext } from '../integration-driver.js';
-import { STANDARD_FIELDS } from '../standard-resources.js';
 import { isSensitiveKey, scanSensitiveMaterial } from '../../sensitive-material.js';
 import { CustomApiAuthError, CustomApiRequestError, customApiCall } from './custom-api.http.js';
 import { fetchListPage } from './custom-api.pagination.js';
@@ -83,14 +81,7 @@ export function keyList(item: unknown): CustomApiTestKey[] {
 }
 
 export function testRecord(item: unknown, resource: CustomApiResource): CustomApiTestRecord {
-  const fields: CustomApiTestField[] = [];
-  if ('standardFields' in resource) {
-    for (const key of CUSTOM_API_DEVICE_STANDARD_FIELDS) {
-      const path = resource.standardFields[key];
-      if (path) fields.push(field(item, key, STANDARD_FIELDS[key].label, path));
-    }
-  }
-  for (const extra of resource.extraFields) fields.push(field(item, extra.key, extra.label, extra.path));
+  const fields: CustomApiTestField[] = resource.fields.map((entry) => field(item, entry.key, entry.label, entry.path));
   return {
     id: sampleAt(item, resource.idPath),
     name: sampleAt(item, resource.namePath),

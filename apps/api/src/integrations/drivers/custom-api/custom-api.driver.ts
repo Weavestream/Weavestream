@@ -27,7 +27,7 @@ import { CustomApiRequestError, customApiCall } from './custom-api.http.js';
 import { RepeatGuard, decodePageState, encodePageState, fetchAllItems, fetchListPage } from './custom-api.pagination.js';
 import { SINGLE_ORG_ID, enabledResources, listOrganizations, resourceListSpec } from './custom-api.orgs.js';
 import { idAt, parseRecord, sourceFields, toDriverRecord } from './custom-api.records.js';
-import { CUSTOM_API_DRIVER_KEY, CUSTOM_API_RECOMMENDED_DESTINATIONS, CUSTOM_API_RESOURCES } from './custom-api.resources.js';
+import { CUSTOM_API_DRIVER_KEY, CUSTOM_API_RESOURCES } from './custom-api.resources.js';
 import { CustomApiDefinitionError, diagnoseCustomApi } from './custom-api.diagnose.js';
 import { CUSTOM_API_SETUP_GUIDE } from './custom-api.setup-guide.js';
 
@@ -80,8 +80,6 @@ export function definitionOf(config: Record<string, unknown> | null | undefined)
 
 export class CustomApiDriver implements IntegrationDriver {
   readonly key = CUSTOM_API_DRIVER_KEY;
-
-  readonly recommendedDestinations = CUSTOM_API_RECOMMENDED_DESTINATIONS;
 
   readonly descriptor: DriverDescriptor = {
     key: CUSTOM_API_DRIVER_KEY,
@@ -177,7 +175,7 @@ export class CustomApiDriver implements IntegrationDriver {
     if (definition.organizations.mode === 'single') {
       const first = enabledResources(definition)[0];
       if (!first) {
-        throw new CustomApiRequestError('The saved API definition has no resource turned on. Turn on Devices or Other assets, save, then check again.', null);
+        throw new CustomApiRequestError('The saved API definition has Items turned off. Turn on Items, save, then check again.', null);
       }
       await fetchListPage(call, resourceListSpec(first.resource), {}, null);
     }
@@ -195,7 +193,7 @@ export class CustomApiDriver implements IntegrationDriver {
     if (!isResourceKey(ctx.resourceKey)) return [];
     const parsed = customApiDefinitionSchema.safeParse(ctx.config ?? {});
     const resource = parsed.success ? parsed.data.resources[ctx.resourceKey] : null;
-    return sourceFields(ctx.resourceKey, resource?.enabled ? resource : null);
+    return sourceFields(resource?.enabled ? resource : null);
   }
 
   async fetchRecords(ctx: FetchRecordsContext, cursor: string | null): Promise<LegacyDriverFetchPage> {
@@ -247,7 +245,7 @@ export class CustomApiDriver implements IntegrationDriver {
     let withoutId = 0;
     let otherOrg = 0;
     for (const item of items) {
-      const parsed = parseRecord(item, resourceKey, resource);
+      const parsed = parseRecord(item, resource);
       if (!parsed) {
         withoutId += 1;
         continue;
@@ -260,7 +258,7 @@ export class CustomApiDriver implements IntegrationDriver {
       }
       if (seenIds.has(parsed.externalId)) continue;
       seenIds.add(parsed.externalId);
-      records.push(toDriverRecord(resourceKey, resource, parsed));
+      records.push(toDriverRecord(resource, parsed));
     }
     if (otherOrg > 0) {
       logger.warn(

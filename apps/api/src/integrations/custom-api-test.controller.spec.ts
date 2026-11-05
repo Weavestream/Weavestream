@@ -21,13 +21,13 @@ function definition(baseUrl = SAVED_BASE) {
     auth: { method: 'bearer' },
     organizations: { mode: 'single' },
     resources: {
-      devices: { enabled: true, request: { path: '/devices' }, recordsPath: 'devices', idPath: 'id', namePath: 'name', matchPath: 'serial' },
+      items: { enabled: true, request: { path: '/devices' }, recordsPath: 'devices', idPath: 'id', namePath: 'name', matchPath: 'serial' },
     },
   });
 }
 
 function body(overrides: Partial<CustomApiTestRequest> = {}): CustomApiTestRequest {
-  return { definition: definition(), section: 'devices', ...overrides };
+  return { definition: definition(), section: 'items', ...overrides };
 }
 
 interface Sent {
@@ -101,7 +101,7 @@ describe('CustomApiTestController', () => {
     expect(audit.log).toHaveBeenCalledTimes(1);
     const entry = audit.log.mock.calls[0]![0];
     expect(entry).toMatchObject({ action: 'integration.custom_api.test', entityType: 'Integration', entityId: null });
-    expect(entry.after).toEqual({ driver: 'custom-api', section: 'devices', outcome: 'ok', recordCount: 1, correlationId: response.correlationId });
+    expect(entry.after).toEqual({ driver: 'custom-api', section: 'items', outcome: 'ok', recordCount: 1, correlationId: response.correlationId });
     expect(JSON.stringify(entry)).not.toContain('token');
   });
 

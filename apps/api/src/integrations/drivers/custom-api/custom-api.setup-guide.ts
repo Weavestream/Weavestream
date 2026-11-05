@@ -18,7 +18,7 @@ export const CUSTOM_API_SETUP_GUIDE: SetupGuideStep[] = [
     body: [
       'On the **Credentials & schedule** tab, enter the **Base URL** of the API. It must start with https://.',
       'Fill **Organizations**: where the list of organizations is, or which field of each record names its organization, or that all records belong to one organization.',
-      'Fill **Devices**, **Other assets**, or both: the request, where the list of records is, how pages work, and which path in each record holds each field. Turn off a resource the API does not have.',
+      'Fill **Items**: the request, where the list of records is, how pages work, and which path in each record holds each field.',
       'Press **Test** in each section. It reads the first page and shows the values that each path finds.',
     ].join('\n\n'),
   },
@@ -37,10 +37,10 @@ export const CUSTOM_API_SETUP_GUIDE: SetupGuideStep[] = [
   },
   {
     id: S.layouts,
-    title: 'Map layouts, then sync',
+    title: 'Map the fields, then sync',
     body: [
-      'Open **Map layouts**. Pick the layout devices go into and the field to match on (for example Serial number).',
-      'On the first sync, Weavestream links to the assets you already have when the serial number is equal. It only creates an asset when there is no match.',
+      'Open **Items fields**. Turn on **Sync this resource on every run**, pick the **Target asset layout**, map each field to a layout field, and set the match keys.',
+      'On the first sync, Weavestream links to the assets you already have when the match value is equal. It only creates an asset when there is no match.',
       'Press **Dry run** to preview, then **Run sync now**.',
     ].join('\n\n'),
   },

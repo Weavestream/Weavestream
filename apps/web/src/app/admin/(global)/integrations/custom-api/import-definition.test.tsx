@@ -16,7 +16,7 @@ const valid = {
   auth: { method: 'bearer' },
   organizations: { mode: 'single' },
   resources: {
-    devices: { enabled: true, request: { path: '/devices' }, idPath: 'id', namePath: 'name', matchPath: 'serial' },
+    items: { enabled: true, request: { path: '/devices' }, idPath: 'id', namePath: 'name', matchPath: 'serial' },
   },
 };
 

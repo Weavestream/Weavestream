@@ -72,7 +72,7 @@ function definition(overrides: Partial<CustomApiDefinitionInput> = {}): CustomAp
       namePath: 'name',
     },
     resources: {
-      devices: {
+      items: {
         enabled: true,
         request: { path: '/devices', query: { group: '{orgId}', cursor: '{cursor}' } },
         recordsPath: 'devices',
@@ -80,15 +80,14 @@ function definition(overrides: Partial<CustomApiDefinitionInput> = {}): CustomAp
         idPath: 'id',
         namePath: 'name',
         matchPath: 'system.serial',
-        standardFields: { hostname: 'hostname', ip_address: 'system.ip' },
-        extraFields: [
+        fields: [
+          { key: 'hostname', label: 'Hostname', path: 'hostname', type: 'TEXT' },
           { key: 'agent_version', label: 'Agent version', path: 'agent', type: 'TEXT' },
           { key: 'last_contact', label: 'Last contact', path: 'seen', type: 'DATETIME' },
           { key: 'cores', label: 'Cores', path: 'cores', type: 'NUMBER' },
         ],
         recordUrl: 'https://app.example.com/devices/{id}',
       },
-      other_assets: { enabled: false },
     },
     ...overrides,
   };
@@ -108,7 +107,7 @@ function ctx(def: CustomApiDefinitionInput = definition(), secret: Record<string
   };
 }
 
-function fetchCtx(base: IntegrationContext, resourceKey = 'devices', externalOrgId = 'g1'): FetchRecordsContext {
+function fetchCtx(base: IntegrationContext, resourceKey = 'items', externalOrgId = 'g1'): FetchRecordsContext {
   return { ...base, externalOrgId, resourceKey, filter: {}, mode: 'full', updatedSince: null, snapshotAt: SNAPSHOT };
 }
 
@@ -139,6 +138,14 @@ describe('descriptor', () => {
     expect(driver.descriptor.secretBoundConfigKeys).toEqual(['baseUrl', 'auth.tokenUrl']);
     expect(driver.descriptor.secretFields.every((field) => !field.required)).toBe(true);
     expect(JSON.stringify(driver.descriptor)).not.toMatch(/ninja|level|breeze|herman/i);
+  });
+
+  it('has 1 Items resource that links to existing assets by its match keys, with no Map layouts or Differences', () => {
+    expect(driver.descriptor.resources).toHaveLength(1);
+    const [items] = driver.descriptor.resources;
+    expect(items).toMatchObject({ key: 'items', targetKind: 'asset', matchFirst: true });
+    expect(items!.matchSuggestions).toBeUndefined();
+    expect(items!.standardFields).toBeUndefined();
   });
 });
 
@@ -376,8 +383,7 @@ describe('pagination', () => {
   const withPagination = (pagination: unknown, query: Record<string, string>) =>
     definition({
       resources: {
-        devices: { ...(definition().resources.devices as object), pagination, request: { path: '/devices', query: { group: '{orgId}', ...query } } } as never,
-        other_assets: { enabled: false },
+        items: { ...(definition().resources.items as object), pagination, request: { path: '/devices', query: { group: '{orgId}', ...query } } } as never,
       },
     });
 
@@ -569,14 +575,14 @@ describe('organizations', () => {
   it('single: one organization without a request', async () => {
     const calls = installFetchCalls(() => ({ body: {} }));
     const def = definition({ organizations: { mode: 'single' } });
-    (def.resources.devices as { request: unknown }).request = { path: '/devices', query: { cursor: '{cursor}' } };
+    (def.resources.items as { request: unknown }).request = { path: '/devices', query: { cursor: '{cursor}' } };
     await expect(driver.listSourceOrgs(ctx(def))).resolves.toEqual([{ externalId: 'default', name: 'All records', hint: null }]);
     expect(calls).toHaveLength(0);
   });
 
   it('field: collects distinct organization values and gives each org its own records', async () => {
     const def = definition({ organizations: { mode: 'field' } });
-    Object.assign(def.resources.devices as object, {
+    Object.assign(def.resources.items as object, {
       request: { path: '/devices', query: { cursor: '{cursor}' } },
       orgIdPath: 'tenant.id',
       orgNamePath: 'tenant.name',
@@ -594,21 +600,21 @@ describe('organizations', () => {
       { externalId: 't1', name: 'One', hint: null },
       { externalId: 't2', name: 'Two', hint: null },
     ]);
-    const page = await driver.fetchRecords(fetchCtx(ctx(def), 'devices', 't1'), null);
+    const page = await driver.fetchRecords(fetchCtx(ctx(def), 'items', 't1'), null);
     expect(page.records.map((r) => (r as { externalId: string }).externalId)).toEqual(['1', '3']);
   });
 
   it('refuses to fetch for an organization the API does not list (tenant isolation)', async () => {
     installFetchCalls((url) => (url.pathname.endsWith('/groups') ? { body: { groups: [{ id: 'g1' }] } } : { body: { devices: [] } }));
-    await expect(driver.fetchRecords(fetchCtx(ctx(), 'devices', 'g-other'), null)).rejects.toBeInstanceOf(DriverAuthError);
+    await expect(driver.fetchRecords(fetchCtx(ctx(), 'items', 'g-other'), null)).rejects.toBeInstanceOf(DriverAuthError);
     const single = definition({ organizations: { mode: 'single' } });
-    (single.resources.devices as { request: unknown }).request = { path: '/devices', query: { cursor: '{cursor}' } };
-    await expect(driver.fetchRecords(fetchCtx(ctx(single), 'devices', 'g1'), null)).rejects.toBeInstanceOf(DriverAuthError);
+    (single.resources.items as { request: unknown }).request = { path: '/devices', query: { cursor: '{cursor}' } };
+    await expect(driver.fetchRecords(fetchCtx(ctx(single), 'items', 'g1'), null)).rejects.toBeInstanceOf(DriverAuthError);
   });
 
   it('endpoint: a resource scoped only by orgIdPath never gives one organization the records of another', async () => {
     const def = definition();
-    Object.assign(def.resources.devices as object, {
+    Object.assign(def.resources.items as object, {
       request: { path: '/devices', query: { cursor: '{cursor}' } },
       orgIdPath: 'groupId',
     });
@@ -616,7 +622,7 @@ describe('organizations', () => {
     installFetchCalls((url) => (url.pathname.endsWith('/groups')
       ? { body: { groups: [{ id: 'g1' }, { id: 'g2' }] } }
       : { body: { devices: [device(1, { groupId: 'g1' }), device(2, { groupId: 'g2' }), device(3, { groupId: 'g1' })] } }));
-    const ids = async (org: string) => (await driver.fetchRecords(fetchCtx(ctx(def), 'devices', org), null))
+    const ids = async (org: string) => (await driver.fetchRecords(fetchCtx(ctx(def), 'items', org), null))
       .records.map((r) => (r as { externalId: string }).externalId);
     expect(await ids('g1')).toEqual(['1', '3']);
     expect(await ids('g2')).toEqual(['2']);
@@ -624,19 +630,19 @@ describe('organizations', () => {
 
   it('endpoint: refuses to sync a resource with neither {orgId} nor orgIdPath, so 2 organizations never share records', async () => {
     const def = definition();
-    Object.assign(def.resources.devices as object, { request: { path: '/devices', query: { cursor: '{cursor}' } } });
+    Object.assign(def.resources.items as object, { request: { path: '/devices', query: { cursor: '{cursor}' } } });
     const calls = installFetchCalls((url) => (url.pathname.endsWith('/groups')
       ? { body: { groups: [{ id: 'g1' }, { id: 'g2' }] } }
       : { body: { devices: [device(1)] } }));
     for (const org of ['g1', 'g2']) {
-      await expect(driver.fetchRecords(fetchCtx(ctx(def), 'devices', org), null)).rejects.toThrow('The saved API definition is not valid.');
+      await expect(driver.fetchRecords(fetchCtx(ctx(def), 'items', org), null)).rejects.toThrow('The saved API definition is not valid.');
     }
     expect(calls).toHaveLength(0);
   });
 
   it('endpoint: drops records whose orgIdPath names another organization (IDOR backstop)', async () => {
     const def = definition();
-    Object.assign(def.resources.devices as object, { orgIdPath: 'groupId' });
+    Object.assign(def.resources.items as object, { orgIdPath: 'groupId' });
     installFetchCalls((url) => (url.pathname.endsWith('/groups')
       ? { body: { groups: [{ id: 'g1' }] } }
       : { body: { devices: [device(1, { groupId: 'g1' }), device(2, { groupId: 'g2' }), device(3)] } }));
@@ -648,7 +654,7 @@ describe('organizations', () => {
 describe('Test connection and Check setup', () => {
   function singleDefinition(): CustomApiDefinitionInput {
     const def = definition({ organizations: { mode: 'single' } });
-    (def.resources.devices as { request: unknown }).request = { path: '/devices', query: { cursor: '{cursor}' } };
+    (def.resources.items as { request: unknown }).request = { path: '/devices', query: { cursor: '{cursor}' } };
     return def;
   }
 
@@ -679,7 +685,7 @@ describe('Test connection and Check setup', () => {
 
   it('single: with no resource turned on, both checks fail without a request', async () => {
     const calls = installFetchCalls(() => ({ body: {} }));
-    const def = definition({ organizations: { mode: 'single' }, resources: { devices: { enabled: false }, other_assets: { enabled: false } } });
+    const def = definition({ organizations: { mode: 'single' }, resources: { items: { enabled: false } } });
     await expect(driver.testConnection(ctx(def))).rejects.toBeInstanceOf(CustomApiRequestError);
     await expect(driver.diagnose({ mode: 'connection', ctx: ctx(def) } as never)).resolves.toMatchObject({ ok: false });
     expect(calls).toHaveLength(0);
@@ -698,16 +704,17 @@ describe('records', () => {
     return driver.fetchRecords(fetchCtx(ctx(def)), null);
   }
 
-  it('Devices: name, serial and standard fields in fields; extras only in the section', async () => {
+  it('Items: name, match_key and every field go into fields; the section shows the fields', async () => {
     const page = await onePage([device(1)]);
     const record = page.records[0] as { externalId: string; displayName: string; fields: Record<string, unknown>; section: unknown };
     expect(record.externalId).toBe('1');
-    expect(record.fields).toEqual({ name: 'pc-1', serialNumber: 'SN1', hostname: 'pc-1.corp', ip_address: '10.0.0.5' });
+    expect(record.fields).toEqual({ name: 'pc-1', match_key: 'SN1', hostname: 'pc-1.corp', agent_version: '1.2.3', last_contact: '2026-11-01T10:00:00.000Z', cores: 8 });
     expect(integrationSectionSchema.safeParse(record.section).success).toBe(true);
     const section = integrationSectionSchema.parse(record.section);
     expect(section.title).toBe('Custom API');
-    expect(section.groups.map((g) => g.key)).toEqual(['details', 'device']);
+    expect(section.groups.map((g) => g.key)).toEqual(['details']);
     expect(section.groups[0]!.rows).toEqual([
+      { kind: 'text', label: 'Hostname', value: 'pc-1.corp' },
       { kind: 'text', label: 'Agent version', value: '1.2.3' },
       { kind: 'datetime', label: 'Last contact', value: '2026-11-01T10:00:00.000Z' },
       { kind: 'number', label: 'Cores', value: 8 },
@@ -724,22 +731,20 @@ describe('records', () => {
     expect(page.records).toHaveLength(1);
     const fields = (page.records[0] as { fields: Record<string, unknown> }).fields;
     expect(fields.name).toBe('1');
-    expect(fields.serialNumber).toBeNull();
+    expect(fields.match_key).toBeNull();
     expect((fields.hostname as string).length).toBe(1_000);
   });
 
-  it('Other assets: every extra field goes into fields, with match_key when set', async () => {
+  it('Items of any kind: typed fields, and no match_key when no match path is set', async () => {
     const def = definition({
       resources: {
-        devices: { enabled: false },
-        other_assets: {
+        items: {
           enabled: true,
           request: { path: '/licenses', query: { g: '{orgId}' } },
           recordsPath: 'licenses',
           idPath: 'id',
           namePath: 'name',
-          matchPath: 'key',
-          extraFields: [
+          fields: [
             { key: 'seats', label: 'Seats', path: 'seats', type: 'NUMBER' },
             { key: 'active', label: 'Active', path: 'active', type: 'BOOLEAN' },
             { key: 'portal', label: 'Portal', path: 'url', type: 'URL' },
@@ -749,36 +754,35 @@ describe('records', () => {
     });
     installFetchCalls((url) => (url.pathname.endsWith('/groups')
       ? { body: { groups: [{ id: 'g1' }] } }
-      : { body: { licenses: [{ id: 'L1', name: 'Office', key: 'K-1', seats: 5, active: 'true', url: 'https://portal.example/l/1' }] } }));
-    const page = await driver.fetchRecords(fetchCtx(ctx(def), 'other_assets'), null);
+      : { body: { licenses: [{ id: 'L1', name: 'Office', seats: 5, active: 'true', url: 'https://portal.example/l/1' }] } }));
+    const page = await driver.fetchRecords(fetchCtx(ctx(def), 'items'), null);
     const record = page.records[0] as { fields: Record<string, unknown>; section: unknown };
-    expect(record.fields).toEqual({ name: 'Office', match_key: 'K-1', seats: 5, active: true, portal: 'https://portal.example/l/1' });
+    expect(record.fields).toEqual({ name: 'Office', seats: 5, active: true, portal: 'https://portal.example/l/1' });
     const section = integrationSectionSchema.parse(record.section);
     expect(section.groups[0]!.rows).toContainEqual({ kind: 'link', label: 'Portal', value: 'https://portal.example/l/1' });
   });
 
-  it('a resource turned off in the definition is skipped by the runner', async () => {
+  it('Items turned off in the definition is skipped by the runner', async () => {
     const def = definition();
-    def.resources.other_assets = { enabled: false };
-    await expect(driver.fetchRecords(fetchCtx(ctx(def), 'other_assets'), null)).rejects.toBeInstanceOf(DriverResourceUnavailableError);
+    def.resources.items = { enabled: false };
+    await expect(driver.fetchRecords(fetchCtx(ctx(def), 'items'), null)).rejects.toBeInstanceOf(DriverResourceUnavailableError);
   });
 
-  it('listSourceFields: Devices offers the standard fields that have a path; Other assets offers its extras', async () => {
-    const devices = await driver.listSourceFields({ ...ctx(), externalOrgId: 'g1', resourceKey: 'devices' });
-    expect(devices.map((f) => f.key)).toEqual(['name', 'serialNumber', 'hostname', 'ip_address']);
+  it('listSourceFields: Name, Match key when a match path is set, then each field', async () => {
+    const items = await driver.listSourceFields({ ...ctx(), externalOrgId: 'g1', resourceKey: 'items' });
+    expect(items.map((f) => f.key)).toEqual(['name', 'match_key', 'hostname', 'agent_version', 'last_contact', 'cores']);
     const def = definition({
       resources: {
-        devices: { enabled: false },
-        other_assets: {
+        items: {
           enabled: true,
           request: { path: '/x', query: { g: '{orgId}' } },
           idPath: 'id',
           namePath: 'name',
-          extraFields: [{ key: 'seats', label: 'Seats', path: 'seats', type: 'NUMBER' }],
+          fields: [{ key: 'seats', label: 'Seats', path: 'seats', type: 'NUMBER' }],
         },
       },
     });
-    const other = await driver.listSourceFields({ ...ctx(def), externalOrgId: 'g1', resourceKey: 'other_assets' });
+    const other = await driver.listSourceFields({ ...ctx(def), externalOrgId: 'g1', resourceKey: 'items' });
     expect(other).toEqual([
       { key: 'name', label: 'Name', hintType: 'TEXT', alwaysPresent: true },
       { key: 'seats', label: 'Seats', hintType: 'NUMBER', alwaysPresent: false },
@@ -787,9 +791,9 @@ describe('records', () => {
 
   it('builds the Open in link from recordUrl, on any HTTPS host, with the id encoded', () => {
     const config = customApiDefinitionSchema.parse(definition());
-    expect(sourceRecordUrl('custom-api', { externalId: 'g1:devices:a/b c', externalOrgId: 'g1', resourceKey: 'devices', config })).toBe('https://app.example.com/devices/a%2Fb%20c');
-    expect(sourceRecordUrl('custom-api', { externalId: 'g1:other_assets:1', externalOrgId: 'g1', resourceKey: 'other_assets', config })).toBeUndefined();
-    expect(sourceRecordUrl('custom-api', { externalId: 'g1:devices:1', externalOrgId: 'g1', resourceKey: 'devices', config: { broken: true } })).toBeUndefined();
+    expect(sourceRecordUrl('custom-api', { externalId: 'g1:items:a/b c', externalOrgId: 'g1', resourceKey: 'items', config })).toBe('https://app.example.com/devices/a%2Fb%20c');
+    expect(sourceRecordUrl('custom-api', { externalId: 'g1:devices:1', externalOrgId: 'g1', resourceKey: 'devices', config })).toBeUndefined();
+    expect(sourceRecordUrl('custom-api', { externalId: 'g1:items:1', externalOrgId: 'g1', resourceKey: 'items', config: { broken: true } })).toBeUndefined();
   });
 });
 
@@ -821,13 +825,13 @@ describe('validateConfiguration', () => {
 
 describe('Test probe', () => {
   const parsed = () => customApiDefinitionSchema.parse(definition());
-  const probe = (section: 'organizations' | 'devices', items: unknown[], orgId?: string) => {
+  const probe = (section: 'organizations' | 'items', items: unknown[], orgId?: string) => {
     installFetchCalls((url) => (url.pathname.endsWith('/groups') ? { body: { groups: items } } : { body: { devices: items, next: 'more' } }));
     return runProbe({ definition: parsed(), secret: { token: TOKEN, 'header:x-tenant': 't' }, section, orgId, http: ctx().http, correlationId: 'p' });
   };
 
   it('returns the count, more pages, up to 5 records and the key list', async () => {
-    const outcome = await probe('devices', Array.from({ length: 12 }, (_, i) => device(i + 1)), 'g1');
+    const outcome = await probe('items', Array.from({ length: 12 }, (_, i) => device(i + 1)), 'g1');
     if (!outcome.ok) throw new Error(outcome.message);
     expect(outcome.recordCount).toBe(12);
     expect(outcome.hasMore).toBe(true);
@@ -838,7 +842,7 @@ describe('Test probe', () => {
   });
 
   it('flags a mapped field with no value or with an object', async () => {
-    const outcome = await probe('devices', [device(1, { agent: undefined, seen: { at: 1 } })], 'g1');
+    const outcome = await probe('items', [device(1, { agent: undefined, seen: { at: 1 } })], 'g1');
     if (!outcome.ok) throw new Error(outcome.message);
     const fields = outcome.records[0]!.fields;
     expect(fields.find((f) => f.key === 'agent_version')!.warning).toBe('missing');
@@ -847,9 +851,9 @@ describe('Test probe', () => {
 
   it('masks a short value under a sensitive key, in the key list and in mapped fields', async () => {
     const def = definition();
-    (def.resources.devices as { extraFields: unknown[] }).extraFields = [{ key: 'notes', label: 'Notes', path: 'creds.apiToken', type: 'TEXT' }];
+    (def.resources.items as { fields: unknown[] }).fields = [{ key: 'notes', label: 'Notes', path: 'creds.apiToken', type: 'TEXT' }];
     installFetchCalls(() => ({ body: { devices: [device(1, { password: 'hunter2', creds: { apiToken: 'abc123' } })] } }));
-    const outcome = await runProbe({ definition: customApiDefinitionSchema.parse(def), secret: { token: TOKEN, 'header:x-tenant': 't' }, section: 'devices', orgId: 'g1', http: ctx().http, correlationId: 'p' });
+    const outcome = await runProbe({ definition: customApiDefinitionSchema.parse(def), secret: { token: TOKEN, 'header:x-tenant': 't' }, section: 'items', orgId: 'g1', http: ctx().http, correlationId: 'p' });
     if (!outcome.ok) throw new Error(outcome.message);
     expect(outcome.keys.find((k) => k.path === 'password')).toEqual({ path: 'password', type: 'string', sample: MASK, masked: true });
     expect(outcome.keys.find((k) => k.path === 'creds.apiToken')!.sample).toBe(MASK);
@@ -872,14 +876,14 @@ describe('Test probe', () => {
   });
 
   it('asks for an organization id in endpoint mode, and reports API errors as fixed text', async () => {
-    await expect(probe('devices', [])).resolves.toMatchObject({ ok: false, message: expect.stringMatching(/organization id/) });
+    await expect(probe('items', [])).resolves.toMatchObject({ ok: false, message: expect.stringMatching(/organization id/) });
     installFetchCalls(() => ({ status: 403, body: { detail: 'secret upstream text' } }));
-    const outcome = await runProbe({ definition: parsed(), secret: { token: TOKEN, 'header:x-tenant': 't' }, section: 'devices', orgId: 'g1', http: ctx().http, correlationId: 'p' });
-    expect(outcome).toEqual({ ok: false, section: 'devices', message: 'The API refused the credentials (403).', status: 403 });
+    const outcome = await runProbe({ definition: parsed(), secret: { token: TOKEN, 'header:x-tenant': 't' }, section: 'items', orgId: 'g1', http: ctx().http, correlationId: 'p' });
+    expect(outcome).toEqual({ ok: false, section: 'items', message: 'The API refused the credentials (403).', status: 403 });
   });
 
   it('never returns the raw body', async () => {
-    const outcome = await probe('devices', [device(1, { blob: { deep: { very: 'raw-marker' } } })], 'g1');
+    const outcome = await probe('items', [device(1, { blob: { deep: { very: 'raw-marker' } } })], 'g1');
     if (!outcome.ok) throw new Error(outcome.message);
     expect(Object.keys(outcome).sort()).toEqual(['hasMore', 'keys', 'ok', 'recordCount', 'records', 'section']);
   });
