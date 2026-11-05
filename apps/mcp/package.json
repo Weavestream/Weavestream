@@ -16,7 +16,7 @@
     "lint": "eslint 'src/**/*.ts'"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.32.1",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "@weavestream/shared": "workspace:*",
     "zod": "^4.6.7"
   },
