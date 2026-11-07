@@ -7,7 +7,7 @@ import {
 const totals = (created: number) => ({
   fetched: created, created, updated: 0, unchanged: 0, claimed: 0, archived: 0,
   skippedAmbiguous: 0, skippedManual: 0, skippedArchived: 0, stale: 0,
-  restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0,
+  restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0, incomplete: 0,
 });
 
 describe('mergeAggregate retry replacement', () => {

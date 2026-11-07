@@ -843,12 +843,18 @@ export class IntegrationSyncRunnerService {
         traversalAuthoritative = traversalAuthoritative && pageAuthoritative;
         mergePageOutcome(totals, conflicts, pageTotals, pageConflicts);
         if (page.terminal) {
+          // The walk finished, but some records carried a gap (unreadable,
+          // withheld, or a link target that is not synced). The resource still
+          // succeeds so its dependents run, and the gaps are warnings in the
+          // conflict list. Safety does not depend on this status: the
+          // checkpoint above stayed non-authoritative, so no stale sweep ran
+          // and the next run reads these records again.
           if (!traversalAuthoritative) {
-            return {
-              status: 'failed', totals, conflicts,
-              error: 'Resource evaluation was incomplete; last-known-good reconciliation state was preserved.',
-              companyId: mapping.companyId, resourceKey: resource.resourceKey,
-            };
+            // An explicit marker, because a resumed walk can finish here
+            // with zero blocked records of its own.
+            totals.incomplete = 1;
+            conflicts.length = Math.min(conflicts.length, MAX_RUN_CONFLICTS - 1);
+            conflicts.push({ kind: 'validation_error', externalId: '', message: INCOMPLETE_TRAVERSAL_WARNING });
           }
           break;
         }
@@ -1362,6 +1368,9 @@ function deriveLegacyHighWater(records: DriverRecord[]): string | null {
   return highest;
 }
 
+export const INCOMPLETE_TRAVERSAL_WARNING =
+  'Some records were not written (see the conflicts above). Last-known-good data was kept, and nothing was marked stale.';
+
 /**
  * Run-viewer label for a gap. A withheld secret is neither a validation
  * failure nor a driver fault, so it keeps its own label instead of being
@@ -1538,7 +1547,7 @@ function mergePageOutcome(
   for (const key of [
     'fetched', 'created', 'updated', 'unchanged', 'claimed', 'archived',
     'skippedAmbiguous', 'skippedManual', 'skippedArchived', 'stale', 'restored',
-    'blocked', 'secretBlocked', 'missingDependency', 'errors',
+    'blocked', 'secretBlocked', 'missingDependency', 'errors', 'incomplete',
   ] as const) {
     totals[key] += pageTotals[key];
   }
@@ -1563,6 +1572,7 @@ function emptyTotals(): SyncRunTotals {
     secretBlocked: 0,
     missingDependency: 0,
     errors: 0,
+    incomplete: 0,
   };
 }
 

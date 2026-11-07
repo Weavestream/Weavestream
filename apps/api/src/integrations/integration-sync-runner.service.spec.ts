@@ -1,4 +1,5 @@
 import {
+  INCOMPLETE_TRAVERSAL_WARNING,
   IntegrationSyncRunnerService,
   SOURCE_FIELD_KEYS_CAP,
   collectSourceFieldKeys,
@@ -1173,7 +1174,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     await expect(service.runMapping({
       syncRunId: 'run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
       dryRun: false, actorId: 'actor', mode: 'incremental',
-    })).resolves.toMatchObject({ status: 'failed' });
+    })).resolves.toMatchObject({ status: 'succeeded', conflicts: expect.arrayContaining([expect.objectContaining({ message: INCOMPLETE_TRAVERSAL_WARNING })]) });
     const gapCalls = provenance.persistGaps.mock.calls as unknown as Array<[
       unknown, { observedAt: Date }, unknown[],
     ]>;
@@ -1237,7 +1238,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     await expect(service.runMapping({
       syncRunId: 'validation-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
       dryRun: false, actorId: 'actor', mode: 'full',
-    })).resolves.toMatchObject({ status: 'failed', totals: { created: 1, errors: 1 } });
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { created: 1, errors: 1 }, conflicts: expect.arrayContaining([expect.objectContaining({ message: INCOMPLETE_TRAVERSAL_WARNING })]) });
     expect(writer.write).toHaveBeenCalledTimes(1);
     expect(tx.integrationSyncRecord.upsert).toHaveBeenCalledTimes(1);
     expect(provenance.persistGaps).toHaveBeenCalledWith(expect.anything(), expect.anything(), [
@@ -1273,7 +1274,7 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     await expect(service.runMapping({
       syncRunId: 'dependency-run', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
       dryRun: false, actorId: 'actor', mode: 'incremental',
-    })).resolves.toMatchObject({ status: 'failed', totals: { missingDependency: 1 } });
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { missingDependency: 1 }, conflicts: expect.arrayContaining([expect.objectContaining({ message: INCOMPLETE_TRAVERSAL_WARNING })]) });
     expect(provenance.persistGaps).toHaveBeenCalledWith(expect.anything(), expect.anything(), [
       expect.objectContaining({ kind: 'missing_dependency' }),
     ]);
@@ -1330,7 +1331,13 @@ describe('IntegrationSyncRunnerService writer dispatch', () => {
     await expect(service.runMapping({
       syncRunId: 'resume-run-2', integrationCompanyMappingId: 'mapping', resourceId: 'resource',
       dryRun: false, actorId: 'actor', mode: 'full',
-    })).resolves.toMatchObject({ status: 'failed', error: expect.stringContaining('incomplete') });
+    })).resolves.toMatchObject({
+      status: 'succeeded', error: null,
+      // The resumed walk saw no gap of its own, so only this marker carries
+      // the warning to the Runs tab.
+      totals: { blocked: 0, errors: 0, missingDependency: 0, incomplete: 1 },
+      conflicts: expect.arrayContaining([expect.objectContaining({ message: INCOMPLETE_TRAVERSAL_WARNING })]),
+    });
     expect(prisma.integrationSyncCheckpoint.findUnique).toHaveBeenCalledTimes(2);
     expect(provenance.resolveAbsentGaps).not.toHaveBeenCalled();
     expect(provenance.staleUnseen).not.toHaveBeenCalled();

@@ -83,7 +83,7 @@ export function RunsTab({
         renderMobileCard={(r) => (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <RunStatusTag status={r.status} />
+              <RunStatusTag status={r.status} totals={r.totals} />
               <Tag tone="default">{r.kind}</Tag>
               {!domains && <RunModeTag mode={r.mode} />}
               {r.dryRun && <Tag tone="info">dry run</Tag>}
@@ -134,7 +134,7 @@ function runColumns(
       id: 'status',
       header: 'Status',
       width: 104,
-      render: (r) => <RunStatusTag status={r.status} />,
+      render: (r) => <RunStatusTag status={r.status} totals={r.totals} />,
       sortValue: (r) => r.status,
     },
     {
@@ -234,7 +234,7 @@ function RunDetailDialog({
       title={
         <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           Run details
-          {run && <RunStatusTag status={run.status} />}
+          {run && <RunStatusTag status={run.status} totals={run.totals} />}
           {run?.dryRun && <Tag tone="info">dry run</Tag>}
         </span>
       }
@@ -338,7 +338,7 @@ function RunDetailDialog({
                               {m.externalOrgName ?? m.externalOrgId}
                             </Tag>
                           )}
-                          <RunStatusTag status={r.status} />
+                          <RunStatusTag status={r.status} totals={r.totals} />
                         </div>
                         <RunTotalsBreakdown totals={r.totals as SyncRunTotals | null} />
                         <ResourceTotalsBreakdown
@@ -415,7 +415,15 @@ function conflictTone(
   }
 }
 
-function RunStatusTag({ status }: { status: string }) {
+/**
+ * A succeeded run whose records were partly blocked (withheld, unreadable,
+ * or with a link target that is not synced) shows "warnings": the run
+ * finished, but the conflict list needs a look.
+ */
+function RunStatusTag({ status, totals }: { status: string; totals?: unknown }) {
+  if (status === 'succeeded' && hasRecordWarnings(totals)) {
+    return <Tag tone="warn">warnings</Tag>;
+  }
   const tone = (() => {
     switch (status) {
       case 'succeeded':
@@ -435,6 +443,13 @@ function RunStatusTag({ status }: { status: string }) {
       {status}
     </Tag>
   );
+}
+
+function hasRecordWarnings(totals: unknown): boolean {
+  if (!totals || typeof totals !== 'object') return false;
+  const t = totals as Partial<SyncRunTotals>;
+  return (t.blocked ?? 0) > 0 || (t.missingDependency ?? 0) > 0 || (t.errors ?? 0) > 0
+    || (t.incomplete ?? 0) > 0;
 }
 
 /**
@@ -503,6 +518,7 @@ function RunTotalsSummary({
       {totals.secretBlocked > 0 ? ` · ${totals.secretBlocked} secret blocked` : ''}
       {totals.missingDependency > 0 ? ` · ${totals.missingDependency} missing dependency` : ''}
       {totals.errors > 0 ? ` · ${totals.errors} errors` : ''}
+      {(totals.incomplete ?? 0) > 0 ? ` · ${totals.incomplete} incomplete` : ''}
       {dryRun ? ' · dry-run' : ''}
     </span>
   );
@@ -533,7 +549,8 @@ function ResourceTotalsBreakdown({
         v.blocked > 0 ||
         v.secretBlocked > 0 ||
         v.missingDependency > 0 ||
-        v.errors > 0)
+        v.errors > 0 ||
+        (v.incomplete ?? 0) > 0)
     );
   });
   if (entries.length === 0) return null;
@@ -616,6 +633,7 @@ function RunTotalsBreakdown({ totals }: { totals: SyncRunTotals | null }) {
       { label: 'secret blocked', value: totals.secretBlocked, tone: 'warn' },
       { label: 'missing dependency', value: totals.missingDependency, tone: 'warn' },
       { label: 'errors', value: totals.errors, tone: 'danger' },
+      { label: 'incomplete', value: totals.incomplete ?? 0, tone: 'warn' },
     ] satisfies Cell[]
   ).filter((c) => c.value > 0);
   if (cells.length === 0) return <Tag tone="default">no records</Tag>;

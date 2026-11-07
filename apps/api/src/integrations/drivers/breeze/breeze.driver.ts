@@ -17,7 +17,6 @@ import {
 } from './breeze-partner-api.client.js';
 import {
   BREEZE_ENDPOINT_BY_RESOURCE,
-  BREEZE_RESOURCE_KEYS,
   breezeResourceKeySchema,
   type BreezeOrganization,
   type BreezePartnerEnvelope,
@@ -335,9 +334,10 @@ export class BreezeDriver implements IntegrationDriver {
         'Device relationships',
         'relation',
         { sourceEndpoint: '/device-relationships' },
-        BREEZE_RESOURCE_KEYS.filter((key) => key !== 'device-relationships'),
-        // Runs fail until the operator defines custom field values, so
-        // fresh integrations must not sync this resource unprompted.
+        // Only the resources an edge can point at (`RELATIONSHIP_RESOURCE_KEYS`
+        // in breeze.transforms.ts). They order the run; an endpoint that is
+        // not synced becomes a per-record gap, not a skipped resource.
+        ['sites', 'devices', 'virtual-machines', 'network-equipment'],
         { defaultEnabled: false },
       ),
     ],
@@ -419,7 +419,7 @@ export class BreezeDriver implements IntegrationDriver {
       }
     }
     const transformed = [] as ReturnType<typeof transformBreezeRecord>;
-    const inlineBlocked: Array<{ id: string; orgId: string }> = [];
+    const inlineBlocked: BreezeSensitiveDefinitionError[] = [];
     const boundedBlocked: Array<{ id: string; orgId: string }> = [];
     const unreadable: BreezeUnreadableRecordError[] = [];
     for (const record of page.data) {
@@ -434,7 +434,7 @@ export class BreezeDriver implements IntegrationDriver {
         transformed.push(...transformBreezeRecord(resource.data, record));
       } catch (error) {
         if (error instanceof BreezeSensitiveDefinitionError) {
-          inlineBlocked.push({ id: error.sourceId, orgId: error.orgId });
+          inlineBlocked.push(error);
         } else if (error instanceof BreezeBoundedDefinitionError) {
           boundedBlocked.push({ id: error.sourceId, orgId: error.orgId });
         } else if (error instanceof BreezeUnreadableRecordError) {
@@ -475,14 +475,14 @@ export class BreezeDriver implements IntegrationDriver {
         // distinct reason code from Breeze's `secret_detected`.
         ...inlineBlocked.map((blocked) => ({
           kind: 'secret_blocked' as const,
-          externalId: `${blocked.orgId}:${resource.data}:${blocked.id}`,
-          message: `Weavestream withheld a ${resource.data} record because its definition contains secret-like material. Remove the credential-like value from the record in Breeze and rerun the sync.`,
+          externalId: `${blocked.orgId}:${resource.data}:${blocked.sourceId}`,
+          message: weavestreamWithheldMessage(resource.data, blocked),
           details: {
             reasonCode: 'secret_like_material',
-            fieldPaths: [],
+            fieldPaths: blocked.fieldPath ? [blocked.fieldPath] : [],
             sourceResource: resource.data,
             sourceOrgId: blocked.orgId,
-            sourceId: blocked.id,
+            sourceId: blocked.sourceId,
           },
         })),
         ...boundedBlocked.map((blocked) => ({
@@ -641,6 +641,50 @@ function driverRecordSemantics(record: DriverFetchPage['records'][number]): stri
     displayName: record.displayName,
     fields: record.fields,
   });
+}
+
+/**
+ * Names the record and the field so an operator can fix it in Breeze. The
+ * path is key names only and the name was checked as safe; the value that
+ * matched is never in the message.
+ */
+function weavestreamWithheldMessage(
+  resource: BreezeResourceKey,
+  blocked: BreezeSensitiveDefinitionError,
+): string {
+  // The runner rejects a page with any message over 512 characters, so each
+  // part is bounded here and the whole message is bounded again.
+  const name = blocked.recordName ? boundStart(blocked.recordName, 80) : null;
+  const sourceId = boundStart(blocked.sourceId, 64);
+  const record = name ? `${resource} record "${name}" (${sourceId})` : `${resource} record ${sourceId}`;
+  // The end of a path names the field, so a long path keeps its end.
+  const where = blocked.fieldPath ? `the field ${boundEnd(blocked.fieldPath, 160)}` : 'its definition';
+  const message = `Weavestream withheld ${record} because ${where} looks like it holds a credential. Remove or change that value in Breeze and rerun the sync.`;
+  return boundStart(message, MAX_WITHHELD_MESSAGE_LENGTH);
+}
+
+const MAX_WITHHELD_MESSAGE_LENGTH = 500;
+
+// Bounds count UTF-16 code units, as the runner's `message.length` check
+// does, and never split a character. The ellipsis is one code unit.
+function boundStart(value: string, max: number): string {
+  if (value.length <= max) return value;
+  let kept = '';
+  for (const char of value) {
+    if (kept.length + char.length > max - 1) break;
+    kept += char;
+  }
+  return `${kept}…`;
+}
+
+function boundEnd(value: string, max: number): string {
+  if (value.length <= max) return value;
+  let kept = '';
+  for (const char of [...value].reverse()) {
+    if (kept.length + char.length > max - 1) break;
+    kept = char + kept;
+  }
+  return `…${kept}`;
 }
 
 function field(

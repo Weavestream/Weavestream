@@ -5,6 +5,7 @@ import { assertRecommendedDestinations } from '../driver-utils.js';
 import { BreezeDriver } from './breeze.driver.js';
 import {
   BreezeBoundedDefinitionError,
+  BreezeSensitiveDefinitionError,
   transformBreezeRecord,
 } from './breeze.transforms.js';
 import { TextStrategy, TextareaStrategy } from '../../../field-types/strategies/text.strategy.js';
@@ -338,33 +339,12 @@ describe('BreezeDriver descriptor', () => {
       {
         key: 'device-relationships',
         targetKind: 'relation',
-        dependsOnResourceKeys: [
-          'sites',
-          'devices',
-          'site-inventory',
-          'device-inventory',
-          'device-software',
-          'network-equipment',
-          'virtual-machines',
-          'subnets',
-          'ip-reservations',
-          'configuration-policies',
-          'configuration-assignments',
-          'configuration-assignment-relations',
-          'scripts',
-          'automations',
-          'automation-relations',
-          'backup-configurations',
-          'backup-configuration-relations',
-          'custom-fields',
-          'custom-field-values',
-        ],
+        dependsOnResourceKeys: ['sites', 'devices', 'virtual-machines', 'network-equipment'],
         targetConfig: { sourceEndpoint: '/device-relationships' },
       },
     ]);
-    // Device relationships cannot sync until the operator defines custom
-    // field values, so it must seed disabled; every other resource keeps
-    // the enabled-by-default behavior.
+    // Device relationships seeds disabled; every other resource keeps the
+    // enabled-by-default behavior.
     expect(
       descriptor.resources
         .filter((resource) => resource.defaultEnabled === false)
@@ -602,9 +582,20 @@ describe('Breeze transforms', () => {
     expect(() => transformBreezeRecord('configuration-policies', policy({
       tokenize: true, secretary: 'Alice', policyEnabled: true,
     }))).not.toThrow();
+    // A credential-named field with no text or number in it holds no secret
+    // (issue 112: an empty S3 destination form in a backup feature).
     expect(() => transformBreezeRecord('configuration-policies', policy({ passwordPolicyEnabled: true })))
-      .toThrow(/blocked|secret|sensitive/i);
+      .not.toThrow();
     expect(() => transformBreezeRecord('configuration-policies', policy({ providerConfig: {} })))
+      .not.toThrow();
+    expect(() => transformBreezeRecord('configuration-policies', policy({
+      destination: { name: '', bucket: '', accessKeyId: '', secretAccessKey: '  ' },
+    }))).not.toThrow();
+    expect(() => transformBreezeRecord('configuration-policies', policy({ providerConfig: { region: 'eu' } })))
+      .toThrow(/blocked|secret|sensitive/i);
+    expect(() => transformBreezeRecord('configuration-policies', policy({ secretAccessKey: 'abc' })))
+      .toThrow(/blocked|secret|sensitive/i);
+    expect(() => transformBreezeRecord('configuration-policies', policy({ pin: { password: 1234 } })))
       .toThrow(/blocked|secret|sensitive/i);
     expect(() => transformBreezeRecord('configuration-policies', policy({ nested: { accessToken: 'ordinary' } })))
       .toThrow(/blocked|secret|sensitive/i);
@@ -1623,12 +1614,112 @@ describe('BreezeDriver transport delegation', () => {
     expect(page.records).toHaveLength(1);
     expect(page.blockedInputs).toEqual([expect.objectContaining({
       kind: 'secret_blocked', externalId: `${ORG}:scripts:${DEVICE}`,
-      message: expect.stringMatching(/^Weavestream withheld a scripts record/),
-      details: expect.objectContaining({ reasonCode: 'secret_like_material', sourceId: DEVICE }),
+      message: `Weavestream withheld scripts record "${unsafeName}" (${DEVICE}) because the field content looks like it holds a credential. Remove or change that value in Breeze and rerun the sync.`,
+      details: expect.objectContaining({
+        reasonCode: 'secret_like_material', sourceId: DEVICE, fieldPaths: ['content'],
+      }),
     })]);
+    // The name passed the secret check and appears only in the message; the
+    // record's content and other fields do not reach the page.
     const serialized = JSON.stringify(page);
     expect(serialized).not.toContain(content);
-    expect(serialized).not.toContain(unsafeName);
+    expect(serialized.split(unsafeName)).toHaveLength(2);
+  });
+
+  it('names the field path, never the value, when a policy is withheld (issue 112)', async () => {
+    const secretValue = 'kJhGfDsAqWeRtYuIoPlKjHgFdSaZxCvBnMqAzWsXe';
+    const policy = {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Standard buildout', description: null,
+      status: 'active', features: [
+        { id: SEGMENT, type: 'patch', policyId: null, settings: { rebootPolicy: 'if_required' } },
+        { id: SEGMENT, type: 'backup', policyId: null, settings: { destination: { secretAccessKey: secretValue } } },
+      ],
+    };
+    const client = {
+      testConnection: jest.fn(), listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: [policy],
+        nextCursor: null, hasMore: false,
+      }),
+    };
+    const page = await new BreezeDriver(client).fetchRecords(
+      { ...ctx('configuration-policies'), mode: 'full', updatedSince: null }, null,
+    );
+    expect(page.records).toHaveLength(0);
+    expect(page.blockedInputs).toEqual([expect.objectContaining({
+      kind: 'secret_blocked',
+      message: expect.stringContaining(
+        'configuration-policies record "Standard buildout" (' + DEVICE + ') because the field features[1].settings.destination.secretAccessKey looks like it holds a credential',
+      ),
+      details: expect.objectContaining({
+        fieldPaths: ['features[1].settings.destination.secretAccessKey'],
+      }),
+    })]);
+    expect(JSON.stringify(page)).not.toContain(secretValue);
+  });
+
+  const withheldPolicyPage = async (policy: Record<string, unknown>) => {
+    const client = {
+      testConnection: jest.fn(), listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: [policy],
+        nextCursor: null, hasMore: false,
+      }),
+    };
+    return new BreezeDriver(client).fetchRecords(
+      { ...ctx('configuration-policies'), mode: 'full', updatedSince: null }, null,
+    );
+  };
+  const policyWithSettings = (settings: Record<string, unknown>, name = 'Standard buildout') => ({
+    ...base, siteId: null, sourceScope: 'organization', name, description: null,
+    status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings }],
+  });
+
+  it('redacts a key that carries an assignment instead of showing it in the path', async () => {
+    const page = await withheldPolicyPage(policyWithSettings({ options: { 'password=hunter2': 'on' } }));
+    expect(page.blockedInputs).toEqual([expect.objectContaining({
+      details: expect.objectContaining({ fieldPaths: ['features[0].settings.options.[redacted]'] }),
+    })]);
+    expect(JSON.stringify(page)).not.toContain('hunter2');
+  });
+
+  it('does not treat a credential-named object with keys as empty', async () => {
+    const tokenKey = 'kJhGfDsAqWeRtYuIoPlKjHgFdSaZxCvBnMqAzWsXe';
+    const page = await withheldPolicyPage(policyWithSettings({ providerConfig: { [tokenKey]: true } }));
+    expect(page.records).toHaveLength(0);
+    expect(page.blockedInputs).toEqual([expect.objectContaining({
+      kind: 'secret_blocked',
+      details: expect.objectContaining({ fieldPaths: ['features[0].settings.providerConfig'] }),
+    })]);
+    expect(JSON.stringify(page)).not.toContain(tokenKey);
+  });
+
+  it('bounds the withheld message under the runner limit for a long name and path', async () => {
+    let settings: Record<string, unknown> = { secretAccessKey: 'abc' };
+    for (let level = 0; level < 12; level += 1) settings = { [`nestedSection${level}Settings`]: settings };
+    const longName = '🛡️'.repeat(40) + 'x'.repeat(40);
+    const page = await withheldPolicyPage(policyWithSettings(settings, longName));
+    const message = page.blockedInputs?.[0]?.message ?? '';
+    expect(message.length).toBeGreaterThan(0);
+    expect(message.length).toBeLessThanOrEqual(500);
+    // The end of the path is kept, because it names the field.
+    expect(message).toContain('.secretAccessKey looks like it holds a credential');
+    expect(message).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+  });
+
+  it('leaves out a record name that itself looks like a credential', () => {
+    const secretName = 'kJhGfDsAqWeRtYuIoPlKjHgFdSaZxCvBnMqAzWsXe';
+    let caught: unknown;
+    try {
+      transformBreezeRecord('configuration-policies', {
+        ...base, siteId: null, sourceScope: 'organization', name: secretName, description: null,
+        status: 'active', features: [],
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(BreezeSensitiveDefinitionError);
+    expect(caught).toMatchObject({ fieldPath: 'name', recordName: null });
   });
 
   it('keeps maximum automation dependency fan-out lossless within 10,000-record continuation pages', async () => {
@@ -1773,7 +1864,9 @@ describe('BreezeDriver transport delegation', () => {
     const serialized = JSON.stringify(page);
     expect(serialized).not.toContain(secret);
     expect(serialized).not.toContain('echo JBSWY');
-    expect(serialized).not.toContain('Unsafe');
+    // The safe name is shown only in the withheld-record message.
+    expect(serialized.split('Unsafe')).toHaveLength(2);
+    expect(page.blockedInputs?.[0]?.message).toContain('"Unsafe"');
   });
 
   it('keeps 21 maximum-cardinality fan-out parents within two bounded lossless pages', async () => {

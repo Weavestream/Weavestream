@@ -1,6 +1,6 @@
 {
   "version": "4.6.0",
-  "created": "2026-11-04T19:02:26Z",
+  "created": "2026-11-05T21:31:14Z",
   "files": [
     {
       "path": ".nojekyll"
@@ -516,6 +516,12 @@
     },
     {
       "path": "integrations/cloudflare/index.html"
+    },
+    {
+      "path": "integrations/custom-api.md"
+    },
+    {
+      "path": "integrations/custom-api/index.html"
     },
     {
       "path": "integrations/google-workspace.md"

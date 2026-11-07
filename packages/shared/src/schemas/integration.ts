@@ -1123,6 +1123,12 @@ const baseSyncRunTotalsShape = {
   secretBlocked: z.number().int().nonnegative().default(0),
   missingDependency: z.number().int().nonnegative().default(0),
   errors: z.number().int().nonnegative().default(0),
+  /**
+   * Resource walks that finished incomplete: some records carried a gap, so
+   * last-known-good data was kept and nothing was marked stale. Set even when
+   * a resumed walk saw no new gap, so the run still shows warnings.
+   */
+  incomplete: z.number().int().nonnegative().default(0),
 } as const;
 
 export const syncRunResourceTotalsSchema = z.object({

@@ -39,8 +39,19 @@ const SECRET_VALUE_PATTERNS = [
   /\bConvertTo-SecureString\s+(?:-String\s+)?(?:"[^"\r\n]+"|'[^'\r\n]+')\s+-AsPlainText\b/iu,
 ] as const;
 
+/**
+ * A record Weavestream withheld as secret-like. `fieldPath` names where the
+ * match was (key names only, never the value) and `recordName` is the
+ * record's own name when that name is itself safe to show, so an operator
+ * can find and fix the record in Breeze.
+ */
 export class BreezeSensitiveDefinitionError extends Error {
-  constructor(readonly sourceId: string, readonly orgId: string) {
+  constructor(
+    readonly sourceId: string,
+    readonly orgId: string,
+    readonly fieldPath: string | null = null,
+    readonly recordName: string | null = null,
+  ) {
     super('Breeze desired configuration was blocked as sensitive input.');
     this.name = 'BreezeSensitiveDefinitionError';
   }
@@ -80,15 +91,19 @@ export function transformBreezeRecord(
   const record = readBreezeRecord(endpoint, rawRecord) as BreezeRecordBase & Record<string, any>;
   if (isDesiredConfigurationResource(resource.data)) {
     const inspection = inspectDesiredConfiguration(record, labelValueKeysFor(endpoint, record));
-    if (inspection === 'sensitive') {
-      throw new BreezeSensitiveDefinitionError(record.id, record.orgId);
+    if (inspection.verdict === 'sensitive') {
+      throw new BreezeSensitiveDefinitionError(
+        record.id, record.orgId, inspection.fieldPath, safeRecordName(record, inspection.fieldPath),
+      );
     }
-    if (inspection === 'bounds_exceeded') {
+    if (inspection.verdict === 'bounds_exceeded') {
       throw new BreezeBoundedDefinitionError(record.id, record.orgId);
     }
   }
   if (BREEZE_ENDPOINT_BY_RESOURCE[resource.data] === 'scripts' && isSensitiveScriptContent(record.content)) {
-    throw new BreezeSensitiveDefinitionError(record.id, record.orgId);
+    throw new BreezeSensitiveDefinitionError(
+      record.id, record.orgId, 'content', safeRecordName(record, 'content'),
+    );
   }
   if (
     BREEZE_ENDPOINT_BY_RESOURCE[resource.data] === 'custom-field-values' &&
@@ -534,28 +549,40 @@ function isSchemaLabelField(key: string, extraLabelFields: ReadonlySet<string>):
   return SCHEMA_LABEL_FIELDS.has(joined) || extraLabelFields.has(joined);
 }
 
+interface ConfigurationInspection {
+  verdict: 'safe' | 'sensitive' | 'bounds_exceeded';
+  /** Where a `sensitive` verdict matched, as key names and indexes only. */
+  fieldPath: string | null;
+}
+
 function inspectDesiredConfiguration(
   root: unknown,
   extraLabelFields: ReadonlySet<string> = new Set(),
-): 'safe' | 'sensitive' | 'bounds_exceeded' {
+): ConfigurationInspection {
   const pending: Array<{
     value: unknown;
     depth: number;
+    path: string;
     trustedRevision?: boolean;
     labelValue: boolean;
-  }> = [{ value: root, depth: 0, labelValue: false }];
+  }> = [{ value: root, depth: 0, path: '', labelValue: false }];
+  const bounded: ConfigurationInspection = { verdict: 'bounds_exceeded', fieldPath: null };
+  const sensitive = (fieldPath: string): ConfigurationInspection => ({
+    verdict: 'sensitive',
+    fieldPath: boundFieldPath(fieldPath),
+  });
   let visited = 0;
   while (pending.length > 0) {
-    const { value, depth, trustedRevision, labelValue } = pending.pop()!;
+    const { value, depth, path, trustedRevision, labelValue } = pending.pop()!;
     visited += 1;
-    if (visited > 10_000 || depth > 32) return 'bounds_exceeded';
+    if (visited > 10_000 || depth > 32) return bounded;
     if (typeof value === 'string') {
-      if (value.length > 12_288) return 'bounds_exceeded';
+      if (value.length > 12_288) return bounded;
       if (
         !(trustedRevision && SHA256_PATTERN.test(value)) &&
         isSecretLikeConfigurationValue(value, { allowWordShaped: labelValue })
       ) {
-        return 'sensitive';
+        return sensitive(path);
       }
       continue;
     }
@@ -564,16 +591,29 @@ function inspectDesiredConfiguration(
       // Only the string elements of a top-level label array (`osTypes:
       // ['windows']`, dropdown options) keep the label role; any object
       // inside an array is free-form JSON and is inspected strictly.
-      for (const child of value) {
-        pending.push({ value: child, depth: depth + 1, labelValue: labelValue && typeof child === 'string' });
-      }
+      value.forEach((child, index) => {
+        pending.push({
+          value: child,
+          depth: depth + 1,
+          path: appendArrayPath(path, index),
+          labelValue: labelValue && typeof child === 'string',
+        });
+      });
       continue;
     }
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      if (isForbiddenConfigurationKey(key)) return 'sensitive';
+      const childPath = appendObjectPath(path, key);
+      if (isForbiddenConfigurationKey(key)) {
+        // A credential-named field with nothing in it (an empty S3 form in a
+        // backup feature, `requirePassword: true`) holds no secret. Any
+        // string or number under it still withholds the record.
+        if (isEmptyConfigurationValue(child, 0)) continue;
+        return sensitive(childPath);
+      }
       pending.push({
         value: child,
         depth: depth + 1,
+        path: childPath,
         trustedRevision: depth === 0 && key === 'revision',
         // The label role exists only for the record's own top-level fields
         // (depth 0 is the record object). A key inside nested JSON never
@@ -582,7 +622,70 @@ function inspectDesiredConfiguration(
       });
     }
   }
-  return 'safe';
+  return { verdict: 'safe', fieldPath: null };
+}
+
+/**
+ * True when a value holds nothing: null, a boolean, a blank string, an object
+ * with no keys, or a list of only those. An object with any key is not empty,
+ * because a key is source data and can itself hold a secret (a map keyed by
+ * token). Bounded; a list too deep or too long counts as not empty, so the
+ * caller withholds it.
+ */
+function isEmptyConfigurationValue(value: unknown, depth: number): boolean {
+  if (value === null || value === undefined || typeof value === 'boolean') return true;
+  if (typeof value === 'string') return value.trim() === '';
+  if (typeof value !== 'object' || depth >= 8) return false;
+  if (!Array.isArray(value)) return Object.keys(value as Record<string, unknown>).length === 0;
+  return value.length <= 256 && value.every((child) => isEmptyConfigurationValue(child, depth + 1));
+}
+
+const MAX_FIELD_PATH_LENGTH = 200;
+const SAFE_PATH_COMPONENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/u;
+
+// Same shape as the paths Breeze reports for its own withheld records. A key
+// is source data too, so only a plain identifier is shown. Anything else (an
+// assignment such as `password=abc`, spaces, punctuation, or a token-shaped
+// run) is shown as `[redacted]`, never rewritten into a readable form.
+function appendObjectPath(path: string, key: string): string {
+  const component = SAFE_PATH_COMPONENT.test(key) && !looksLikeCredentialText(key)
+    ? key
+    : '[redacted]';
+  return path ? `${path}.${component}` : component;
+}
+
+function appendArrayPath(path: string, index: number): string {
+  return `${path}[${index}]`;
+}
+
+// Paths are built in full (the walk's depth bound keeps them short) and
+// bounded once when reported. The end names the field, so it is kept.
+function boundFieldPath(path: string): string {
+  return path.length <= MAX_FIELD_PATH_LENGTH
+    ? path
+    : `…${path.slice(path.length - (MAX_FIELD_PATH_LENGTH - 1))}`;
+}
+
+/** Credential formats and high-entropy runs only; word matches do not count. */
+function looksLikeCredentialText(value: string): boolean {
+  return SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(value))
+    || (value.match(/[A-Za-z0-9+/_=-]{32,}/gu) ?? [])
+      .some((candidate) => candidateLooksHighEntropy(candidate, false));
+}
+
+/**
+ * The record's own name for a withheld-record message, or null when the
+ * name is where the match was or could itself be secret-like.
+ */
+function safeRecordName(record: Record<string, unknown>, fieldPath: string | null): string | null {
+  for (const key of ['name', 'policyName']) {
+    const name = record[key];
+    if (typeof name !== 'string' || name.trim() === '') continue;
+    if (fieldPath === key) return null;
+    if (isSecretLikeConfigurationValue(name, { allowWordShaped: true })) return null;
+    return [...singleLine(name)].slice(0, 120).join('');
+  }
+  return null;
 }
 
 function splitConfigurationFieldName(name: string): string[] {

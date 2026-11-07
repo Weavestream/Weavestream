@@ -181,6 +181,53 @@ describe('IntegrationSyncMappingWorker DAG execution', () => {
     expect(provenance.resolveAbsentGaps).not.toHaveBeenCalled();
   });
 
+  it('runs a resource whose dependency is disabled or not part of this run (issue 111)', async () => {
+    const runId = '00000000-0000-0000-0000-000000000041';
+    const mappingId = '00000000-0000-0000-0000-000000000042';
+    const relationId = '00000000-0000-0000-0000-000000000043';
+    const prisma = {
+      integrationSyncRun: { findUnique: jest.fn().mockResolvedValue({
+        id: runId, triggeredBy: null, integrationId: 'integration',
+        integration: { createdBy: 'creator' },
+      }) },
+      integrationCompanyMapping: { findUnique: jest.fn().mockResolvedValue({
+        id: mappingId, companyId: 'company', integrationId: 'integration',
+      }) },
+      // `custom-field-values` is disabled, so the run does not select it.
+      integrationResource: { findMany: jest.fn().mockResolvedValue([
+        { id: relationId, resourceKey: 'device-relationships', dependsOnResourceKeys: ['custom-field-values'] },
+      ]) },
+      $transaction: jest.fn(),
+    };
+    const runner = { runMapping: jest.fn().mockResolvedValue({
+      status: 'succeeded', resourceKey: 'device-relationships', companyId: 'company',
+      totals: totalsForWorker(), conflicts: [], error: null,
+    }) };
+    const sync = {
+      markMappingRunning: jest.fn(), mergeResourceResult: jest.fn(), closeRun: jest.fn(),
+    };
+    const provenance = { persistGaps: jest.fn() };
+    const worker = new IntegrationSyncMappingWorker(
+      {} as never, {} as never, prisma as never, sync as never, runner as never,
+      provenance as never, { log: jest.fn() } as never,
+      { syncMapping: jest.fn() } as never,
+    );
+    const handle = (worker as unknown as { handle(job: {
+      data: unknown; attemptsMade?: number; opts?: { attempts?: number };
+    }): Promise<unknown> }).handle.bind(worker);
+
+    await handle({ data: {
+      syncRunId: runId, integrationCompanyMappingId: mappingId,
+      resourceId: relationId, resourceIds: [relationId],
+    } });
+
+    expect(runner.runMapping).toHaveBeenCalledWith(expect.objectContaining({ resourceId: relationId }));
+    expect(provenance.persistGaps).not.toHaveBeenCalled();
+    expect(sync.mergeResourceResult).toHaveBeenCalledWith(expect.objectContaining({
+      resourceKey: 'device-relationships', status: 'succeeded',
+    }));
+  });
+
   it('rethrows a hard resource failure after persisting and closing the mapping', async () => {
     const runId = '00000000-0000-0000-0000-000000000011';
     const mappingId = '00000000-0000-0000-0000-000000000012';

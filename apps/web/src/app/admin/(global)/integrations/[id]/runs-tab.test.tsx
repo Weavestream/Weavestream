@@ -59,13 +59,13 @@ it('labels a withheld secret as secret blocked rather than a validation error', 
       companyName: 'Acme', status: 'succeeded', totals: null, error: null,
       conflicts: [{
         kind: 'secret_blocked', externalId: 'raw-upstream-id',
-        message: 'Weavestream withheld a scripts record because its definition contains secret-like material.',
+        message: 'Weavestream withheld scripts record "Backup check" (33333333-3333-4333-8333-333333333333) because the field content looks like it holds a credential.',
       }],
     }],
   }});
   render(<RunsTab integration={{ id: 'integration-1', resources: [] } as never} mappings={[]} runs={[run] as never} />);
   fireEvent.click(screen.getByRole('button', { name: 'View run details' }));
-  expect(await screen.findByText(/Weavestream withheld a scripts record/)).toBeInTheDocument();
+  expect(await screen.findByText(/Weavestream withheld scripts record "Backup check"/)).toBeInTheDocument();
   expect(screen.getByText('secret blocked')).toBeInTheDocument();
   expect(screen.queryByText('validation error')).not.toBeInTheDocument();
 });
@@ -157,4 +157,37 @@ it('renders one card per run on a phone, with the full error and the mode', asyn
   expect(screen.getByText(error)).toBeInTheDocument();
   fireEvent.click(screen.getByText(error));
   expect(await screen.findByText('Run details')).toBeInTheDocument();
+});
+
+it('shows a succeeded run with blocked records as warnings, and a clean one as succeeded', () => {
+  const zeroes = {
+    fetched: 3, created: 0, updated: 0, unchanged: 3, claimed: 0, archived: 0,
+    skippedAmbiguous: 0, skippedManual: 0, skippedArchived: 0,
+    stale: 0, restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0,
+  };
+  const runs = [
+    { id: 'run-clean', mode: 'full', kind: 'manual', status: 'succeeded', dryRun: false,
+      createdAt: '2026-07-14T00:00:00.000Z', startedAt: null, totals: zeroes },
+    { id: 'run-warn', mode: 'full', kind: 'manual', status: 'succeeded', dryRun: false,
+      createdAt: '2026-07-13T00:00:00.000Z', startedAt: null,
+      totals: { ...zeroes, blocked: 1, secretBlocked: 1 } },
+  ];
+  render(<RunsTab integration={{ id: 'integration-1', resources: [] } as never} mappings={[]} runs={runs as never} />);
+  expect(screen.getAllByText('warnings').length).toBeGreaterThan(0);
+  expect(screen.getAllByText('succeeded').length).toBeGreaterThan(0);
+});
+
+it('shows warnings for a resumed incomplete run whose other counters are zero', () => {
+  const totals = {
+    fetched: 0, created: 0, updated: 0, unchanged: 0, claimed: 0, archived: 0,
+    skippedAmbiguous: 0, skippedManual: 0, skippedArchived: 0,
+    stale: 0, restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0,
+    incomplete: 1,
+  };
+  const run = { id: 'run-resumed', mode: 'full', kind: 'scheduled', status: 'succeeded', dryRun: false,
+    createdAt: '2026-07-14T00:00:00.000Z', startedAt: null, totals };
+  render(<RunsTab integration={{ id: 'integration-1', resources: [] } as never} mappings={[]} runs={[run] as never} />);
+  expect(screen.getAllByText('warnings').length).toBeGreaterThan(0);
+  expect(screen.queryByText('succeeded')).not.toBeInTheDocument();
+  expect(screen.getAllByText(/1 incomplete/).length).toBeGreaterThan(0);
 });

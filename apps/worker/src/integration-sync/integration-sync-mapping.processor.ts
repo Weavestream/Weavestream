@@ -203,9 +203,9 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
       throw new Error('One or more mapping DAG resources do not belong to the integration.');
     }
     const selectedKeys = new Set(resources.map((resource) => resource.resourceKey));
-    // The topo copy omits unavailable nodes so valid resources can still be
-    // ordered. Execution maps back to the original rows below, preserving
-    // every declared dependency for the visible unavailable-dependency skip.
+    // Dependencies outside this run (disabled, or with nothing to sync) only
+    // drop out of the ordering. They do not skip the resource: a record whose
+    // link target is absent becomes a per-record gap in the runner instead.
     const stages = buildResourceExecutionStages(resources.map((resource) => ({
       ...resource,
       dependsOnResourceKeys: resource.dependsOnResourceKeys.filter((key) => selectedKeys.has(key)),
@@ -235,12 +235,11 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     const outcomes: MappingRunOutcome[] = [];
     for (const stage of orderedStages) {
       for (const resource of stage) {
-        // Legacy jobs predate dependency gating: their siblings run as
-        // independent queue jobs, so deps declared on the row (possibly
-        // backfilled by a post-upgrade driver-definition refresh) must
-        // not skip the resource here.
+        // Only a dependency that ran in this mapping and failed skips the
+        // resource. Legacy jobs predate dependency gating: their siblings run
+        // as independent queue jobs, so they never skip here.
         const unavailable = legacy ? [] : resource.dependsOnResourceKeys.filter(
-          (dependency) => !selectedKeys.has(dependency) || failedKeys.has(dependency),
+          (dependency) => failedKeys.has(dependency),
         );
         let outcome: MappingRunOutcome;
         if (unavailable.length > 0) {
@@ -398,5 +397,6 @@ function zeroTotals() {
     secretBlocked: 0,
     missingDependency: 0,
     errors: 1,
+    incomplete: 0,
   };
 }

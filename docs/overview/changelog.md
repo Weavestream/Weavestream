@@ -13,6 +13,12 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Fixed
+
+- **Breeze: a disabled resource no longer skips Device relationships.** A resource is now skipped only when a resource it depends on ran and failed. Device relationships depends only on sites, devices, virtual machines, and network equipment, not on every other Breeze resource. ([#111](https://github.com/Weavestream/Weavestream/issues/111))
+- **Breeze: one withheld or unreadable record no longer fails the run.** The resource finishes, its dependents run, and the Runs tab shows **warnings** with the records that were not written. Last-known-good data is kept and nothing is marked stale, as before.
+- **Breeze: an empty credential field no longer withholds a policy.** A credential-named field with no value (for example an empty S3 destination form) is not treated as a secret. A withheld record's message now names the record and the field path that matched, never the value. ([#112](https://github.com/Weavestream/Weavestream/issues/112))
+
 ## [1.13.0] - 2026-11-05
 
 ### Added

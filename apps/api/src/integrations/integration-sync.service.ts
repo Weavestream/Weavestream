@@ -1011,6 +1011,7 @@ const TOTAL_KEYS = [
   'secretBlocked',
   'missingDependency',
   'errors',
+  'incomplete',
 ] as const satisfies ReadonlyArray<keyof SyncRunResourceTotals>;
 
 export function zeroResourceTotals(): SyncRunResourceTotals {
@@ -1030,6 +1031,7 @@ export function zeroResourceTotals(): SyncRunResourceTotals {
     secretBlocked: 0,
     missingDependency: 0,
     errors: 0,
+    incomplete: 0,
   };
 }
 
@@ -1087,6 +1089,7 @@ export function mergeAggregate(
     secretBlocked: resourceTotals.secretBlocked,
     missingDependency: resourceTotals.missingDependency,
     errors: resourceTotals.errors,
+    incomplete: resourceTotals.incomplete,
     status,
   };
   for (const totals of Object.values(acc.byResource)) {

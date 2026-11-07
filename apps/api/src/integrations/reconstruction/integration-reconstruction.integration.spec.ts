@@ -16,7 +16,10 @@ import { ArticleTargetWriter } from './article-target.writer.js';
 import { IpReservationTargetWriter, SubnetTargetWriter } from './ipam-target.writer.js';
 import { RelationTargetWriter } from './relation-target.writer.js';
 import { ReconstructionWriterRegistry } from './reconstruction-writer.registry.js';
-import { IntegrationSyncRunnerService } from '../integration-sync-runner.service.js';
+import {
+  INCOMPLETE_TRAVERSAL_WARNING,
+  IntegrationSyncRunnerService,
+} from '../integration-sync-runner.service.js';
 import { IntegrationSyncService } from '../integration-sync.service.js';
 import { IntegrationCompletenessService } from './integration-completeness.service.js';
 import {
@@ -636,6 +639,8 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
       registry,
     );
     const forgedRunId = await createQueuedRun(prisma, 'full');
+    // A record-level block is a warning: the resource succeeds, but nothing
+    // is written to the other company's asset.
     await expect(runner.runMapping({
       syncRunId: forgedRunId,
       integrationCompanyMappingId: ids.mappingA,
@@ -643,7 +648,7 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
       dryRun: false,
       actorId: ids.actor,
       mode: 'full',
-    })).resolves.toMatchObject({ status: 'failed', totals: { blocked: 1 } });
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { blocked: 1 } });
     await expect(prisma.asset.findUniqueOrThrow({ where: { id: ids.deviceB } }))
       .resolves.toEqual(companyBDeviceBefore);
     await expect(readTargetProvenance(prisma as never, {
@@ -1221,8 +1226,8 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
   });
 
   // An unreadable record is a validation gap, not a page failure (see "Breeze
-  // upgrades" in docs/integrations/breeze.md). The run still fails as
-  // incomplete, and the native asset, checkpoint, and stale state stay as they were.
+  // upgrades" in docs/integrations/breeze.md). The resource succeeds with a
+  // warning, and the native asset, checkpoint, and stale state stay as they were.
   it('preserves persisted last-known-good state after an unreadable record', async () => {
     const before = await persistedDeviceState(prisma);
     installFetchScript([{ body: envelope([{ ...deviceRecord(), hostname: null }]) }]);
@@ -1243,8 +1248,11 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
       actorId: ids.actor,
       mode: 'incremental',
     })).resolves.toMatchObject({
-      status: 'failed',
-      error: 'Resource evaluation was incomplete; last-known-good reconciliation state was preserved.',
+      status: 'succeeded',
+      error: null,
+      conflicts: expect.arrayContaining([
+        expect.objectContaining({ message: INCOMPLETE_TRAVERSAL_WARNING }),
+      ]),
       totals: { fetched: 0, created: 0, updated: 0, blocked: 1, errors: 0 },
     });
 
