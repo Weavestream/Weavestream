@@ -236,9 +236,9 @@ function SidebarHeader({
   workspace: SidebarWorkspace;
   onNavigate?: () => void;
 }) {
-  // Phase 9b.1: sourced from `public/brand/logo-mark.svg` via `AppLogo`.
-  // Partners can swap the mark globally by replacing that file — the
-  // sidebar, favicon, and OG image all refresh without a code change.
+  // Phase 9b.1: sourced from `public/brand/logo-mark-{light,dark}.svg`
+  // via `AppLogo`. Partners can swap the mark globally by replacing those
+  // files — the sidebar and favicon refresh without a code change.
   const logoMark = <AppLogo variant="mark" size={22} />;
 
   const hasSubtitle = !!workspace.subtitle;

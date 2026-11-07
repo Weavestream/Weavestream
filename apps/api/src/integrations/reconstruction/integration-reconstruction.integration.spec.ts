@@ -34,7 +34,11 @@ import {
 import { BreezePartnerApiClient } from '../drivers/breeze/breeze-partner-api.client.js';
 import { BreezeDriver } from '../drivers/breeze/breeze.driver.js';
 import { BreezeUnreadableRecordError, transformBreezeRecord } from '../drivers/breeze/breeze.transforms.js';
-import { DriverAuthError, DriverRateLimitError } from '../drivers/integration-driver.js';
+import {
+  DriverAuthError,
+  DriverRateLimitError,
+  DriverSourceVersionHoldError,
+} from '../drivers/integration-driver.js';
 import type { ReconstructionWriteContext } from './reconstruction-target.js';
 
 const ids = {
@@ -111,7 +115,7 @@ afterEach(() => {
 describe('Breeze reconstruction deterministic provider contract', () => {
   it('tests credentials, lists all source organizations, and writes only explicit mappings', async () => {
     const client = {
-      testConnection: jest.fn().mockResolvedValue(undefined),
+      testConnection: jest.fn().mockResolvedValue({ schemaVersion: '1' }),
       listOrganizations: jest.fn().mockResolvedValue([
         organization(ORG_A, 'Mapped A'),
         organization(ORG_UNMAPPED, 'Visible but unmapped'),
@@ -124,7 +128,7 @@ describe('Breeze reconstruction deterministic provider contract', () => {
 
     await expect(driver.testConnection(ctx)).resolves.toEqual({
       ok: true,
-      details: 'Reached Breeze Partner API.',
+      details: 'Reached Breeze Partner API (partner API schema version 1).',
     });
     const organizations = await driver.listSourceOrgs(ctx);
     const explicitMappings = new Map<string, string>([
@@ -172,21 +176,21 @@ describe('Breeze reconstruction deterministic provider contract', () => {
     expect(serialized).not.toMatch(/heartbeat|lastSeen|uptime|alert|vulnerab|patchStatus/iu);
   });
 
-  it('blocks secret-bearing desired state without retaining the value', () => {
-    expect(() => transformBreezeRecord('scripts', {
+  it('withholds the secret span in desired state and syncs the rest of the record', () => {
+    const redactions: unknown[] = [];
+    const [record] = transformBreezeRecord('scripts', {
       ...scriptRecord(),
-      content: `Authorization: Bearer ${BLOCKED_SECRET}`,
-    })).toThrow(/blocked|sensitive/i);
+      content: `Authorization: Bearer ${BLOCKED_SECRET}\ndnf install postgresql17`,
+    }, (redaction) => redactions.push(redaction));
 
-    try {
-      transformBreezeRecord('scripts', {
-        ...scriptRecord(),
-        content: `Authorization: Bearer ${BLOCKED_SECRET}`,
-      });
-    } catch (error) {
-      expect(JSON.stringify(error)).not.toContain(BLOCKED_SECRET);
-      expect(String(error)).not.toContain(BLOCKED_SECRET);
-    }
+    expect(record).toMatchObject({ reconstructionInput: {
+      targetKind: 'article',
+      markdown: expect.stringContaining('dnf install postgresql17'),
+    } });
+    expect(JSON.stringify(record)).toContain('[withheld]');
+    expect(JSON.stringify(record)).not.toContain(BLOCKED_SECRET);
+    expect(redactions).toEqual([expect.objectContaining({ count: 1, fieldPaths: ['content'] })]);
+    expect(JSON.stringify(redactions)).not.toContain(BLOCKED_SECRET);
   });
 });
 
@@ -220,7 +224,7 @@ describe('Breeze reconstruction deterministic failure injection', () => {
     ]);
     await expect(new BreezePartnerApiClient().testConnection(integrationContext({
       http: { timeoutMs: 5, maxRetries: 1, backoffMs: 0 },
-    }))).resolves.toBeUndefined();
+    }))).resolves.toEqual({ schemaVersion: '1' });
     expect(transient.calls).toBe(2);
 
     setDefaultFetchForTests(null);
@@ -236,17 +240,29 @@ describe('Breeze reconstruction deterministic failure injection', () => {
     expect(timeout.calls).toBe(2);
   });
 
-  it.each([
-    ['malformed JSON', '{not-json'],
-    ['unknown schema', { ...envelope([]), schemaVersion: '2' }],
-  ])('rejects %s before any native write', async (_label, body) => {
-    const fx = installFetchScript([{ body }]);
+  it('rejects malformed JSON before any native write', async () => {
+    const fx = installFetchScript([{ body: '{not-json' }]);
     await expect(new BreezePartnerApiClient().fetchPage(integrationContext(), {
       resource: 'sites',
       externalOrgId: ORG_A,
       cursor: null,
       updatedSince: null,
     })).rejects.toThrow(/invalid response data/i);
+    expect(fx.calls).toBe(1);
+  });
+
+  it('pauses on an unknown schema version before any native write', async () => {
+    const fx = installFetchScript([{ body: { ...envelope([]), schemaVersion: '2' } }]);
+    const promise = new BreezePartnerApiClient().fetchPage(integrationContext(), {
+      resource: 'sites',
+      externalOrgId: ORG_A,
+      cursor: null,
+      updatedSince: null,
+    });
+    await expect(promise).rejects.toBeInstanceOf(DriverSourceVersionHoldError);
+    await expect(promise).rejects.toThrow(
+      /schema version 2, which Weavestream does not know yet\. Sync is paused and existing data is kept\./,
+    );
     expect(fx.calls).toBe(1);
   });
 
@@ -738,7 +754,7 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     await prisma.integrationSyncRecord.delete({ where: { id: forgedBindingId } });
   });
 
-  it('stales only after an authoritative full sweep and restores the same asset idempotently', async () => {
+  it('stales only on a second authoritative full miss and restores the same asset idempotently', async () => {
     const staleAt = new Date(SNAPSHOT);
     const manualContentBefore = await Promise.all([
       prisma.company.findUniqueOrThrow({
@@ -747,6 +763,32 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
       }),
       prisma.upload.findUniqueOrThrow({ where: { id: ids.upload } }),
     ]);
+    // First miss, 13 hours earlier: recorded, nothing archived.
+    const firstMissAt = new Date(staleAt.getTime() - 13 * 60 * 60 * 1_000);
+    await expect(prisma.$transaction((tx) => provenance.staleUnseen(tx, {
+      integrationId: ids.integration,
+      companyId: ids.companyA,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      targetKind: 'asset',
+      snapshotAt: firstMissAt,
+      auditActorId: ids.actor,
+    }))).resolves.toEqual({ stale: 0, archived: 0, notSeen: 1, held: null });
+    await expect(prisma.integrationSyncRecord.findUniqueOrThrow({ where: { id: ids.syncDevice } }))
+      .resolves.toMatchObject({ state: 'active', staleSince: null, missedAt: firstMissAt });
+    await expect(prisma.asset.findUniqueOrThrow({ where: { id: ids.deviceA } }))
+      .resolves.toMatchObject({ archivedAt: null });
+    // A second miss under 12 hours later still waits.
+    await expect(prisma.$transaction((tx) => provenance.staleUnseen(tx, {
+      integrationId: ids.integration,
+      companyId: ids.companyA,
+      integrationCompanyMappingId: ids.mappingA,
+      resourceId: ids.devices,
+      targetKind: 'asset',
+      snapshotAt: new Date(firstMissAt.getTime() + 60 * 60 * 1_000),
+      auditActorId: ids.actor,
+    }))).resolves.toEqual({ stale: 0, archived: 0, notSeen: 1, held: null });
+    // The second miss 13 hours after the first archives.
     await prisma.$transaction((tx) => provenance.staleUnseen(tx, {
       integrationId: ids.integration,
       companyId: ids.companyA,
@@ -914,7 +956,7 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     // committed refresh, so the binding drops out of the sweep: no
     // stale flip, no target archive, no audit entry.
     expect(refreshedMidSweep).toBe(true);
-    expect(result).toEqual({ stale: 0, archived: 0 });
+    expect(result).toMatchObject({ stale: 0, archived: 0, held: null });
     await expect(prisma.integrationSyncRecord.findUniqueOrThrow({ where: { id: ids.syncDevice } }))
       .resolves.toMatchObject({ state: 'active', staleSince: null, lastSeenAt: refreshedAt });
     const asset = await prisma.asset.findUniqueOrThrow({ where: { id: ids.deviceA } });
@@ -983,7 +1025,7 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     releasePage();
     await page;
 
-    await expect(sweep).resolves.toEqual({ stale: 0, archived: 0 });
+    await expect(sweep).resolves.toMatchObject({ stale: 0, archived: 0, held: null });
     await expect(prisma.integrationSyncRecord.findUniqueOrThrow({ where: { id: ids.syncDevice } }))
       .resolves.toMatchObject({ state: 'active', staleSince: null, lastSeenAt: refreshedAt });
     const asset = await prisma.asset.findUniqueOrThrow({ where: { id: ids.deviceA } });
@@ -1200,7 +1242,6 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     ['503 upstream failure', { status: 503, body: 'unavailable' }],
     ['transport timeout', { error: new Error('deterministic timeout') }],
     ['malformed response', { body: '{not-json' }],
-    ['unknown schema', { body: { ...envelope([]), schemaVersion: '2' } }],
   ] as const)('preserves persisted last-known-good state after %s', async (_label, frame) => {
     const before = await persistedDeviceState(prisma);
     installFetchScript([frame]);
@@ -1223,6 +1264,44 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
     })).resolves.toMatchObject({ status: 'failed', totals: { errors: 1 } });
 
     expect(await persistedDeviceState(prisma)).toEqual(before);
+  });
+
+  it('pauses on an unknown schema version, keeps last-known-good state, and continues after an accept', async () => {
+    // The hold itself lives on the checkpoint row; everything else must not move.
+    const targetState = async () => ({ ...(await persistedDeviceState(prisma)), checkpoint: undefined });
+    const before = await targetState();
+    const checkpointKey = { integrationCompanyMappingId_resourceId_mode: {
+      integrationCompanyMappingId: ids.mappingA, resourceId: ids.devices, mode: 'incremental' as const,
+    } };
+    const run = async (acceptSourceChanges: boolean) => {
+      installFetchScript([{ body: { ...envelope([]), schemaVersion: '2' } }]);
+      const runId = await createQueuedRun(prisma, 'incremental');
+      const runner = buildRunner(
+        prisma, audit, provenance,
+        new BreezeDriver(new BreezePartnerApiClient()),
+        await buildAssetWriter(prisma, audit),
+      );
+      return runner.runMapping({
+        syncRunId: runId, integrationCompanyMappingId: ids.mappingA, resourceId: ids.devices,
+        dryRun: false, actorId: ids.actor, mode: 'incremental', acceptSourceChanges,
+      });
+    };
+
+    await expect(run(false)).resolves.toMatchObject({ status: 'succeeded', totals: { paused: 1, errors: 0 } });
+    expect(await targetState()).toEqual(before);
+    await expect(prisma.integrationSyncCheckpoint.findUnique({ where: checkpointKey }))
+      .resolves.toMatchObject({ versionHold: { version: '2' }, acceptedSourceVersion: null });
+
+    await expect(run(true)).resolves.toMatchObject({ status: 'succeeded', totals: { paused: 0 } });
+    await expect(prisma.integrationSyncCheckpoint.findUnique({ where: checkpointKey }))
+      .resolves.toMatchObject({ versionHold: null, acceptedSourceVersion: '2' });
+
+    // The accepted version now reads without a hold on a normal run. A clean
+    // run recalculates the completeness checklist, so only the synced asset
+    // and its binding are compared: neither is changed or archived.
+    await expect(run(false)).resolves.toMatchObject({ status: 'succeeded', totals: { paused: 0, archived: 0 } });
+    const after = await persistedDeviceState(prisma);
+    expect({ asset: after.asset, binding: after.binding }).toEqual({ asset: before.asset, binding: before.binding });
   });
 
   // An unreadable record is a validation gap, not a page failure (see "Breeze
@@ -1368,7 +1447,13 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
       dryRun: false,
       actorId: ids.actor,
       mode: 'full',
-    })).resolves.toMatchObject({ status: 'succeeded', totals: { fetched: 0, stale: 1 } });
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { fetched: 0, stale: 0, notSeen: 1 } });
+    // The orphan's first miss is recorded; it is archived only by a second
+    // full miss at least 12 hours later.
+    expect(await prisma.integrationSyncRecord.findUniqueOrThrow({ where: { id: orphanBindingId } }))
+      .toMatchObject({ state: 'active', staleSince: null, missedAt: new Date(SNAPSHOT) });
+    expect(await prisma.asset.findUniqueOrThrow({ where: { id: orphanAssetId } }))
+      .toMatchObject({ archivedAt: null });
     const completed = await prisma.integrationSyncCheckpoint.findUniqueOrThrow({
       where: { integrationCompanyMappingId_resourceId_mode: {
         integrationCompanyMappingId: ids.mappingA,
@@ -1452,6 +1537,13 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
         provenance: provenanceFor('devices', target.externalId),
       })),
     });
+    // Every binding was missed by an earlier full sync 24 hours ago, so this
+    // sweep confirms all 10,000 misses. Removing every device trips the
+    // mass-removal hold, so the run accepts source changes.
+    await prisma.integrationSyncRecord.updateMany({
+      where: { resourceId },
+      data: { missedAt: new Date('2026-07-13T12:00:00.000Z') },
+    });
     const batchSizes: number[] = [];
     const auditBatchSizes: number[] = [];
     let queryCount = 0;
@@ -1494,6 +1586,7 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
         dryRun: false,
         actorId: ids.actor,
         mode: 'full',
+        acceptSourceChanges: true,
       });
     } finally {
       clearInterval(sampler);
@@ -1530,6 +1623,68 @@ describeIfDb('Breeze reconstruction disposable PostgreSQL dossier', () => {
       } },
     })).resolves.toMatchObject({ cursor: null, authoritative: true });
   }, 120_000);
+
+  it('holds a mass removal on the checkpoint and archives nothing until accepted', async () => {
+    const resourceId = ids.devices;
+    const extra = Array.from({ length: 3 }, (_, index) => ({
+      assetId: randomUUID(), bindingId: randomUUID(), externalId: `${ORG_A}:devices:held-${index}`,
+    }));
+    await prisma.asset.createMany({
+      data: extra.map((target, index) => ({
+        id: target.assetId, companyId: ids.companyA, assetLayoutId: ids.layout,
+        name: `Held removal ${index}`, createdBy: ids.actor, updatedBy: ids.actor,
+      })),
+    });
+    await prisma.integrationSyncRecord.createMany({
+      data: extra.map((target) => syncRecordData({
+        id: target.bindingId, companyId: ids.companyA, mappingId: ids.mappingA, resourceId,
+        externalId: target.externalId, targetKind: 'asset', targetId: target.assetId,
+      })),
+    });
+    await prisma.integrationSyncRecord.updateMany({
+      where: { id: { in: extra.map((target) => target.bindingId) } },
+      data: { missedAt: new Date('2026-07-13T12:00:00.000Z') },
+    });
+    const runner = buildRunner(
+      prisma, audit, provenance,
+      new BreezeDriver(new BreezePartnerApiClient()),
+      await buildAssetWriter(prisma, audit),
+    );
+    const checkpoint = () => prisma.integrationSyncCheckpoint.findUniqueOrThrow({
+      where: { integrationCompanyMappingId_resourceId_mode: {
+        integrationCompanyMappingId: ids.mappingA, resourceId, mode: 'full',
+      } },
+    });
+
+    // Breeze still sends the seeded device; the 3 others are confirmed misses
+    // (3 of 4 bindings): held.
+    installFetchScript([{ body: envelope([deviceRecord()]) }]);
+    const heldRun = await createQueuedRun(prisma, 'full');
+    const held = await runner.runMapping({
+      syncRunId: heldRun, integrationCompanyMappingId: ids.mappingA, resourceId,
+      dryRun: false, actorId: ids.actor, mode: 'full',
+    });
+    expect(held).toMatchObject({ status: 'succeeded', totals: { stale: 0, archived: 0, notSeen: 3 } });
+    expect(held.conflicts.map((c) => c.message).join(' ')).toMatch(/far fewer .* Nothing was archived/);
+    await expect(checkpoint()).resolves.toMatchObject({
+      removalHold: { since: SNAPSHOT, count: 3, total: 4 },
+    });
+    await expect(prisma.asset.count({
+      where: { id: { in: extra.map((target) => target.assetId) }, archivedAt: null },
+    })).resolves.toBe(3);
+    await prisma.integrationSyncRun.update({ where: { id: heldRun }, data: { status: 'succeeded', finishedAt: new Date() } });
+
+    installFetchScript([{ body: envelope([deviceRecord()]) }]);
+    const acceptRun = await createQueuedRun(prisma, 'full');
+    await expect(runner.runMapping({
+      syncRunId: acceptRun, integrationCompanyMappingId: ids.mappingA, resourceId,
+      dryRun: false, actorId: ids.actor, mode: 'full', acceptSourceChanges: true,
+    })).resolves.toMatchObject({ status: 'succeeded', totals: { stale: 3, archived: 3 } });
+    await expect(checkpoint()).resolves.toMatchObject({ removalHold: null, fieldHold: null });
+    await expect(prisma.asset.count({
+      where: { id: { in: extra.map((target) => target.assetId) }, archivedAt: { not: null } },
+    })).resolves.toBe(3);
+  });
 
   it('never lets an older evaluation that finishes later move the scorecard or gaps backward', async () => {
     const completeness = new IntegrationCompletenessService(prisma as never);

@@ -4,7 +4,7 @@ import { OAUTH_CALLBACK_HOST_WARNING } from './oauth/integration-oauth-app.servi
 import { REQUIRE_PERMISSION_KEY } from '../rbac/require-permission.decorator.js';
 import { REQUIRE_STEP_UP_KEY } from '../auth/step-up/require-step-up.decorator.js';
 import { integrationSecretAad } from '../crypto/integration-secret-encryption.service.js';
-import { Logger } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { DriverAuthError, DriverRateLimitError } from './drivers/integration-driver.js';
 
 describe('IntegrationsController security contract', () => {
@@ -35,6 +35,7 @@ describe('IntegrationsController security contract', () => {
     ['deleteMapping', 'integration.manage'],
     ['getCompleteness', 'integration.manage'],
     ['listGaps', 'integration.manage'],
+    ['listHolds', 'integration.manage'],
     ['createResourceDestination', 'integration.manage'],
     ['triggerSync', 'sync.trigger'],
   ] as const)('%s retains the %s permission contract', (handler, action) => {
@@ -170,7 +171,7 @@ describe('IntegrationsController security contract', () => {
     await controller.triggerSync(
       user,
       '00000000-0000-4000-8000-000000000001',
-      { dryRun, mode: 'incremental' },
+      { dryRun, mode: 'incremental', acceptSourceChanges: false },
       req,
     );
 
@@ -181,6 +182,67 @@ describe('IntegrationsController security contract', () => {
       expect.any(Object),
       'incremental',
     );
+  });
+
+  describe('accepting source changes', () => {
+    function acceptController(allowed: boolean) {
+      const triggerManual = jest.fn().mockResolvedValue({ id: 'run' });
+      const can = jest.fn().mockResolvedValue(allowed ? { allowed: true } : { allowed: false, reason: 'no' });
+      const controller = new IntegrationsController(
+        {} as never, {} as never, { triggerManual } as never, {} as never,
+        {} as never, {} as never, {} as never, { can } as never,
+      );
+      return { controller, triggerManual, can };
+    }
+    const user = { id: 'actor', role: 'MEMBER', platformCapabilities: [] } as never;
+    const req = { ip: '127.0.0.1', headers: {} } as never;
+    const id = '00000000-0000-4000-8000-000000000001';
+
+    it('checks integration.manage at the handler and forces a full, accepting run', async () => {
+      const { controller, triggerManual, can } = acceptController(true);
+      await controller.triggerSync(user, id, { dryRun: false, mode: 'incremental', acceptSourceChanges: true }, req);
+      expect(can).toHaveBeenCalledWith(user, 'integration.manage');
+      expect(triggerManual).toHaveBeenCalledWith(
+        user, id, false, expect.any(Object), 'full', { acceptSourceChanges: true },
+      );
+    });
+
+    it('refuses an operator without integration.manage before creating a run', async () => {
+      const { controller, triggerManual } = acceptController(false);
+      await expect(controller.triggerSync(
+        user, id, { dryRun: false, mode: 'full', acceptSourceChanges: true }, req,
+      )).rejects.toBeInstanceOf(ForbiddenException);
+      expect(triggerManual).not.toHaveBeenCalled();
+    });
+
+    it('refuses a dry run that accepts source changes', async () => {
+      const { controller, triggerManual } = acceptController(true);
+      await expect(controller.triggerSync(
+        user, id, { dryRun: true, mode: 'full', acceptSourceChanges: true }, req,
+      )).rejects.toBeInstanceOf(BadRequestException);
+      expect(triggerManual).not.toHaveBeenCalled();
+    });
+
+    it('does not ask for integration.manage on a plain run', async () => {
+      const { controller, can } = acceptController(false);
+      await controller.triggerSync(user, id, { dryRun: false, mode: 'full', acceptSourceChanges: false }, req);
+      expect(can).not.toHaveBeenCalled();
+    });
+  });
+
+  it('lists holds without the internal held count', async () => {
+    const listHolds = jest.fn().mockResolvedValue([{
+      kind: 'removal', resourceKey: 'devices', resourceLabel: 'Devices',
+      companyId: '00000000-0000-4000-8000-000000000009', companyName: 'Acme',
+      since: '2026-11-01T00:00:00.000Z', detail: '4 of 10 records missing from two full syncs', heldCount: 4,
+    }]);
+    const controller = new IntegrationsController(
+      {} as never, {} as never, { listHolds } as never, {} as never,
+      {} as never, {} as never, {} as never, {} as never,
+    );
+    const holds = await controller.listHolds('00000000-0000-4000-8000-000000000001');
+    expect(holds).toEqual([expect.not.objectContaining({ heldCount: expect.anything() })]);
+    expect(holds[0]).toMatchObject({ kind: 'removal', resourceKey: 'devices' });
   });
 
   it('delegates validated completeness and gap filters to integration-scoped reads', async () => {

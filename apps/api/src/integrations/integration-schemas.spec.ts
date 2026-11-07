@@ -395,8 +395,10 @@ describe('integration zod schemas', () => {
 
   describe('triggerSyncSchema', () => {
     it('defaults manual requests to an incremental non-dry run', () => {
-      expect(triggerSyncSchema.parse({})).toEqual({ dryRun: false, mode: 'incremental' });
-      expect(triggerSyncSchema.parse({ mode: 'full' })).toEqual({ dryRun: false, mode: 'full' });
+      expect(triggerSyncSchema.parse({})).toEqual({ dryRun: false, mode: 'incremental', acceptSourceChanges: false });
+      expect(triggerSyncSchema.parse({ mode: 'full' })).toEqual({ dryRun: false, mode: 'full', acceptSourceChanges: false });
+      expect(triggerSyncSchema.parse({ acceptSourceChanges: true })).toMatchObject({ acceptSourceChanges: true });
+      expect(triggerSyncSchema.safeParse({ acceptSourceChanges: 'yes' }).success).toBe(false);
     });
   });
 

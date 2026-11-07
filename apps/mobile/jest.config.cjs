@@ -89,9 +89,10 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/$1',
     // Vite resolves these; ts-jest does not. Assets imported for their URL
     // (the logo lockup) resolve to a stub string — the components under
-    // test care that an `<img src>` exists, not what it points at.
+    // test care that an `<img src>` exists, not what it points at. The
+    // optional query covers Vite import flags such as `?no-inline`.
     '\\.(css|woff2?)$': '<rootDir>/../test/style-stub.cjs',
-    '\\.(svg|png)$': '<rootDir>/../test/asset-stub.cjs',
+    '\\.(svg|png)(\\?.*)?$': '<rootDir>/../test/asset-stub.cjs',
   },
   transform: {
     '^.+\\.tsx?$': ['ts-jest', { tsconfig: '<rootDir>/../tsconfig.spec.json' }],

@@ -5,8 +5,9 @@ import { assertRecommendedDestinations } from '../driver-utils.js';
 import { BreezeDriver } from './breeze.driver.js';
 import {
   BreezeBoundedDefinitionError,
-  BreezeSensitiveDefinitionError,
+  BreezeRecordGapError,
   transformBreezeRecord,
+  type BreezeRecordRedaction,
 } from './breeze.transforms.js';
 import { TextStrategy, TextareaStrategy } from '../../../field-types/strategies/text.strategy.js';
 import {
@@ -48,6 +49,32 @@ function syntheticGoogleApiKey(): string {
 function syntheticJwt(): string {
   const segment = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
   return [segment({ alg: 'HS256', typ: 'JWT' }), segment({ sub: 'fixture' }), syntheticToken(43, 11)].join('.');
+}
+const token = syntheticToken;
+const PLAIN = ['hunter', '2'].join('');
+const WITHHELD = '[withheld]';
+
+/** The record-gap reason a transform threw, or what else happened. */
+function gapReason(run: () => unknown): string {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof BreezeRecordGapError ? error.reasonCode : 'other error';
+  }
+  return 'no error';
+}
+
+/** Transform one record and collect what was withheld in it. */
+function transformWithRedactions(resource: Parameters<typeof transformBreezeRecord>[0], record: unknown) {
+  const redactions: BreezeRecordRedaction[] = [];
+  const records = transformBreezeRecord(resource, record, (found) => redactions.push(found));
+  const input = records[0]?.reconstructionInput;
+  return {
+    records,
+    redactions,
+    text: JSON.stringify(records),
+    markdown: input?.targetKind === 'article' ? input.markdown : '',
+  };
 }
 const completeCollection = { total: 1, included: 1, complete: true, reason: null } as const;
 const deviceInventory = {
@@ -517,26 +544,25 @@ describe('Breeze transforms', () => {
       name: 'Primary offsite', type: 'system_image', provider: 's3', compression: true,
       encryption: true, active: true, default: true,
       schedule: { cron: '0 2 * * *', timezone: 'America/Denver' }, retention: { daily: 14 },
-      exclusions: ['/var/cache'], restore: { types: ['full', 'selective', 'bare_metal'], notes: null },
+      exclusions: ['/var/cache'],
     });
     expect(backup.markdown).toContain('Provider: s3');
-    expect(backup.markdown).toContain('bare_metal');
+    expect(backup.markdown).toContain('- /var/cache');
     expect(JSON.stringify(backup)).not.toMatch(/providerConfig|encryptionKey|restoreJobs/);
 
     const profile = article('backup-configurations', {
       ...base, id: SEGMENT, siteId: null, kind: 'profile', sourceScope: 'partner', name: 'File profile',
       description: 'Selected files', active: true, selections: { paths: ['/srv/data'] },
       destinationId: destinationId, schedule: null, retention: null, exclusions: ['*.tmp'],
-      restore: { types: ['selective'], notes: 'Choose the required paths.' },
     });
     expect(profile.markdown).toContain('## Selections');
-    expect(profile.markdown).toContain('Choose the required paths.');
+    expect(profile.markdown).toContain('/srv/data');
     const policyBackupId = 'abababab-abab-4bab-8bab-abababababab';
     const policyBackup = article('backup-configurations', {
       ...base, id: policyBackupId, siteId: null, kind: 'policy', sourceScope: 'organization',
       name: 'Server backup', enabled: true, destinationId, targets: { roles: ['server'] },
       schedule: { cron: '0 1 * * *' }, retention: { daily: 14 }, exclusions: [],
-      restore: { types: ['full'], notes: null }, gfs: { monthly: 12 }, legalHold: true,
+      gfs: { monthly: 12 }, legalHold: true,
       legalHoldReason: 'Case 42', bandwidthLimitMbps: 100, backupWindowStart: '01:00',
       backupWindowEnd: '05:00', priority: 5,
     });
@@ -545,7 +571,7 @@ describe('Breeze transforms', () => {
     const backupRelations = transformBreezeRecord('backup-configuration-relations', {
       ...base, id: policyBackupId, siteId: null, kind: 'policy', sourceScope: 'organization',
       name: 'Server backup', enabled: true, destinationId, targets: { roles: ['server'] },
-      schedule: null, retention: null, exclusions: [], restore: { types: ['full'], notes: null },
+      schedule: null, retention: null, exclusions: [],
       gfs: null, legalHold: false, legalHoldReason: null, bandwidthLimitMbps: null,
       backupWindowStart: null, backupWindowEnd: null, priority: null,
     }) as Array<{ reconstructionInput: Record<string, any> }>;
@@ -563,45 +589,54 @@ describe('Breeze transforms', () => {
     }
   });
 
-  it('strips unknown desired-configuration keys and rejects malicious inline secrets', () => {
+  it('strips unknown desired-configuration keys and withholds secret values in place', () => {
     const safeScript = {
       ...base, siteId: null, sourceScope: 'organization', name: 'Install', description: null,
       category: null, osTypes: ['linux'], language: 'bash', content: 'true', parameters: null,
       timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
     };
-    // A key Breeze adds later is dropped before inspection, rendering, and storage.
+    // A key Breeze adds later is dropped before redaction, rendering, and storage.
     expect(JSON.stringify(transformBreezeRecord('scripts', {
       ...safeScript, providerConfig: { accessToken: 'added-later' },
     }))).not.toMatch(/providerConfig|added-later/u);
-    expect(() => transformBreezeRecord('scripts', { ...safeScript, content: 'export TOKEN=hunter2' }))
-      .toThrow(/blocked|secret|sensitive/i);
+    const script = transformWithRedactions('scripts', { ...safeScript, content: `export TOKEN=${PLAIN}\necho done` });
+    expect(script.text).not.toContain(PLAIN);
+    expect(script.markdown).toContain(`export TOKEN=${WITHHELD}`);
+    expect(script.markdown).toContain('echo done');
+    expect(script.redactions).toEqual([{ sourceId: DEVICE, orgId: ORG, count: 1, fieldPaths: ['content'] }]);
+
     const policy = (settings: Record<string, unknown>) => ({
       ...base, siteId: null, sourceScope: 'organization', name: 'Safe policy', description: null,
       status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings }],
     });
-    expect(() => transformBreezeRecord('configuration-policies', policy({
-      tokenize: true, secretary: 'Alice', policyEnabled: true,
-    }))).not.toThrow();
-    // A credential-named field with no text or number in it holds no secret
-    // (issue 112: an empty S3 destination form in a backup feature).
-    expect(() => transformBreezeRecord('configuration-policies', policy({ passwordPolicyEnabled: true })))
-      .not.toThrow();
-    expect(() => transformBreezeRecord('configuration-policies', policy({ providerConfig: {} })))
-      .not.toThrow();
-    expect(() => transformBreezeRecord('configuration-policies', policy({
-      destination: { name: '', bucket: '', accessKeyId: '', secretAccessKey: '  ' },
-    }))).not.toThrow();
-    expect(() => transformBreezeRecord('configuration-policies', policy({ providerConfig: { region: 'eu' } })))
-      .toThrow(/blocked|secret|sensitive/i);
-    expect(() => transformBreezeRecord('configuration-policies', policy({ secretAccessKey: 'abc' })))
-      .toThrow(/blocked|secret|sensitive/i);
-    expect(() => transformBreezeRecord('configuration-policies', policy({ pin: { password: 1234 } })))
-      .toThrow(/blocked|secret|sensitive/i);
-    expect(() => transformBreezeRecord('configuration-policies', policy({ nested: { accessToken: 'ordinary' } })))
-      .toThrow(/blocked|secret|sensitive/i);
-    const highEntropy = 'JBSWY3DPEHPK3PXP'.repeat(3);
-    expect(() => transformBreezeRecord('configuration-policies', policy({ value: highEntropy })))
-      .toThrow(/blocked|secret|sensitive/i);
+    for (const settings of [
+      { tokenize: true, secretary: 'Alice', policyEnabled: true },
+      // A credential-named field with no text or number in it holds no secret
+      // (issue 112: an empty S3 destination form in a backup feature).
+      { passwordPolicyEnabled: true },
+      { providerConfig: {} },
+      { destination: { name: '', bucket: '', accessKeyId: '', secretAccessKey: '  ' } },
+      // A setting about a credential is not one.
+      { passwordMinLength: 12, tokenExpiryDays: 30 },
+      // A value the source already masked.
+      { password: '********' },
+    ]) {
+      expect(transformWithRedactions('configuration-policies', policy(settings)).redactions).toEqual([]);
+    }
+    for (const [settings, path, secret] of [
+      [{ providerConfig: { region: 'eu' } }, 'features[0].settings.providerConfig', 'eu'],
+      [{ secretAccessKey: 'abc' }, 'features[0].settings.secretAccessKey', 'abc'],
+      [{ pin: { password: 1234 } }, 'features[0].settings.pin.password', '1234'],
+      [{ nested: { accessToken: 'ordinary' } }, 'features[0].settings.nested.accessToken', 'ordinary'],
+      [{ value: token(48, 11) }, 'features[0].settings.value', token(48, 11)],
+    ] as const) {
+      const result = transformWithRedactions('configuration-policies', policy({ ...settings, keep: 'visible' }));
+      expect(result.records).toHaveLength(1);
+      expect(result.markdown).not.toContain(`"${secret}"`);
+      expect(result.markdown).not.toContain(`:${secret}}`);
+      expect(result.markdown).toContain('visible');
+      expect(result.redactions[0]?.fieldPaths).toEqual([path]);
+    }
   });
 
   it.each([
@@ -614,99 +649,88 @@ describe('Breeze transforms', () => {
     'Windows-Update-Policy-For-All-Workstations',
     'Bitdefender-Speedtest-Update-Lockdown',
     'WindowsDefenderRealtimeProtectionPolicyForAllManagedWorkstations',
-  ])('does not quarantine word-shaped text in top-level schema label fields: %s', (text) => {
+    'correct-horse-battery-staple-marble-hamlet',
+  ].filter((text) => !text.startsWith('Veeam')))('keeps word-shaped text anywhere in the record: %s', (text) => {
     const policy = {
       ...base, siteId: null, sourceScope: 'organization', name: text, description: text,
       status: 'active',
-      features: [{ id: SEGMENT, type: 'settings', policyId: null, settings: null }],
+      features: [{ id: SEGMENT, type: 'settings', policyId: null, settings: { value: text, registry: { data: text } } }],
     };
-    expect(() => transformBreezeRecord('configuration-policies', policy)).not.toThrow();
-    expect(() => transformBreezeRecord('scripts', {
+    expect(transformWithRedactions('configuration-policies', policy).redactions).toEqual([]);
+    expect(transformWithRedactions('scripts', {
       ...base, siteId: null, sourceScope: 'organization', name: text, description: text,
       category: text.slice(0, 100), osTypes: [text.slice(0, 50)], language: 'bash', content: 'true',
-      parameters: null, timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
-    })).not.toThrow();
-    const descriptorField = {
-      ...base, deviceId: DEVICE, definitionId: SEGMENT, target: { type: 'device', id: DEVICE },
-      name: 'Asset tag', fieldKey: 'asset_tag', type: 'text', value: text,
-    };
-    expect(() => transformBreezeRecord('custom-field-values', descriptorField)).not.toThrow();
-    const dropdown = { ...descriptorField, name: 'Tier', fieldKey: 'tier', type: 'dropdown' };
-    expect(() => transformBreezeRecord('custom-field-values', dropdown)).not.toThrow();
-  });
-
-  it.each([
-    'correct-horse-battery-staple-marble-hamlet',
-    'Windows-Defender-Realtime-Protection-Policy',
-  ])('keeps the entropy rule for word-shaped text outside top-level schema label fields: %s', (text) => {
-    const policy = (settings: Record<string, unknown>) => ({
-      ...base, siteId: null, sourceScope: 'organization', name: 'Safe policy', description: null,
-      status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings }],
-    });
-    expect(() => transformBreezeRecord('configuration-policies', policy({ value: text })))
-      .toThrow(/blocked|secret|sensitive/i);
-    expect(() => transformBreezeRecord('configuration-policies', policy({ registry: { data: text } })))
-      .toThrow(/blocked|secret|sensitive/i);
-    // A nested key named like a label grants nothing: only the record's own
-    // top-level schema fields carry the label role.
-    expect(() => transformBreezeRecord('configuration-policies', policy({ description: text })))
-      .toThrow(/blocked|secret|sensitive/i);
-    expect(() => transformBreezeRecord('configuration-policies', policy({ name: text, displayName: text })))
-      .toThrow(/blocked|secret|sensitive/i);
-    expect(() => transformBreezeRecord('automations', {
-      ...base, siteId: null, sourceScope: 'organization', name: 'Safe automation', description: null,
-      enabled: true, trigger: { type: 'schedule' }, conditions: null,
-      actions: [{ type: 'script', description: text }], onFailure: 'stop', notificationTargets: null,
-      dependencies: [],
-    })).toThrow(/blocked|secret|sensitive/i);
-    expect(() => transformBreezeRecord('scripts', {
-      ...base, siteId: null, sourceScope: 'organization', name: 'Safe', description: null,
-      category: null, osTypes: ['linux'], language: 'bash', content: 'true',
-      parameters: { description: text }, timeoutSeconds: 30, runAs: 'system', version: 1,
-      exitCodeSeverityMapping: null,
-    })).toThrow(/blocked|secret|sensitive/i);
-    expect(() => transformBreezeRecord('custom-fields', {
-      ...base, siteId: null, sourceScope: 'partner', name: 'Tier', fieldKey: 'tier', type: 'dropdown',
-      options: [{ label: 'Gold', description: text }], required: false, defaultValue: null, deviceTypes: null,
-    })).toThrow(/blocked|secret|sensitive/i);
+      parameters: { description: text }, timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    }).redactions).toEqual([]);
     const freeText = {
       ...base, deviceId: DEVICE, definitionId: SEGMENT, target: { type: 'device', id: DEVICE },
       name: 'WiFi notes', fieldKey: 'wifi_notes', type: 'text', value: text,
     };
-    expect(() => transformBreezeRecord('custom-field-values', freeText)).toThrow(/blocked|secret|sensitive/i);
-    expect(() => transformBreezeRecord('scripts', {
-      ...base, siteId: null, sourceScope: 'organization', name: 'Safe', description: null,
-      category: null, osTypes: ['linux'], language: 'bash', content: 'true', parameters: { seed: text },
-      timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
-    })).toThrow(/blocked|secret|sensitive/i);
+    expect(transformWithRedactions('custom-field-values', freeText).redactions).toEqual([]);
   });
 
-  it('treats a custom field named as a passphrase as a forbidden key regardless of its value', () => {
-    expect(() => transformBreezeRecord('custom-field-values', {
-      ...base, deviceId: DEVICE, definitionId: SEGMENT, target: { type: 'device', id: DEVICE },
-      name: 'WiFi passphrase', fieldKey: 'wifi_passphrase', type: 'text', value: 'short',
-    })).toThrow(/blocked|secret|sensitive/i);
+  it('costs one value, not the record, when the shared scan misreads a name as a credential', () => {
+    // The shared scan's entropy rule flags this four-class run. Before, the
+    // article writer withheld the whole record for it; now only the value is.
+    const text = 'Veeam-Agent-Backup-Job-Daily-Full-Retain-14-Days';
+    const result = transformWithRedactions('configuration-policies', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Backup policy', description: text,
+      status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings: null }],
+    });
+    expect(result.records).toHaveLength(1);
+    expect(result.markdown).toContain('# Backup policy');
+    expect(result.redactions[0]).toMatchObject({ count: 1, fieldPaths: ['description'] });
   });
 
   it.each([
     'JBSWY3DPEHPK3PXP'.repeat(3),
     'kJhGfDsAqWeRtYuIoPlKjHgFdSaZxCvBnMqAzWsXe',
-    'zqvxkwjfhdgtnbrmplycsoeuiazqvxkwjfhdgtnb',
-    'QZVXKWJFHDGTNBRMPLYCSOEUIAQZVXKWJFHDGTNB',
-    'zqvxkwjfhdgtnbrmplycs-oeuiazqvxkwjfhdgtnb',
-    'QZVXKWJFHDGTNBRMPLYC-SOEUIAQZVXKWJFHDGTNB',
-    'kJhGf-DsAqWeRtYuIoPl-KjHgFdSaZxCvBnM',
-    'xkwqzjvfhbgtpdmcnslr-ytwkxjqzvfhgbpdmcn',
-    'gwqxzt_vjkpfhb_dmnrls_ytwqxz_jvkpfh_gbdmnc',
+  ])('relies on Breeze and the key name for two-class random text: %s', (text) => {
+    // The shared format scan needs three character classes; the old
+    // Breeze-only entropy rule is gone. Under a credential-named key the
+    // value is still withheld.
+    const policy = (settings: Record<string, unknown>) => ({
+      ...base, siteId: null, sourceScope: 'organization', name: 'Safe policy', description: null,
+      status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings }],
+    });
+    expect(transformWithRedactions('configuration-policies', policy({ value: text })).redactions).toEqual([]);
+    const named = transformWithRedactions('configuration-policies', policy({ totpSecret: text }));
+    expect(named.text).not.toContain(text);
+    expect(named.redactions[0]?.fieldPaths).toEqual(['features[0].settings.totpSecret']);
+  });
+
+  it('withholds the value of a custom field named as a credential and keeps the record', () => {
+    const result = transformWithRedactions('custom-field-values', {
+      ...base, deviceId: DEVICE, definitionId: SEGMENT, target: { type: 'device', id: DEVICE },
+      name: 'WiFi passphrase', fieldKey: 'wifi_passphrase', type: 'text', value: 'short',
+    });
+    expect(result.records).toHaveLength(1);
+    expect(result.text).not.toContain('short');
+    expect(result.redactions).toEqual([{ sourceId: DEVICE, orgId: ORG, count: 1, fieldPaths: ['value'] }]);
+    // A field about a credential is not one.
+    expect(transformWithRedactions('custom-field-values', {
+      ...base, deviceId: DEVICE, definitionId: SEGMENT, target: { type: 'device', id: DEVICE },
+      name: 'Password expiry date', fieldKey: 'password_expiry_date', type: 'date', value: '2027-01-01',
+    }).redactions).toEqual([]);
+  });
+
+  it.each([
+    token(48, 11),
     syntheticGoogleApiKey(),
     createHash('sha256').update('').digest('base64'),
     syntheticJwt(),
-  ])('still quarantines encoded credential material: %s', (text) => {
+  ])('withholds encoded credential material and syncs the record: %s', (text) => {
     const policy = {
       ...base, siteId: null, sourceScope: 'organization', name: 'Safe policy', description: null,
-      status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings: { value: text } }],
+      status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings: { value: text, mode: 'audit' } }],
     };
-    expect(() => transformBreezeRecord('configuration-policies', policy)).toThrow(/blocked|secret|sensitive/i);
+    const result = transformWithRedactions('configuration-policies', policy);
+    expect(result.records).toHaveLength(1);
+    expect(result.text).not.toContain(text);
+    expect(result.markdown).toContain('audit');
+    expect(result.redactions).toEqual([
+      { sourceId: DEVICE, orgId: ORG, count: 1, fieldPaths: ['features[0].settings.value'] },
+    ]);
   });
 
   it('preserves a benign desired-configuration inspection bound as a bounded error', () => {
@@ -724,50 +748,79 @@ describe('Breeze transforms', () => {
   });
 
   it.each([
-    'password=hunter2',
-    'set "PASSWORD=hunter2"',
-    'setx /M DB_PASSWORD hunter2',
-    'tool --password hunter2 --mode rebuild',
-    "tool --mode rebuild --access-token 'ordinary-value'",
-    '{"password":"hunter2"}',
-    '{"user":"admin","password":"hunter2","mode":"rebuild"}',
-    'RECOVERY_KEY=1234-5678-9012',
-    'BitLockerRecoveryKey: "1234-5678-9012"',
-    'PASSWORD_VALUE=hunter2',
-    'TOKEN_BACKUP=ordinary-value',
-    'tool "PASSWORD=hunter2"',
-    'postgresql://operator:hunter2@database.example/rebuild',
-    "$Password = 'Summer2026!'",
-    "ConvertTo-SecureString -AsPlainText -Force 'Summer2026!'",
-  ])('blocks adjacent low-entropy credential syntax without leaking it: %s', (content) => {
-    const input = {
-      ...base, siteId: null, sourceScope: 'organization', name: 'Unsafe rebuild', description: null,
+    [`password=${PLAIN}`],
+    [`set "PASSWORD=${PLAIN}"`],
+    [`setx /M DB_PASSWORD ${PLAIN}`],
+    [`tool --password ${PLAIN} --mode rebuild`],
+    [`{"user":"admin","password":"${PLAIN}","mode":"rebuild"}`],
+    [`tool "PASSWORD=${PLAIN}"`],
+    [`postgresql://operator:${PLAIN}@database.example/rebuild`],
+    [`$Password = '${PLAIN}!'`],
+    [`ConvertTo-SecureString -AsPlainText -Force '${PLAIN}!'`],
+  ])('withholds only the credential span in a script: %s', (line) => {
+    const content = `Write-Host start\n${line}\nWrite-Host end`;
+    const result = transformWithRedactions('scripts', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Rebuild', description: null,
       category: 'build', osTypes: ['windows'], language: 'powershell', content, parameters: null,
       timeoutSeconds: 300, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
-    };
-    expect(() => transformBreezeRecord('scripts', input)).toThrow(/blocked|secret|sensitive/i);
+    });
+    expect(result.records).toHaveLength(1);
+    expect(result.text).not.toContain(PLAIN);
+    expect(result.markdown).toContain('Write-Host start');
+    expect(result.markdown).toContain('Write-Host end');
+    expect(result.markdown).toContain(WITHHELD);
+    expect(result.redactions[0]).toMatchObject({ count: 1, fieldPaths: ['content'] });
+  });
+
+  it.each([
+    ['tool --password=Wintergarden --mode rebuild'],
+    ['tool --password Wintergarden --mode rebuild'],
+    ['agent.exe /install /password:Wintergarden /quiet'],
+    ['tool --password=-Wintergarden --mode rebuild'],
+    [`$Password = 'Summer''Wintergarden'`],
+    [String.raw`export DB_PASSWORD="Summer\"Wintergarden"`],
+    [String.raw`$Password = 'Summer\'; $Token = 'Wintergarden'`],
+  ])('withholds a letters-only password passed as a flag (review finding): %s', (line) => {
+    const result = transformWithRedactions('scripts', {
+      ...base, siteId: null, sourceScope: 'organization', name: 'Install agent', description: null,
+      category: 'build', osTypes: ['windows'], language: 'powershell', content: `Write-Host start\n${line}`,
+      parameters: null, timeoutSeconds: 300, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+    });
+    expect(result.records).toHaveLength(1);
+    expect(result.text).not.toContain('Wintergarden');
+    expect(result.markdown).toContain(WITHHELD);
+    expect(result.redactions[0]).toMatchObject({ count: 1, fieldPaths: ['content'] });
   });
 
   it.each([
     'tool --password-policy enabled --mode rebuild',
     'echo secretary tokenize ordinary prose',
     'postgresql://database.example/rebuild',
+    'Usage: tool --password',
+    'Help: provide credential before running',
+    'TODO rotate DB_PASSWORD later',
+    '$cred = Get-Credential',
   ])('allows nearby benign reconstruction script text: %s', (content) => {
-    expect(() => transformBreezeRecord('scripts', {
+    const result = transformWithRedactions('scripts', {
       ...base, siteId: null, sourceScope: 'organization', name: 'Safe rebuild', description: null,
       category: 'build', osTypes: ['linux'], language: 'bash', content, parameters: null,
       timeoutSeconds: 300, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
-    })).not.toThrow();
+    });
+    expect(result.redactions).toEqual([]);
+    expect(result.markdown).toContain(content);
   });
 
-  it('does not apply content-only identifier quarantine to ordinary descriptive fields', () => {
-    expect(() => transformBreezeRecord('scripts', {
-      ...base, siteId: null, sourceScope: 'organization', name: 'Credential policy documentation',
+  it('does not rewrite identifiers, even when they would look like a credential', () => {
+    const revision = token(64, 7);
+    const result = transformWithRedactions('scripts', {
+      ...base, revision, siteId: null, sourceScope: 'organization', name: 'Credential policy documentation',
       description: 'Usage documentation mentions tool --password without carrying a value.',
       category: 'documentation', osTypes: ['linux'], language: 'bash', content: 'echo safe',
       parameters: null, timeoutSeconds: 300, runAs: 'system', version: 1,
       exitCodeSeverityMapping: null,
-    })).not.toThrow();
+    });
+    expect(result.redactions).toEqual([]);
+    expect(result.text).toContain(revision);
   });
 
   it('preserves split custom-field definitions and repeated device value pages losslessly', () => {
@@ -1084,7 +1137,7 @@ describe('Breeze transforms', () => {
     expect(transformBreezeRecord('ip-reservations', input)).toHaveLength(0);
   });
 
-  it('fails closed on same-record same-CIDR gateway conflicts independent of address order', () => {
+  it('skips one record (a record gap) on same-record same-CIDR gateway conflicts in any address order', () => {
     const conflicting = {
       ...deviceInventory.addresses[0],
       id: '14141414-1414-4414-8414-141414141414',
@@ -1100,24 +1153,18 @@ describe('Breeze transforms', () => {
       },
     });
 
-    expect(() =>
-      transformBreezeRecord(
-        'subnets',
-        makeInput([deviceInventory.addresses[0]!, conflicting]),
-      ),
-    ).toThrow(/gateway|conflict|duplicate/i);
-    expect(() =>
-      transformBreezeRecord(
-        'subnets',
-        makeInput([conflicting, deviceInventory.addresses[0]!]),
-      ),
-    ).toThrow(/gateway|conflict|duplicate/i);
+    expect(gapReason(() =>
+      transformBreezeRecord('subnets', makeInput([deviceInventory.addresses[0]!, conflicting])),
+    )).toBe('conflicting_subnet_gateways');
+    expect(gapReason(() =>
+      transformBreezeRecord('subnets', makeInput([conflicting, deviceInventory.addresses[0]!])),
+    )).toBe('conflicting_subnet_gateways');
   });
 
   it.each(['not-an-ip', '10.30.0.1'])(
-    'fails closed on a malformed or out-of-subnet static gateway: %s',
+    'skips one record (a record gap) on a malformed or out-of-subnet static gateway: %s',
     (gateway) => {
-      expect(() =>
+      expect(gapReason(() =>
         transformBreezeRecord('subnets', {
           ...deviceInventory,
           addresses: [{ ...deviceInventory.addresses[0], gateway }],
@@ -1126,7 +1173,7 @@ describe('Breeze transforms', () => {
             addresses: completeCollection,
           },
         }),
-      ).toThrow(/gateway/i);
+      )).toBe('invalid_static_gateway');
     },
   );
 
@@ -1457,9 +1504,9 @@ describe('Breeze transforms', () => {
     ['automation-relations', { ...base, siteId: null, sourceScope: 'organization', name: 'Onboard', description: null, enabled: true, trigger: { type: 'manual' }, conditions: null, actions: [], onFailure: 'stop', notificationTargets: null, dependencies: [] }],
     [
       'backup-configurations',
-      { ...base, siteId: null, kind: 'profile', sourceScope: 'organization', name: 'Backup', description: null, active: true, selections: {}, destinationId: null, schedule: null, retention: null, exclusions: [], restore: { types: [], notes: null } },
+      { ...base, siteId: null, kind: 'profile', sourceScope: 'organization', name: 'Backup', description: null, active: true, selections: {}, destinationId: null, schedule: null, retention: null, exclusions: [] },
     ],
-    ['backup-configuration-relations', { ...base, siteId: null, kind: 'profile', sourceScope: 'organization', name: 'Backup', description: null, active: true, selections: {}, destinationId: null, schedule: null, retention: null, exclusions: [], restore: { types: [], notes: null } }],
+    ['backup-configuration-relations', { ...base, siteId: null, kind: 'profile', sourceScope: 'organization', name: 'Backup', description: null, active: true, selections: {}, destinationId: null, schedule: null, retention: null, exclusions: [] }],
     [
       'custom-fields',
       { ...base, siteId: null, sourceScope: 'organization', name: 'Owner', fieldKey: 'owner', type: 'text', options: null, required: false, defaultValue: null, deviceTypes: null },
@@ -1585,77 +1632,69 @@ describe('Breeze transforms', () => {
 });
 
 describe('BreezeDriver transport delegation', () => {
+  const scriptPage = async (records: unknown[]) => {
+    const client = {
+      testConnection: jest.fn(), listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: records,
+        nextCursor: null, hasMore: false,
+      }),
+    };
+    return new BreezeDriver(client).fetchRecords({ ...ctx('scripts'), mode: 'full', updatedSince: null }, null);
+  };
+  const script = (content: string, id = DEVICE, name = 'Rebuild') => ({
+    ...base, id, siteId: null, sourceScope: 'organization', name, description: null,
+    category: null, osTypes: ['windows'], language: 'powershell', content, parameters: null,
+    timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
+  });
+
   it.each([
     'Usage: tool --password',
     '{"password":""}',
     'set PASSWORD=',
     'TODO rotate DB_PASSWORD later',
     'Help: provide credential before running',
-    'ConvertTo-SecureString hunter2 -AsPlainText -Force',
-    'ConvertTo-SecureString -String hunter2 -AsPlainText -Force',
-  ])('quarantines credential-semantic script syntax, continues a safe sibling, and leaks nothing: %s', async (content) => {
-    const unsafeName = 'Unsafe syntax sentinel';
-    const unsafe = {
-      ...base, siteId: null, sourceScope: 'organization', name: unsafeName, description: null,
-      category: null, osTypes: ['windows'], language: 'powershell', content, parameters: null,
-      timeoutSeconds: 30, runAs: 'system', version: 1, exitCodeSeverityMapping: null,
-    };
-    const safe = { ...unsafe, id: SEGMENT, name: 'Safe sibling', content: 'tool --password-policy enabled' };
-    const client = {
-      testConnection: jest.fn(), listOrganizations: jest.fn(),
-      fetchPage: jest.fn().mockResolvedValue({
-        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: [unsafe, safe],
-        nextCursor: null, hasMore: false,
-      }),
-    };
-    const page = await new BreezeDriver(client).fetchRecords(
-      { ...ctx('scripts'), mode: 'full', updatedSince: null }, null,
-    );
-    expect(page.records).toHaveLength(1);
-    expect(page.blockedInputs).toEqual([expect.objectContaining({
-      kind: 'secret_blocked', externalId: `${ORG}:scripts:${DEVICE}`,
-      message: `Weavestream withheld scripts record "${unsafeName}" (${DEVICE}) because the field content looks like it holds a credential. Remove or change that value in Breeze and rerun the sync.`,
-      details: expect.objectContaining({
-        reasonCode: 'secret_like_material', sourceId: DEVICE, fieldPaths: ['content'],
-      }),
-    })]);
-    // The name passed the secret check and appears only in the message; the
-    // record's content and other fields do not reach the page.
-    const serialized = JSON.stringify(page);
-    expect(serialized).not.toContain(content);
-    expect(serialized.split(unsafeName)).toHaveLength(2);
+  ])('syncs a script that only mentions a credential, with no warning (issue 112): %s', async (content) => {
+    const page = await scriptPage([script(content), script('tool --password-policy enabled', SEGMENT)]);
+    expect(page.records).toHaveLength(2);
+    expect(page.blockedInputs).toEqual([]);
+    expect(page.redactions).toEqual([]);
   });
 
-  it('names the field path, never the value, when a policy is withheld (issue 112)', async () => {
-    const secretValue = 'kJhGfDsAqWeRtYuIoPlKjHgFdSaZxCvBnMqAzWsXe';
+  it.each([
+    `ConvertTo-SecureString ${PLAIN} -AsPlainText -Force`,
+    `ConvertTo-SecureString -String ${PLAIN} -AsPlainText -Force`,
+    `$Password = '${PLAIN}!'`,
+  ])('withholds the literal in a script, syncs the record, and leaks nothing: %s', async (content) => {
+    const page = await scriptPage([script(content), script('true', SEGMENT, 'Safe sibling')]);
+    expect(page.records).toHaveLength(2);
+    expect(page.blockedInputs).toEqual([]);
+    expect(page.redactions).toEqual([{ externalId: `${ORG}:scripts:${DEVICE}`, count: 1, fieldPaths: ['content'] }]);
+    expect(JSON.stringify(page)).not.toContain(PLAIN);
+    expect(JSON.stringify(page)).toContain(WITHHELD);
+  });
+
+  it('syncs a policy with the credential value withheld and names the path (issue 112)', async () => {
+    const secretValue = token(48, 11);
     const policy = {
       ...base, siteId: null, sourceScope: 'organization', name: 'Standard buildout', description: null,
       status: 'active', features: [
         { id: SEGMENT, type: 'patch', policyId: null, settings: { rebootPolicy: 'if_required' } },
-        { id: SEGMENT, type: 'backup', policyId: null, settings: { destination: { secretAccessKey: secretValue } } },
+        { id: SEGMENT, type: 'backup', policyId: null, settings: { destination: { secretAccessKey: secretValue, bucket: 'nightly' } } },
       ],
     };
-    const client = {
-      testConnection: jest.fn(), listOrganizations: jest.fn(),
-      fetchPage: jest.fn().mockResolvedValue({
-        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: [policy],
-        nextCursor: null, hasMore: false,
-      }),
-    };
-    const page = await new BreezeDriver(client).fetchRecords(
-      { ...ctx('configuration-policies'), mode: 'full', updatedSince: null }, null,
-    );
-    expect(page.records).toHaveLength(0);
-    expect(page.blockedInputs).toEqual([expect.objectContaining({
-      kind: 'secret_blocked',
-      message: expect.stringContaining(
-        'configuration-policies record "Standard buildout" (' + DEVICE + ') because the field features[1].settings.destination.secretAccessKey looks like it holds a credential',
-      ),
-      details: expect.objectContaining({
-        fieldPaths: ['features[1].settings.destination.secretAccessKey'],
-      }),
-    })]);
-    expect(JSON.stringify(page)).not.toContain(secretValue);
+    const page = await withheldPolicyPage(policy);
+    expect(page.records).toHaveLength(1);
+    expect(page.blockedInputs).toEqual([]);
+    expect(page.redactions).toEqual([{
+      externalId: `${ORG}:configuration-policies:${DEVICE}`,
+      count: 1,
+      fieldPaths: ['features[1].settings.destination.secretAccessKey'],
+    }]);
+    const serialized = JSON.stringify(page);
+    expect(serialized).not.toContain(secretValue);
+    expect(serialized).toContain('if_required');
+    expect(serialized).toContain('nightly');
   });
 
   const withheldPolicyPage = async (policy: Record<string, unknown>) => {
@@ -1675,51 +1714,44 @@ describe('BreezeDriver transport delegation', () => {
     status: 'active', features: [{ id: SEGMENT, type: 'settings', policyId: null, settings }],
   });
 
-  it('redacts a key that carries an assignment instead of showing it in the path', async () => {
-    const page = await withheldPolicyPage(policyWithSettings({ options: { 'password=hunter2': 'on' } }));
-    expect(page.blockedInputs).toEqual([expect.objectContaining({
-      details: expect.objectContaining({ fieldPaths: ['features[0].settings.options.[redacted]'] }),
+  it('withholds a key that carries an assignment and does not show it in the path', async () => {
+    const page = await withheldPolicyPage(policyWithSettings({ options: { [`password=${PLAIN}`]: 'on' } }));
+    expect(page.records).toHaveLength(1);
+    expect(page.redactions).toEqual([expect.objectContaining({
+      fieldPaths: ['features[0].settings.options.[redacted]'],
     })]);
-    expect(JSON.stringify(page)).not.toContain('hunter2');
+    expect(JSON.stringify(page)).not.toContain(PLAIN);
   });
 
   it('does not treat a credential-named object with keys as empty', async () => {
-    const tokenKey = 'kJhGfDsAqWeRtYuIoPlKjHgFdSaZxCvBnMqAzWsXe';
+    const tokenKey = token(48, 11);
     const page = await withheldPolicyPage(policyWithSettings({ providerConfig: { [tokenKey]: true } }));
-    expect(page.records).toHaveLength(0);
-    expect(page.blockedInputs).toEqual([expect.objectContaining({
-      kind: 'secret_blocked',
-      details: expect.objectContaining({ fieldPaths: ['features[0].settings.providerConfig'] }),
+    expect(page.records).toHaveLength(1);
+    expect(page.redactions).toEqual([expect.objectContaining({
+      fieldPaths: ['features[0].settings.providerConfig'],
     })]);
     expect(JSON.stringify(page)).not.toContain(tokenKey);
   });
 
-  it('bounds the withheld message under the runner limit for a long name and path', async () => {
+  it('bounds a long redacted path and keeps its end, which names the field', async () => {
     let settings: Record<string, unknown> = { secretAccessKey: 'abc' };
     for (let level = 0; level < 12; level += 1) settings = { [`nestedSection${level}Settings`]: settings };
-    const longName = '🛡️'.repeat(40) + 'x'.repeat(40);
-    const page = await withheldPolicyPage(policyWithSettings(settings, longName));
-    const message = page.blockedInputs?.[0]?.message ?? '';
-    expect(message.length).toBeGreaterThan(0);
-    expect(message.length).toBeLessThanOrEqual(500);
-    // The end of the path is kept, because it names the field.
-    expect(message).toContain('.secretAccessKey looks like it holds a credential');
-    expect(message).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    const page = await withheldPolicyPage(policyWithSettings(settings));
+    const path = page.redactions?.[0]?.fieldPaths[0] ?? '';
+    expect(path.length).toBeLessThanOrEqual(200);
+    expect(path.endsWith('.secretAccessKey')).toBe(true);
+    expect(path.startsWith('…')).toBe(true);
   });
 
-  it('leaves out a record name that itself looks like a credential', () => {
-    const secretName = 'kJhGfDsAqWeRtYuIoPlKjHgFdSaZxCvBnMqAzWsXe';
-    let caught: unknown;
-    try {
-      transformBreezeRecord('configuration-policies', {
-        ...base, siteId: null, sourceScope: 'organization', name: secretName, description: null,
-        status: 'active', features: [],
-      });
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(BreezeSensitiveDefinitionError);
-    expect(caught).toMatchObject({ fieldPath: 'name', recordName: null });
+  it('withholds a record name that itself looks like a credential and keeps the record', () => {
+    const secretName = token(48, 11);
+    const result = transformWithRedactions('configuration-policies', {
+      ...base, siteId: null, sourceScope: 'organization', name: secretName, description: null,
+      status: 'active', features: [],
+    });
+    expect(result.records).toHaveLength(1);
+    expect(result.text).not.toContain(secretName);
+    expect(result.redactions[0]).toMatchObject({ fieldPaths: ['name'] });
   });
 
   it('keeps maximum automation dependency fan-out lossless within 10,000-record continuation pages', async () => {
@@ -1837,36 +1869,15 @@ describe('BreezeDriver transport delegation', () => {
     ]);
   });
 
-  it('converts a malicious inline definition to a safe blocked input and continues safe records', async () => {
-    const secret = 'JBSWY3DPEHPK3PXP'.repeat(3);
-    const unsafe = {
-      ...base, siteId: null, sourceScope: 'organization', name: 'Unsafe', description: null,
-      category: null, osTypes: ['linux'], language: 'bash', content: `echo ${secret}`,
-      parameters: null, timeoutSeconds: 30, runAs: 'system', version: 1,
-      exitCodeSeverityMapping: null,
-    };
-    const safe = { ...unsafe, id: SEGMENT, name: 'Safe', content: 'true' };
-    const client = {
-      testConnection: jest.fn(), listOrganizations: jest.fn(),
-      fetchPage: jest.fn().mockResolvedValue({
-        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data: [unsafe, safe],
-        nextCursor: null, hasMore: false,
-      }),
-    };
-    const page = await new BreezeDriver(client).fetchRecords(
-      { ...ctx('scripts'), mode: 'full', updatedSince: null }, null,
-    );
-    expect(page.records).toHaveLength(1);
-    expect(page.blockedInputs).toEqual([expect.objectContaining({
-      kind: 'secret_blocked', externalId: `${ORG}:scripts:${DEVICE}`,
-      details: expect.objectContaining({ reasonCode: 'secret_like_material', sourceId: DEVICE }),
-    })]);
+  it('withholds an inline secret span and syncs every record of the page', async () => {
+    const secret = token(48, 11);
+    const page = await scriptPage([script(`echo ${secret}`, DEVICE, 'Unsafe'), script('true', SEGMENT, 'Safe')]);
+    expect(page.records).toHaveLength(2);
+    expect(page.blockedInputs).toEqual([]);
+    expect(page.redactions).toEqual([{ externalId: `${ORG}:scripts:${DEVICE}`, count: 1, fieldPaths: ['content'] }]);
     const serialized = JSON.stringify(page);
     expect(serialized).not.toContain(secret);
-    expect(serialized).not.toContain('echo JBSWY');
-    // The safe name is shown only in the withheld-record message.
-    expect(serialized.split('Unsafe')).toHaveLength(2);
-    expect(page.blockedInputs?.[0]?.message).toContain('"Unsafe"');
+    expect(serialized).toContain(`echo ${WITHHELD}`);
   });
 
   it('keeps 21 maximum-cardinality fan-out parents within two bounded lossless pages', async () => {
@@ -2068,30 +2079,102 @@ describe('BreezeDriver transport delegation', () => {
     );
   });
 
-  it('fails closed when duplicate stable native identities carry conflicting facts', async () => {
+  const pageOf = async (resource: string, data: unknown[], blocked?: unknown[]) => {
     const client = {
       testConnection: jest.fn(),
       listOrganizations: jest.fn(),
       fetchPage: jest.fn().mockResolvedValue({
-        schemaVersion: '1',
-        snapshotAt: '2026-07-14T12:00:00.000Z',
-        data: [
-          deviceInventory,
-          {
-            ...deviceInventory,
-            addresses: deviceInventory.addresses.map((address, index) =>
-              index === 0 ? { ...address, gateway: '10.20.0.3' } : address,
-            ),
-          },
-        ],
-        nextCursor: null,
-        hasMore: false,
+        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z', data,
+        nextCursor: null, hasMore: false, ...(blocked ? { blocked } : {}),
       }),
     };
+    return new BreezeDriver(client).fetchRecords({ ...ctx(resource), mode: 'full', updatedSince: null }, null);
+  };
+  const otherDevice = {
+    ...deviceInventory,
+    id: '12121212-1212-4212-8212-121212121212',
+    deviceId: '12121212-1212-4212-8212-121212121212',
+    addresses: [{
+      ...deviceInventory.addresses[0]!,
+      id: '13131313-1313-4313-8313-131313131313',
+      address: '10.40.0.50',
+      gateway: '10.40.0.1',
+    }],
+    collections: { ...deviceInventory.collections, addresses: completeCollection },
+  };
 
-    await expect(new BreezeDriver(client).fetchRecords(ctx('subnets'), null)).rejects.toThrow(
-      /duplicate.*identity/i,
-    );
+  it('skips duplicate stable identities with conflicting facts as record gaps and keeps the rest', async () => {
+    const page = await pageOf('subnets', [
+      deviceInventory,
+      {
+        ...deviceInventory,
+        addresses: deviceInventory.addresses.map((address, index) =>
+          index === 0 ? { ...address, gateway: '10.20.0.3' } : address,
+        ),
+      },
+      otherDevice,
+    ]);
+    // Only the conflicting identity is skipped; the other device's network syncs.
+    expect(page.records.map((record) => record.reconstructionInput?.externalId)).toEqual([
+      `${ORG}:subnets:13131313-1313-4313-8313-131313131313`,
+    ]);
+    expect(page.blockedInputs).toEqual([expect.objectContaining({
+      kind: 'validation',
+      externalId: `${ORG}:subnets:${STATIC_ADDRESS}`,
+      details: expect.objectContaining({ reasonCode: 'conflicting_duplicate_identity', sourceResource: 'subnets' }),
+    })]);
+  });
+
+  it('skips every record of a network reported with two gateways and keeps the rest', async () => {
+    const twin = {
+      ...otherDevice,
+      id: '15151515-1515-4515-8515-151515151515',
+      deviceId: '15151515-1515-4515-8515-151515151515',
+      addresses: [{ ...otherDevice.addresses[0]!, id: '16161616-1616-4616-8616-161616161616', address: '10.40.0.51', gateway: '10.40.0.2' }],
+    };
+    const page = await pageOf('subnets', [deviceInventory, otherDevice, twin]);
+    expect(page.records.map((record) => record.reconstructionInput?.externalId)).toEqual([
+      `${ORG}:subnets:${STATIC_ADDRESS}`,
+    ]);
+    expect(page.blockedInputs).toEqual([
+      expect.objectContaining({
+        kind: 'validation', externalId: `${ORG}:subnets:13131313-1313-4313-8313-131313131313`,
+        details: expect.objectContaining({ reasonCode: 'conflicting_subnet_gateways' }),
+      }),
+      expect.objectContaining({
+        kind: 'validation', externalId: `${ORG}:subnets:16161616-1616-4616-8616-161616161616`,
+        details: expect.objectContaining({ reasonCode: 'conflicting_subnet_gateways' }),
+      }),
+    ]);
+  });
+
+  it('skips one record with an invalid gateway as a gap and syncs its page siblings', async () => {
+    const broken = {
+      ...otherDevice,
+      addresses: [{ ...otherDevice.addresses[0]!, gateway: 'not-an-ip' }],
+    };
+    const page = await pageOf('subnets', [deviceInventory, broken]);
+    expect(page.records).toHaveLength(1);
+    expect(page.blockedInputs).toEqual([expect.objectContaining({
+      kind: 'validation',
+      externalId: `${ORG}:subnets:${otherDevice.id}`,
+      details: expect.objectContaining({ reasonCode: 'invalid_static_gateway', sourceId: otherDevice.id }),
+    })]);
+    expect(JSON.stringify(page.blockedInputs)).not.toContain('not-an-ip');
+  });
+
+  it('turns an unreadable or other-resource withheld notice into a gap, not a failed page', async () => {
+    const page = await pageOf('devices', [device], [
+      { resource: 'devices', orgId: ORG, reason: 'secret_detected' },
+      { resource: 'sites', id: SITE, orgId: ORG, reason: 'secret_detected', fieldPaths: [] },
+    ]);
+    expect(page.records).toHaveLength(1);
+    expect(page.blockedInputs).toEqual([
+      expect.objectContaining({ kind: 'validation', externalId: null,
+        details: expect.objectContaining({ reasonCode: 'unreadable_blocked_notice' }) }),
+      expect.objectContaining({ kind: 'validation', externalId: null,
+        details: expect.objectContaining({ reasonCode: 'blocked_notice_other_resource' }) }),
+    ]);
   });
 
   it('passes incremental metadata and returns safe blocked gaps plus terminal high-water metadata', async () => {
@@ -2121,6 +2204,8 @@ describe('BreezeDriver transport delegation', () => {
       externalOrgId: ORG,
       cursor: null,
       updatedSince: UPDATED_SINCE,
+      acceptedSchemaVersion: null,
+      acceptAnySchemaVersion: false,
     });
     expect(page).toMatchObject({
       schemaVersion: '1',
@@ -2335,7 +2420,7 @@ describe('BreezeDriver transport delegation', () => {
 
   it('delegates connection and organization discovery without name mapping', async () => {
     const client = {
-      testConnection: jest.fn().mockResolvedValue(undefined),
+      testConnection: jest.fn().mockResolvedValue({ schemaVersion: '1' }),
       listOrganizations: jest.fn().mockResolvedValue([
         {
           ...base,
@@ -2352,11 +2437,84 @@ describe('BreezeDriver transport delegation', () => {
     const driver = new BreezeDriver(client);
     await expect(driver.testConnection(ctx() as IntegrationContext)).resolves.toEqual({
       ok: true,
-      details: 'Reached Breeze Partner API.',
+      details: 'Reached Breeze Partner API (partner API schema version 1).',
     });
     await expect(driver.listSourceOrgs(ctx() as IntegrationContext)).resolves.toEqual([
       { externalId: ORG, name: 'Acme', hint: 'customer' },
     ]);
+    client.testConnection.mockResolvedValueOnce({ schemaVersion: '2' });
+    await expect(driver.testConnection(ctx() as IntegrationContext)).resolves.toEqual({
+      ok: true,
+      details: expect.stringContaining('schema version 2, which Weavestream does not know yet. Sync is paused'),
+    });
+  });
+
+  it('names the Breeze release in the test result, and a failed release read never fails the test', async () => {
+    const client = {
+      testConnection: jest.fn().mockResolvedValue({ schemaVersion: '1' }),
+      readServerVersion: jest.fn().mockResolvedValue('0.126.0'),
+      listOrganizations: jest.fn(),
+      fetchPage: jest.fn(),
+    };
+    const driver = new BreezeDriver(client);
+    await expect(driver.testConnection(ctx() as IntegrationContext)).resolves.toEqual({
+      ok: true,
+      details: 'Reached Breeze Partner API (Breeze 0.126.0, partner API schema version 1).',
+    });
+    client.readServerVersion.mockRejectedValueOnce(new Error('health unreachable'));
+    await expect(driver.testConnection(ctx() as IntegrationContext)).resolves.toEqual({
+      ok: true,
+      details: 'Reached Breeze Partner API (partner API schema version 1).',
+    });
+    // A rejected partner API call still fails the test.
+    client.testConnection.mockRejectedValueOnce(new Error('Breeze partner API credentials were rejected.'));
+    await expect(driver.testConnection(ctx() as IntegrationContext)).rejects.toThrow('credentials were rejected');
+  });
+
+  it('reads the source version for a run and turns each failed half into null', async () => {
+    const client = {
+      testConnection: jest.fn().mockResolvedValue({ schemaVersion: '1' }),
+      readServerVersion: jest.fn().mockResolvedValue('0.126.0'),
+      listOrganizations: jest.fn(),
+      fetchPage: jest.fn(),
+    };
+    const driver = new BreezeDriver(client);
+    await expect(driver.readSourceVersion(ctx() as IntegrationContext)).resolves.toEqual({
+      serverVersion: '0.126.0',
+      schemaVersion: '1',
+    });
+    client.readServerVersion.mockRejectedValueOnce(new Error('timeout'));
+    await expect(driver.readSourceVersion(ctx() as IntegrationContext)).resolves.toEqual({
+      serverVersion: null,
+      schemaVersion: '1',
+    });
+    client.testConnection.mockRejectedValueOnce(new Error('Breeze partner API request failed.'));
+    await expect(driver.readSourceVersion(ctx() as IntegrationContext)).resolves.toEqual({
+      serverVersion: '0.126.0',
+      schemaVersion: null,
+    });
+    // A client that cannot read the release reports none.
+    const bare = new BreezeDriver({ ...client, readServerVersion: undefined });
+    await expect(bare.readSourceVersion(ctx() as IntegrationContext)).resolves.toEqual({
+      serverVersion: null,
+      schemaVersion: '1',
+    });
+  });
+
+  it('passes the accepted schema version and an accepting run to the client', async () => {
+    const client = {
+      testConnection: jest.fn(), listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '2', snapshotAt: '2026-07-14T12:00:00.000Z', data: [], nextCursor: null, hasMore: false,
+      }),
+    };
+    const page = await new BreezeDriver(client).fetchRecords(
+      { ...ctx(), acceptedSourceVersion: '2', acceptAnySourceVersion: true }, null,
+    );
+    expect(client.fetchPage).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      acceptedSchemaVersion: '2', acceptAnySchemaVersion: true,
+    }));
+    expect(page.schemaVersion).toBe('2');
   });
 });
 
@@ -2486,7 +2644,7 @@ describe('Breeze scalar custom-field value contract', () => {
     ]);
   });
 
-  it('strips unknown scalar keys and blocks secret-semantic scalar values safely', async () => {
+  it('strips unknown scalar keys and withholds a credential-named scalar value, keeping the record', async () => {
     expect(JSON.stringify(transformBreezeRecord('custom-field-values', {
       ...scalarValue,
       providerConfig: { accessToken: 'must-never-enter-weavestream' },
@@ -2517,12 +2675,10 @@ describe('Breeze scalar custom-field value contract', () => {
       }),
     };
     const page = await new BreezeDriver(client).fetchRecords(ctx('custom-field-values'), null);
-    expect(page.records).toEqual([]);
-    expect(page.blockedInputs).toEqual([
-      expect.objectContaining({
-        kind: 'secret_blocked',
-        externalId: `${ORG}:custom-field-values:${valueId}`,
-      }),
+    expect(page.records).toHaveLength(1);
+    expect(page.blockedInputs).toEqual([]);
+    expect(page.redactions).toEqual([
+      { externalId: `${ORG}:custom-field-values:${valueId}`, count: 1, fieldPaths: ['value'] },
     ]);
     expect(JSON.stringify(page)).not.toContain(secret);
   });
@@ -2576,6 +2732,20 @@ describe('Breeze upgrade tolerance', () => {
       completenessGaps: [{ code: 'restore_procedure_unavailable' }],
     });
     expect(records).toHaveLength(1);
+    const [record] = records as Array<{ reconstructionInput: { markdown: string } }>;
+    expect(record!.reconstructionInput.markdown).not.toContain('Restore capabilities');
+    expect(record!.reconstructionInput.markdown).not.toContain('restore_procedure_unavailable');
+  });
+
+  it('ignores a restore block from an older Breeze release', () => {
+    const [record] = transformBreezeRecord('backup-configurations', {
+      ...base, siteId: null, kind: 'destination', sourceScope: 'organization', name: 'Offsite',
+      type: 'file', provider: 's3', compression: true, encryption: true, active: true, default: true,
+      schedule: null, retention: null, exclusions: [],
+      restore: { types: ['full'], notes: 'Restore from the vault.' },
+    }) as Array<{ reconstructionInput: { markdown: string } }>;
+    expect(record!.reconstructionInput.markdown).not.toContain('Restore capabilities');
+    expect(record!.reconstructionInput.markdown).not.toContain('Restore from the vault.');
   });
 
   it('skips record variants and relationship endpoints it does not model', () => {
@@ -2725,5 +2895,40 @@ describe('Breeze upgrade tolerance', () => {
       }),
     };
     await expect(new BreezeDriver(client).fetchRecords(ctx(), null)).rejects.toThrow(/organization/i);
+  });
+});
+
+describe('BreezeDriver field-presence report', () => {
+  it('reports key presence from the raw records, per variant, with no values', async () => {
+    const OTHER = '12121212-1212-4212-8212-121212121212';
+    const renamed = {
+      ...deviceInventory,
+      id: OTHER, deviceId: OTHER, disks: [], interfaces: [], virtualMachines: [],
+      // Breeze renamed `assignment` on this device's addresses.
+      addresses: deviceInventory.addresses.map(({ assignment: _assignment, ...rest }, index) => ({
+        ...rest, id: `${OTHER.slice(0, -2)}${String(index).padStart(2, '0')}`, mode: 'static',
+      })),
+    };
+    const client = {
+      testConnection: jest.fn(), listOrganizations: jest.fn(),
+      fetchPage: jest.fn().mockResolvedValue({
+        schemaVersion: '1', snapshotAt: '2026-07-14T12:00:00.000Z',
+        data: [deviceInventory, renamed, siteInventory], nextCursor: null, hasMore: false,
+      }),
+    };
+    const page = await new BreezeDriver(client).fetchRecords(
+      { ...ctx('device-inventory'), mode: 'full', updatedSince: null }, null,
+    );
+    const addressCount = deviceInventory.addresses.length;
+    expect(page.observedFields).toContainEqual({
+      path: 'addresses[].assignment', variant: 'device', present: addressCount, objects: addressCount * 2,
+    });
+    expect(page.observedFields).toContainEqual({ path: 'deviceId', variant: 'device', present: 2, objects: 2 });
+    expect(page.observedFields).toContainEqual({ path: 'siteSubjectId', variant: 'site', present: 1, objects: 1 });
+    // The renamed key is not declared, so it is never reported.
+    expect(page.observedFields?.some((field) => field.path.endsWith('.mode'))).toBe(false);
+    const serialized = JSON.stringify(page.observedFields);
+    expect(serialized).not.toContain('Intel Xeon');
+    expect(serialized).not.toContain(DEVICE);
   });
 });

@@ -17,7 +17,6 @@ import {
   buildResourceExecutionStages,
   IntegrationSyncRunnerService,
   type MappingRunOutcome,
-  IntegrationProvenanceService,
   IntegrationDomainSyncService,
   domainSyncWarning,
   hasDomainFeed,
@@ -54,7 +53,6 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     private readonly prisma: PrismaService,
     private readonly sync: IntegrationSyncService,
     private readonly runner: IntegrationSyncRunnerService,
-    private readonly provenance: IntegrationProvenanceService,
     private readonly audit: AuditLogService,
     private readonly providerDomains: IntegrationDomainSyncService,
   ) {}
@@ -171,6 +169,7 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
         id: true,
         triggeredBy: true,
         integrationId: true,
+        acceptSourceChanges: true,
         integration: { select: { createdBy: true, driver: true } },
       },
     });
@@ -182,11 +181,9 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     if (!mapping || mapping.integrationId !== run.integrationId) return null;
     // Legacy generation: a pre-DAG orchestrator fanned out one job per
     // (mapping, resource) with no `resourceIds`, and those jobs survive an
-    // upgrade in Redis. They must run under that generation's contract —
-    // no dependency gating (siblings run independently in parallel) and a
+    // upgrade in Redis. They must run under that generation's contract — a
     // fan-out-wide expected-resource count — or a drained queue marks
-    // mappings terminal after 1/N resources and records false
-    // `dependency_unavailable` gaps.
+    // mappings terminal after 1/N resources.
     const legacy = !payload.resourceIds;
     const requestedIds = payload.resourceIds ?? [payload.resourceId];
     const resources = await this.prisma.integrationResource.findMany({
@@ -231,36 +228,25 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
       after: { runId: run.id, dryRun: payload.dryRun, resourceKeys: resources.map((r) => r.resourceKey) },
     });
 
-    const failedKeys = new Set<string>();
+    // `dependsOnResourceKeys` sets the order only. A resource never skips
+    // because a dependency failed: each record whose parent is not synced
+    // becomes its own `missing_dependency` gap in the runner, which keeps
+    // that resource's walk non-authoritative (no stale sweep), so a failed
+    // parent costs the affected records, not the whole resource.
     const outcomes: MappingRunOutcome[] = [];
     for (const stage of orderedStages) {
       for (const resource of stage) {
-        // Only a dependency that ran in this mapping and failed skips the
-        // resource. Legacy jobs predate dependency gating: their siblings run
-        // as independent queue jobs, so they never skip here.
-        const unavailable = legacy ? [] : resource.dependsOnResourceKeys.filter(
-          (dependency) => failedKeys.has(dependency),
-        );
-        let outcome: MappingRunOutcome;
-        if (unavailable.length > 0) {
-          if (!payload.dryRun) {
-            await this.persistDependencyGaps(
-              mapping.companyId, mapping.id, resource.id, unavailable,
-            );
-          }
-          outcome = dependencySkipOutcome(resource.resourceKey, unavailable, mapping.companyId);
-        } else {
-          outcome = await this.runner.runMapping({
-              syncRunId: run.id,
-              integrationCompanyMappingId: mapping.id,
-              resourceId: resource.id,
-              dryRun: payload.dryRun,
-              actorId: auditActorId,
-              mode: payload.mode,
-            });
-        }
-        outcomes.push(outcome);
-        if (outcome.status === 'failed') failedKeys.add(resource.resourceKey);
+        outcomes.push(await this.runner.runMapping({
+          syncRunId: run.id,
+          integrationCompanyMappingId: mapping.id,
+          resourceId: resource.id,
+          dryRun: payload.dryRun,
+          actorId: auditActorId,
+          mode: payload.mode,
+          // From the run row, never the job payload: only the API sets
+          // it, after its `integration.manage` check.
+          acceptSourceChanges: run.acceptSourceChanges === true,
+        }));
       }
     }
     const retryable = outcomes.find(
@@ -325,32 +311,6 @@ export class IntegrationSyncMappingWorker implements OnModuleDestroy {
     }
     return outcomes;
   }
-
-  private async persistDependencyGaps(
-    companyId: string,
-    integrationCompanyMappingId: string,
-    resourceId: string,
-    dependencies: string[],
-  ): Promise<void> {
-    const observedAt = new Date();
-    await this.prisma.$transaction(async (tx) => {
-      await this.provenance.persistGaps(tx, {
-        companyId,
-        integrationCompanyMappingId,
-        resourceId,
-        observedAt,
-      }, dependencies.slice(0, 16).map((dependencyResourceKey) => ({
-        externalId: null,
-        syncRecordId: null,
-        kind: 'missing_dependency' as const,
-        message: 'A required reconstruction dependency was unavailable.',
-        details: {
-          reasonCode: 'dependency_unavailable',
-          dependencyResourceKey,
-        },
-      })));
-    });
-  }
 }
 
 class FinalizedMappingError extends Error {}
@@ -358,26 +318,6 @@ class FinalizedMappingError extends Error {}
 function isFinalAttempt(job: Job<unknown, unknown, string>): boolean {
   const attempts = Math.max(1, Number(job.opts?.attempts ?? 1));
   return Number(job.attemptsMade ?? 0) + 1 >= attempts;
-}
-
-export function dependencySkipOutcome(
-  resourceKey: string,
-  dependencies: string[],
-  companyId = '',
-): MappingRunOutcome {
-  const totals = zeroTotals();
-  totals.errors = 0;
-  totals.blocked = 1;
-  totals.missingDependency = 1;
-  const message = `Skipped because dependencies failed or were unavailable: ${dependencies.slice(0, 16).join(', ')}`;
-  return {
-    status: 'failed',
-    resourceKey,
-    companyId,
-    totals,
-    conflicts: [{ kind: 'validation_error', externalId: '', message }],
-    error: message,
-  };
 }
 
 function zeroTotals() {
@@ -398,5 +338,9 @@ function zeroTotals() {
     missingDependency: 0,
     errors: 1,
     incomplete: 0,
+    notSeen: 0,
+    redacted: 0,
+    paused: 0,
+    held: 0,
   };
 }

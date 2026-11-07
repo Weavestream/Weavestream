@@ -1042,9 +1042,37 @@ export type IntegrationFieldMappingDto = z.infer<typeof integrationFieldMappingD
 export const triggerSyncSchema = z.object({
   dryRun: z.boolean().default(false),
   mode: integrationSyncModeSchema.default('incremental'),
+  /**
+   * Accept held source changes: archive held removals (the two-miss rule
+   * still applies), write pages despite field drift, rebuild the field
+   * baseline, and clear both holds. Needs `integration.manage` in addition
+   * to `sync.trigger`; always runs as a full sync and never as a dry run.
+   */
+  acceptSourceChanges: z.boolean().default(false),
 });
 
 export type TriggerSyncInput = z.infer<typeof triggerSyncSchema>;
+
+/**
+ * A sync hold on one (company mapping, resource): Weavestream stopped
+ * writing or archiving because the source changed in a way that could lose
+ * synced data. `removal`: a full traversal would have archived too many
+ * records at once. `field`: the source stopped sending a field that was
+ * always present. `version`: the source reported a schema version
+ * Weavestream does not know (one row per company, for all its resources).
+ * Cleared by a clean run or by accepting the changes.
+ */
+export const integrationSyncHoldSchema = z.object({
+  kind: z.enum(['removal', 'field', 'version']),
+  resourceKey: z.string(),
+  resourceLabel: z.string(),
+  companyId: z.guid(),
+  companyName: z.string().nullable(),
+  since: z.string().nullable(),
+  /** Short operator text: a count, or the field paths. Never a value. */
+  detail: z.string(),
+});
+export type IntegrationSyncHoldDto = z.infer<typeof integrationSyncHoldSchema>;
 
 export const integrationSyncRunDtoSchema = z.object({
   id: z.guid(),
@@ -1071,6 +1099,19 @@ export const integrationSyncRunDtoSchema = z.object({
   totals: z.record(z.string(), z.unknown()).nullable(),
   error: z.string().nullable(),
   createdAt: z.string(),
+  /**
+   * Early warning: the server release the source reported for this run
+   * (Breeze `/health` `version`). Null when the source reports none, the
+   * read failed, or the run predates the column.
+   */
+  sourceServerVersion: z.string().max(64).nullable(),
+  /** The source API schema version seen for this run (Breeze `schemaVersion`). */
+  sourceSchemaVersion: z.string().max(64).nullable(),
+  /**
+   * Set when the server release differs from the one of the previous run
+   * that reported a release. Null when unchanged or unknown.
+   */
+  sourceVersionChange: z.object({ from: z.string().max(64), to: z.string().max(64) }).nullable(),
 });
 
 export type IntegrationSyncRunDto = z.infer<typeof integrationSyncRunDtoSchema>;
@@ -1129,6 +1170,31 @@ const baseSyncRunTotalsShape = {
    * a resumed walk saw no new gap, so the run still shows warnings.
    */
   incomplete: z.number().int().nonnegative().default(0),
+  /**
+   * Integration-owned records a full traversal did not see but did not
+   * archive yet: a first miss, a miss inside the 12-hour wait, or a miss
+   * under a mass-removal hold. Absent on older runs (read as 0).
+   */
+  notSeen: z.number().int().nonnegative().default(0),
+  /**
+   * Records synced with one or more values replaced by `[withheld]`
+   * because they looked like credentials. The record was written; the run
+   * shows warnings. Absent on older runs (read as 0).
+   */
+  redacted: z.number().int().nonnegative().default(0),
+  /**
+   * Resource walks paused because the source reported a schema version
+   * Weavestream does not know: nothing was written or archived. Absent on
+   * older runs (read as 0).
+   */
+  paused: z.number().int().nonnegative().default(0),
+  /**
+   * Records a mass-removal hold kept: a full run did not see them, and so
+   * many went missing at once that nothing was archived. The run shows
+   * warnings until an admin accepts the change or the records come back.
+   * Absent on older runs (read as 0).
+   */
+  held: z.number().int().nonnegative().default(0),
 } as const;
 
 export const syncRunResourceTotalsSchema = z.object({
@@ -1152,7 +1218,12 @@ export const syncRunTotalsSchema = z.object({
 export type SyncRunTotals = z.infer<typeof syncRunTotalsSchema>;
 
 export const syncRunConflictSchema = z.object({
-  kind: z.enum(['ambiguous_match', 'manual_skip', 'validation_error', 'driver_error', 'secret_blocked']),
+  kind: z.enum([
+    'ambiguous_match', 'manual_skip', 'validation_error', 'driver_error', 'secret_blocked',
+    // A value that looked like a credential was replaced by `[withheld]`;
+    // the rest of the record was synced.
+    'secret_redacted',
+  ]),
   externalId: z.string(),
   /** Free-form summary line for the run viewer. */
   message: z.string(),

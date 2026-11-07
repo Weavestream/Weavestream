@@ -6,7 +6,10 @@ import {
   type IntegrationSyncOrchestratorJob,
 } from '@weavestream/shared';
 import { EnvService, RedisService, PrismaService } from '@weavestream/api/runtime';
-import { IntegrationSyncService } from '@weavestream/api/integrations';
+import {
+  IntegrationSourceVersionService,
+  IntegrationSyncService,
+} from '@weavestream/api/integrations';
 import {
   createManagedWorker,
   type ManagedWorker,
@@ -21,6 +24,10 @@ import {
  *
  * For a `scheduled` job: creates the run row itself before fanning
  * out — there is no API request to seed it.
+ *
+ * After the fan-out it saves the source version on the run (early
+ * warning). The jobs are already queued, so the read never delays the
+ * sync, and it never throws.
  *
  * The orchestrator's BullMQ retries are deliberately small (2) — a
  * persistent failure means the per-mapping fan-out couldn't even start,
@@ -39,6 +46,7 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
     private readonly redis: RedisService,
     private readonly prisma: PrismaService,
     private readonly sync: IntegrationSyncService,
+    private readonly sourceVersions: IntegrationSourceVersionService,
   ) {}
 
   async start(): Promise<void> {
@@ -97,6 +105,7 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
       if (isFinalAttempt(job)) await this.sync.failRun(run.id, message);
       throw e;
     }
+    await this.sourceVersions.recordForRun(run.id);
     return { runId: run.id };
   }
 
@@ -178,6 +187,7 @@ export class IntegrationSyncOrchestratorWorker implements OnModuleDestroy {
       if (isFinalAttempt(job)) await this.sync.failRun(run.id, message);
       throw e;
     }
+    await this.sourceVersions.recordForRun(run.id);
     return { runId: run.id };
   }
 }

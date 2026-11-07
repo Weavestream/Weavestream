@@ -303,6 +303,8 @@ describe('ArticlesService integration system writes', () => {
       id: 'binding-shared-article',
       staleSince: null,
       lastSeenAt: new Date('2026-07-01T00:00:00.000Z'),
+      // Missed by an earlier full sync and not seen since: a confirmed miss.
+      missedAt: new Date('2026-07-13T00:00:00.000Z'),
       provenance: fullProvenance('active'),
     });
     const versionHistory = [{ id: 'version-existing', version: 1 }];
@@ -347,7 +349,7 @@ describe('ArticlesService integration system writes', () => {
         snapshotAt: staleAt,
         auditActorId: ids.actor,
       },
-    )).resolves.toEqual({ stale: 1, archived: 1 });
+    )).resolves.toEqual({ stale: 1, archived: 1, notSeen: 0, held: null });
     expect(target.archivedAt).toEqual(staleAt);
 
     await expect(service.writeFromIntegration({

@@ -3,6 +3,7 @@ import { IntegrationsService } from './integrations.service.js';
 import { IntegrationCompanyMappingService } from './company-mapping.service.js';
 import { IntegrationSyncService } from './integration-sync.service.js';
 import { IntegrationSyncRunnerService } from './integration-sync-runner.service.js';
+import { IntegrationSourceVersionService } from './integration-source-version.service.js';
 import { MatchResolverService } from './match-resolver.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import { IntegrationSyncSchedulerService } from './integration-sync-scheduler.service.js';
@@ -116,6 +117,7 @@ import { RelationsService } from '../relations/relations.service.js';
     IntegrationProvenanceService,
     IntegrationCompletenessService,
     IntegrationSyncRunnerService,
+    IntegrationSourceVersionService,
     IntegrationSyncSchedulerService,
     MatchResolverService,
     CloudflareListsService,
@@ -137,6 +139,7 @@ import { RelationsService } from '../relations/relations.service.js';
     IntegrationProvenanceService,
     IntegrationCompletenessService,
     IntegrationSyncRunnerService,
+    IntegrationSourceVersionService,
     IntegrationSyncSchedulerService,
     MatchResolverService,
     CloudflareListsService,

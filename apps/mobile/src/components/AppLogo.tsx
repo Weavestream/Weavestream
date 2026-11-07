@@ -1,8 +1,8 @@
-import wordmarkLight from '../assets/logo-wordmark-light.svg';
-import wordmarkDark from '../assets/logo-wordmark-dark.svg';
+import wordmarkLight from '../assets/logo-wordmark-light.svg?no-inline';
+import wordmarkDark from '../assets/logo-wordmark-dark.svg?no-inline';
 
 /**
- * The Weavestream lockup — the beaver mark plus the wordmark, as one SVG.
+ * The Weavestream lockup — the "W" mark plus the wordmark, as one SVG.
  *
  * Imported through Vite rather than referenced as `/brand/...`. Three
  * reasons, all of which bite silently otherwise:
@@ -13,10 +13,11 @@ import wordmarkDark from '../assets/logo-wordmark-dark.svg';
  *    image with nothing failing in CI.
  *  - It survives the future Capacitor packaging step, where there is no
  *    `apps/web/public` to reach into.
- *  - It must stay **above** `build.assetsInlineLimit` (4096 B) or Vite
- *    inlines it as a `data:` URI — which `img-src 'self'` blocks, with no
- *    symptom beyond a console violation. At ~64 KB each these are safe; a
- *    small asset added later would not be.
+ *  - It must never be inlined as a `data:` URI — `img-src 'self'` blocks
+ *    that, with no symptom beyond a console violation. These files are
+ *    ~2 KB, below `build.assetsInlineLimit` (4096 B), so the imports
+ *    carry `?no-inline` to force a real file. Keep that flag on any
+ *    small image added later.
  *
  * Both variants render and CSS picks one (`.m-logo--*` in globals.css,
  * including the system-pref media block), so the stamped shell shows the

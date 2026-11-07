@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="apps/web/public/brand/logo-mark.svg" alt="Weavestream" height="72" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="apps/web/public/brand/logo-mark-dark.svg" />
+  <img src="apps/web/public/brand/logo-mark-light.svg" alt="Weavestream" height="72" />
+</picture>
 
 </div>
 

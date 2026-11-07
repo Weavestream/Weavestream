@@ -428,7 +428,7 @@ describe('IntegrationProvenanceService', () => {
       targetKind,
       snapshotAt: staleAt,
       auditActorId: '00000000-0000-0000-0000-000000000005',
-    })).resolves.toEqual({ stale: 1, archived: archiveDelegate ? 1 : 0 });
+    })).resolves.toEqual({ stale: 1, archived: archiveDelegate ? 1 : 0, notSeen: 0, held: null });
 
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
@@ -486,6 +486,11 @@ describe('IntegrationProvenanceService', () => {
     expect(mutation.sql).toContain('"state" IN (');
     expect(mutation.sql).toContain('"last_seen_at" <');
     expect(mutation.sql).toContain(`"provenance"->>'ownership' = 'breeze'`);
+    // Only a confirmed miss transitions: missed before, unseen since, and
+    // that first miss is at least 12 hours old.
+    expect(mutation.sql).toContain('"missed_at" > "last_seen_at"');
+    expect(mutation.sql).toContain('"missed_at" <=');
+    expect(mutation.values).toEqual(expect.arrayContaining([new Date('2026-07-14T00:00:00.000Z')]));
     expect(mutation.sql).toContain('RETURNING');
     expect(mutation.values).toEqual(
       expect.arrayContaining([ids.company, ids.mapping, ids.resource, staleAt]),
@@ -543,7 +548,7 @@ describe('IntegrationProvenanceService', () => {
         targetKind,
         snapshotAt: new Date('2026-07-14T12:00:00.000Z'),
         auditActorId: '00000000-0000-0000-0000-000000000005',
-      })).resolves.toEqual({ stale: 1, archived: 0 });
+      })).resolves.toEqual({ stale: 1, archived: 0, notSeen: 0, held: null });
       expect(tx[targetKind].updateMany).not.toHaveBeenCalled();
       expect(tx.integrationSyncRecord.update).not.toHaveBeenCalled();
       expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
@@ -574,7 +579,7 @@ describe('IntegrationProvenanceService', () => {
       integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
       targetKind: 'asset', snapshotAt: new Date('2026-07-14T12:00:00.000Z'),
       auditActorId: '00000000-0000-0000-0000-000000000005',
-    })).resolves.toEqual({ stale: 1, archived: 0 });
+    })).resolves.toEqual({ stale: 1, archived: 0, notSeen: 0, held: null });
     expect(tx.asset.updateMany).not.toHaveBeenCalled();
     // The shield query spans every integration in the company, not just this mapping.
     const where = findMany.mock.calls[1]![0].where;
@@ -611,7 +616,7 @@ describe('IntegrationProvenanceService', () => {
       integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
       targetKind: 'asset', snapshotAt: staleAt,
       auditActorId: '00000000-0000-0000-0000-000000000005',
-    })).resolves.toEqual({ stale: 1, archived: 1 });
+    })).resolves.toEqual({ stale: 1, archived: 1, notSeen: 0, held: null });
 
     // Only the surviving binding's target is archived; the refreshed
     // binding's target is untouched, unaudited, and uncounted.
@@ -644,7 +649,8 @@ describe('IntegrationProvenanceService', () => {
       return args.cursor ? rows.slice(500) : rows;
     });
     const tx = {
-      integrationSyncRecord: { findMany, update: jest.fn() },
+      // 501 of 10,000 bindings: under the mass-removal ratio.
+      integrationSyncRecord: { findMany, update: jest.fn(), count: jest.fn().mockResolvedValue(10_000) },
       asset: { updateMany: jest.fn(async (args: { where: { id: { in: string[] } } }) => ({
         count: args.where.id.in.length,
       })) },
@@ -663,7 +669,7 @@ describe('IntegrationProvenanceService', () => {
       integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
       targetKind: 'asset', snapshotAt: staleAt,
       auditActorId: '00000000-0000-0000-0000-000000000005', batchSize: 500,
-    })).resolves.toEqual({ stale: 501, archived: 501 });
+    })).resolves.toEqual({ stale: 501, archived: 501, notSeen: 0, held: null });
 
     expect(tx.integrationSyncRecord.update).not.toHaveBeenCalled();
     expect(tx.$queryRaw).toHaveBeenCalledTimes(3);
@@ -702,7 +708,7 @@ describe('IntegrationProvenanceService', () => {
       integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
       targetKind: 'article', snapshotAt: new Date('2026-07-14T12:00:00.000Z'),
       auditActorId: '00000000-0000-0000-0000-000000000005',
-    })).resolves.toEqual({ stale: 1, archived: 1 });
+    })).resolves.toEqual({ stale: 1, archived: 1, notSeen: 0, held: null });
     expect(tx.integrationSyncRecord.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ state: { in: ['active', 'blocked'] } }),
     }));
@@ -730,7 +736,7 @@ describe('IntegrationProvenanceService', () => {
       integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
       targetKind: 'asset', snapshotAt: new Date('2026-07-14T12:00:00.000Z'),
       auditActorId: '00000000-0000-0000-0000-000000000005',
-    })).resolves.toEqual({ stale: 1, archived: 0 });
+    })).resolves.toEqual({ stale: 1, archived: 0, notSeen: 0, held: null });
     expect(tx.searchIndex.updateMany).not.toHaveBeenCalled();
   });
 
@@ -802,6 +808,154 @@ describe('IntegrationProvenanceService', () => {
   });
 });
 
+describe('IntegrationProvenanceService.staleUnseen — never archive on a surprise', () => {
+  const snapshotAt = new Date('2026-07-14T12:00:00.000Z');
+  const sweepInput = (extra: Record<string, unknown> = {}) => ({
+    integrationId: ids.integration, companyId: ids.company,
+    integrationCompanyMappingId: ids.mapping, resourceId: ids.resource,
+    targetKind: 'asset' as const, snapshotAt,
+    auditActorId: '00000000-0000-0000-0000-000000000005',
+    ...extra,
+  });
+  function sweepTx(rows: ReturnType<typeof binding>[], total = rows.length) {
+    const findMany = jest.fn()
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValue([]);
+    return {
+      integrationSyncRecord: { findMany, update: jest.fn(), count: jest.fn().mockResolvedValue(total) },
+      asset: { updateMany: jest.fn(async (args: { where: { id: { in: string[] } } }) => ({ count: args.where.id.in.length })) },
+      article: { updateMany: jest.fn() }, subnet: { updateMany: jest.fn() },
+      searchIndex: { updateMany: jest.fn() },
+      $executeRaw: jest.fn(async (query: { values: unknown[] }) =>
+        query.values.filter((value) => typeof value === 'string' && value.startsWith('first')).length),
+      $queryRaw: jest.fn()
+        .mockResolvedValueOnce([{ id: 'watermark-row' }])
+        .mockImplementation(async (query: { values: unknown[] }) =>
+          rows.filter((row) => query.values.includes(row.id))),
+    };
+  }
+  const firstMiss = (id: string) => {
+    const row = binding(id, 'asset', `asset-${id}`);
+    row.missedAt = null;
+    return row;
+  };
+
+  it('records a first miss and archives nothing', async () => {
+    const tx = sweepTx([firstMiss('first-1')]);
+    const audit = { logManyWithClient: jest.fn() };
+    const service = new IntegrationProvenanceService({} as never, audit as never);
+
+    await expect(service.staleUnseen(tx as never, sweepInput()))
+      .resolves.toEqual({ stale: 0, archived: 0, notSeen: 1, held: null });
+
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    const mark = tx.$executeRaw.mock.calls[0]![0] as unknown as { sql: string; values: unknown[] };
+    expect(mark.sql).toContain('SET "missed_at" =');
+    expect(mark.sql).toContain('("missed_at" IS NULL OR "missed_at" <= "last_seen_at")');
+    expect(mark.sql).toContain('"company_id" =');
+    expect(mark.sql).toContain(`"provenance"->>'ownership' = 'breeze'`);
+    expect(mark.values).toEqual(expect.arrayContaining(['first-1', ids.company, snapshotAt]));
+    // Only the scope lock ran: no stale transition, no archive, no audit.
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
+    expect(audit.logManyWithClient).toHaveBeenCalledWith(tx, []);
+  });
+
+  it('treats a binding seen since its last miss as a first miss again', async () => {
+    const row = binding('first-seen-again', 'asset', 'asset-1');
+    // Missed on the 10th, seen on the 13th: the old miss no longer counts.
+    row.missedAt = new Date('2026-07-10T00:00:00.000Z');
+    row.lastSeenAt = new Date('2026-07-13T00:00:00.000Z');
+    const tx = sweepTx([row]);
+    const service = new IntegrationProvenanceService({} as never, {} as never);
+
+    await expect(service.staleUnseen(tx as never, sweepInput()))
+      .resolves.toEqual({ stale: 0, archived: 0, notSeen: 1, held: null });
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('waits when the second miss comes less than 12 hours after the first', async () => {
+    const row = binding('waiting', 'asset', 'asset-1');
+    row.missedAt = new Date('2026-07-14T01:00:00.000Z');
+    const tx = sweepTx([row]);
+    const service = new IntegrationProvenanceService({} as never, {} as never);
+
+    await expect(service.staleUnseen(tx as never, sweepInput()))
+      .resolves.toEqual({ stale: 0, archived: 0, notSeen: 1, held: null });
+    expect(tx.$executeRaw).not.toHaveBeenCalled();
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('archives a confirmed miss and marks a first miss in the same sweep', async () => {
+    const tx = sweepTx([binding('confirmed', 'asset', 'asset-c'), firstMiss('first-2')]);
+    const service = new IntegrationProvenanceService({} as never, { logManyWithClient: jest.fn() } as never);
+
+    await expect(service.staleUnseen(tx as never, sweepInput()))
+      .resolves.toEqual({ stale: 1, archived: 1, notSeen: 1, held: null });
+    expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: { in: ['asset-c'] }, companyId: ids.company, archivedAt: null },
+    }));
+  });
+
+  it('holds a mass removal: 3 confirmed misses of 20 bindings archive nothing', async () => {
+    const rows = ['a', 'b', 'c'].map((id) => binding(id, 'asset', `asset-${id}`));
+    const tx = sweepTx(rows, 20);
+    const audit = { logManyWithClient: jest.fn() };
+    const service = new IntegrationProvenanceService({} as never, audit as never);
+
+    await expect(service.staleUnseen(tx as never, sweepInput()))
+      .resolves.toEqual({ stale: 0, archived: 0, notSeen: 3, held: { count: 3, total: 20 } });
+    expect(tx.integrationSyncRecord.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        companyId: ids.company,
+        integrationCompanyMappingId: ids.mapping,
+        resourceId: ids.resource,
+        targetKind: 'asset',
+        state: { in: ['active', 'blocked'] },
+        provenance: { path: ['ownership'], equals: 'breeze' },
+      }),
+    });
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(tx.asset.updateMany).not.toHaveBeenCalled();
+    expect(audit.logManyWithClient).not.toHaveBeenCalled();
+  });
+
+  it('archives 3 confirmed misses when they are under 10% of the scope', async () => {
+    const rows = ['a', 'b', 'c'].map((id) => binding(id, 'asset', `asset-${id}`));
+    const tx = sweepTx(rows, 40);
+    const service = new IntegrationProvenanceService({} as never, { logManyWithClient: jest.fn() } as never);
+
+    await expect(service.staleUnseen(tx as never, sweepInput()))
+      .resolves.toEqual({ stale: 3, archived: 3, notSeen: 0, held: null });
+  });
+
+  it('does not count bindings for 2 confirmed misses (below the absolute bound)', async () => {
+    const rows = ['a', 'b'].map((id) => binding(id, 'asset', `asset-${id}`));
+    const tx = sweepTx(rows, 2);
+    const service = new IntegrationProvenanceService({} as never, { logManyWithClient: jest.fn() } as never);
+
+    await expect(service.staleUnseen(tx as never, sweepInput()))
+      .resolves.toEqual({ stale: 2, archived: 2, notSeen: 0, held: null });
+    expect(tx.integrationSyncRecord.count).not.toHaveBeenCalled();
+  });
+
+  it('archives a held mass removal when the run accepts source changes, keeping the two-miss rule', async () => {
+    const rows = ['a', 'b', 'c'].map((id) => binding(id, 'asset', `asset-${id}`));
+    const tx = sweepTx([...rows, firstMiss('first-3')], 20);
+    const service = new IntegrationProvenanceService({} as never, { logManyWithClient: jest.fn() } as never);
+
+    await expect(service.staleUnseen(tx as never, sweepInput({ acceptSourceChanges: true })))
+      .resolves.toEqual({ stale: 3, archived: 3, notSeen: 1, held: null });
+    expect(tx.integrationSyncRecord.count).not.toHaveBeenCalled();
+    // The first miss is still only marked.
+    expect(tx.asset.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: { in: ['asset-a', 'asset-b', 'asset-c'] } }),
+    }));
+  });
+});
+
 function binding(
   id: string,
   targetKind: 'asset' | 'article' | 'subnet' | 'ip_reservation' | 'relation',
@@ -820,6 +974,10 @@ function binding(
     relationId: targetKind === 'relation' ? targetId : null,
     state: 'active' as 'active' | 'blocked' | 'stale',
     staleSince: null,
+    // A confirmed miss by default: missed by an earlier full traversal (24 h
+    // before the sweeps below, at 2026-07-14T12:00Z) and not seen since.
+    lastSeenAt: new Date('2026-07-13T00:00:00.000Z'),
+    missedAt: new Date('2026-07-13T12:00:00.000Z') as Date | null,
     provenance: {
       integrationId: ids.integration,
       externalOrgId: 'org-a',

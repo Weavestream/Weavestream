@@ -3,15 +3,15 @@ import type { CSSProperties } from 'react';
 /**
  * Application logo. Renders the SVG asset(s) from `public/brand/`.
  *
- * Drop-in paths:
- *   - `apps/web/public/brand/logo-wordmark-light.svg` (used on light theme)
- *   - `apps/web/public/brand/logo-wordmark-dark.svg`  (used on dark theme)
- *   - `apps/web/public/brand/logo-mark.svg`           (square, 512×512)
+ * Drop-in paths (each has a `-light` file for the light theme and a
+ * `-dark` file for the dark theme):
+ *   - `apps/web/public/brand/logo-wordmark-{light,dark}.svg` (horizontal lockup)
+ *   - `apps/web/public/brand/logo-mark-{light,dark}.svg`     (square mark)
  *
- * The wordmark renders both variants and lets CSS pick the right one
- * based on `<html data-theme>` (set by `app/layout.tsx` at SSR). This
- * avoids a hydration flash and keeps the component a pure server
- * component. `size` is the rendered height in px.
+ * Both variants of the chosen logo render, and CSS picks the right one
+ * from `<html data-theme>` (set by `app/layout.tsx` at SSR). This avoids
+ * a hydration flash and keeps the component a pure server component.
+ * `size` is the rendered height in px.
  */
 export function AppLogo({
   variant = 'wordmark',
@@ -24,47 +24,35 @@ export function AppLogo({
   muted?: boolean;
   title?: string;
 }) {
-  if (variant === 'mark') {
-    const style: CSSProperties = {
-      width: size,
-      height: size,
-      display: 'inline-block',
-      flexShrink: 0,
-      color: muted ? 'var(--muted)' : 'var(--accent)',
-    };
-    return (
-      <img
-        src="/brand/logo-mark.svg"
-        alt={title}
-        style={style}
-        draggable={false}
-      />
-    );
-  }
-
-  const wordmarkStyle: CSSProperties = {
-    height: size,
-    width: 'auto',
-    maxWidth: size * 7,
-    flexShrink: 0,
-    opacity: muted ? 0.65 : 1,
-  };
+  const style: CSSProperties =
+    variant === 'mark'
+      ? { width: size, height: size, flexShrink: 0 }
+      : // `contain` keeps the aspect ratio when the width cap applies.
+        {
+          height: size,
+          width: 'auto',
+          maxWidth: size * 7,
+          objectFit: 'contain',
+          flexShrink: 0,
+        };
+  if (muted) style.opacity = 0.65;
+  const file = variant === 'mark' ? 'logo-mark' : 'logo-wordmark';
 
   return (
     <>
       <img
-        className="app-logo-wordmark app-logo-wordmark--light"
-        src="/brand/logo-wordmark-light.svg"
+        className="app-logo app-logo--light"
+        src={`/brand/${file}-light.svg`}
         alt={title}
-        style={wordmarkStyle}
+        style={style}
         draggable={false}
       />
       <img
-        className="app-logo-wordmark app-logo-wordmark--dark"
-        src="/brand/logo-wordmark-dark.svg"
+        className="app-logo app-logo--dark"
+        src={`/brand/${file}-dark.svg`}
         alt=""
         aria-hidden
-        style={wordmarkStyle}
+        style={style}
         draggable={false}
       />
     </>

@@ -1,4 +1,10 @@
 import type { DriverRecord, LegacyDriverRecord, TypedDriverRecord } from '../integration-driver.js';
+import {
+  WITHHELD_PLACEHOLDER,
+  isCredentialName,
+  redactSensitiveText,
+  scanSensitiveMaterial,
+} from '../../sensitive-material.js';
 import { ipInCidr, normalizeCidrV4, normalizeIpv4V4 } from '@weavestream/shared';
 import {
   MAX_RECONSTRUCTION_INPUT_BYTES,
@@ -23,39 +29,7 @@ import {
 
 const MANAGED_START = '<!-- weavestream:breeze:managed:start -->';
 const MANAGED_END = '<!-- weavestream:breeze:managed:end -->';
-const FORBIDDEN_CONFIGURATION_KEYS = new Set([
-  'authorization', 'credential', 'credentials', 'encryptionkey', 'apikey', 'accesstoken',
-  'refreshtoken', 'privatekey', 'providerconfig', 'password', 'passwd', 'passphrase', 'pwd', 'secret',
-  'token', 'recoverykey', 'bitlockerrecoverykey',
-]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
-const SECRET_VALUE_PATTERNS = [
-  /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/iu,
-  /\bauthorization\s*:\s*(?:bearer|basic)\s+[A-Za-z0-9+/=_-]{12,}/iu,
-  /\b(?:gh[oprsu]_|sk-(?:live|test)?-?|xox[baprs]-)[A-Za-z0-9_-]{20,}/u,
-  /\bAKIA[0-9A-Z]{16}\b/u,
-  /\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/iu,
-  /\bConvertTo-SecureString\s+(?:-String\s+)?(?:"[^"\r\n]+"|'[^'\r\n]+')\s+-AsPlainText\b/iu,
-] as const;
-
-/**
- * A record Weavestream withheld as secret-like. `fieldPath` names where the
- * match was (key names only, never the value) and `recordName` is the
- * record's own name when that name is itself safe to show, so an operator
- * can find and fix the record in Breeze.
- */
-export class BreezeSensitiveDefinitionError extends Error {
-  constructor(
-    readonly sourceId: string,
-    readonly orgId: string,
-    readonly fieldPath: string | null = null,
-    readonly recordName: string | null = null,
-  ) {
-    super('Breeze desired configuration was blocked as sensitive input.');
-    this.name = 'BreezeSensitiveDefinitionError';
-  }
-}
 
 export class BreezeBoundedDefinitionError extends Error {
   constructor(readonly sourceId: string, readonly orgId: string) {
@@ -79,37 +53,71 @@ export class BreezeUnreadableRecordError extends Error {
   }
 }
 
+/**
+ * A record whose data Weavestream cannot use as it is (for example two
+ * gateways for one network). The record is skipped as a gap; the rest of
+ * the page is synced. `reasonCode` is a fixed code; no value is carried.
+ */
+export class BreezeRecordGapError extends Error {
+  constructor(
+    readonly reasonCode: string,
+    readonly fieldPaths: string[] = [],
+  ) {
+    super('Breeze record data is inconsistent.');
+    this.name = 'BreezeRecordGapError';
+  }
+}
+
+/** A record synced with values replaced by `[withheld]`. */
+export interface BreezeRecordRedaction {
+  sourceId: string;
+  orgId: string;
+  /** How many values were withheld. */
+  count: number;
+  /** Where, as key names and indexes only (at most 20). */
+  fieldPaths: string[];
+}
 
 export function transformBreezeRecord(
   rawResource: BreezeResourceKey,
   rawRecord: unknown,
+  onRedaction?: (redaction: BreezeRecordRedaction) => void,
 ): DriverRecord[] {
   const resource = breezeResourceKeySchema.safeParse(rawResource);
   if (!resource.success) throw new Error('Unknown Breeze resource.');
   const endpoint = BREEZE_ENDPOINT_BY_RESOURCE[resource.data];
   if (!isSupportedBreezeVariant(endpoint, rawRecord)) return [];
-  const record = readBreezeRecord(endpoint, rawRecord) as BreezeRecordBase & Record<string, any>;
-  if (isDesiredConfigurationResource(resource.data)) {
-    const inspection = inspectDesiredConfiguration(record, labelValueKeysFor(endpoint, record));
-    if (inspection.verdict === 'sensitive') {
-      throw new BreezeSensitiveDefinitionError(
-        record.id, record.orgId, inspection.fieldPath, safeRecordName(record, inspection.fieldPath),
-      );
-    }
-    if (inspection.verdict === 'bounds_exceeded') {
-      throw new BreezeBoundedDefinitionError(record.id, record.orgId);
-    }
+  const parsed = readBreezeRecord(endpoint, rawRecord) as BreezeRecordBase & Record<string, any>;
+  // Values that look like credentials are replaced by `[withheld]` and the
+  // record is synced. Desired configuration keeps its size bounds.
+  const redaction = redactBreezeRecord(parsed, isDesiredConfigurationResource(resource.data));
+  if (redaction.boundsExceeded) {
+    throw new BreezeBoundedDefinitionError(parsed.id, parsed.orgId);
   }
-  if (BREEZE_ENDPOINT_BY_RESOURCE[resource.data] === 'scripts' && isSensitiveScriptContent(record.content)) {
-    throw new BreezeSensitiveDefinitionError(
-      record.id, record.orgId, 'content', safeRecordName(record, 'content'),
-    );
+  let record = redaction.value as BreezeRecordBase & Record<string, any>;
+  // A custom field is a key-value pair whose key is its definition: a field
+  // named like a credential ("Local admin password") has its value withheld.
+  if (
+    (endpoint === 'custom-field-values' || endpoint === 'custom-fields') &&
+    [record.fieldKey, record.name].some((name) => typeof name === 'string' && isCredentialName(name))
+  ) {
+    for (const key of ['value', 'defaultValue'] as const) {
+      if (!(key in record) || record[key] === WITHHELD_PLACEHOLDER || isEmptyConfigurationValue(record[key], 0)) continue;
+      record = { ...record, [key]: WITHHELD_PLACEHOLDER };
+      redaction.count += 1;
+      if (redaction.fieldPaths.length < MAX_REDACTED_PATHS) redaction.fieldPaths.push(key);
+    }
   }
   if (
     BREEZE_ENDPOINT_BY_RESOURCE[resource.data] === 'custom-field-values' &&
     stableJson(record.value).length > 50_000
   ) {
     throw new BreezeBoundedDefinitionError(record.id, record.orgId);
+  }
+  if (redaction.count > 0) {
+    onRedaction?.({
+      sourceId: record.id, orgId: record.orgId, count: redaction.count, fieldPaths: redaction.fieldPaths,
+    });
   }
 
   switch (resource.data) {
@@ -502,127 +510,103 @@ function isDesiredConfigurationResource(resource: BreezeResourceKey): boolean {
   ].includes(resource);
 }
 
-// Top-level record fields whose values are labels by schema contract: the
-// bounded name, description, category, and filter fields that
-// `breeze.schemas.ts` types as text. Only a string directly under one of
-// these fields (or a string element of such an array, e.g. `osTypes`) may
-// use the word-shape exemption from the entropy test. Nothing nested inside
-// free-form JSON qualifies — `features[].settings`, script `parameters`,
-// automation `trigger`/`conditions`/`actions`, backup `notes` — whatever its
-// key is called, so a passphrase under `settings.description` is quarantined
-// exactly as before.
-const SCHEMA_LABEL_FIELDS: ReadonlySet<string> = new Set([
-  'name', 'policyname', 'description', 'category', 'ostypes', 'rolefilter', 'osfilter',
-  'devicetypes', 'fieldkey',
-]);
-// Words in an operator-chosen custom-field name that declare the field a
-// descriptor rather than a free-text container.
-const CUSTOM_FIELD_DESCRIPTOR_TOKENS: ReadonlySet<string> = new Set([
-  'hostname', 'host', 'name', 'label', 'title', 'tag', 'assettag', 'model', 'serial',
-  'serialnumber', 'location', 'rack', 'site', 'room', 'vendor', 'publisher', 'version',
-  'package', 'product', 'path', 'url', 'owner', 'department', 'timezone',
-]);
-const CUSTOM_FIELD_CONTENT_FIELDS: readonly string[] = ['value', 'defaultvalue', 'options'];
+const MAX_FIELD_PATH_LENGTH = 200;
+const MAX_REDACTED_PATHS = 20;
+const SAFE_PATH_COMPONENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/u;
+
+interface RecordRedactionResult {
+  value: unknown;
+  count: number;
+  /** Where values were withheld, as key names and indexes only. */
+  fieldPaths: string[];
+  boundsExceeded: boolean;
+}
 
 /**
- * Record-specific top-level fields whose values are labels. A custom field's
- * content (`value`, `defaultValue`, `options`) is a label when the field is
- * not free text (dropdown choices, numbers, booleans, dates) or when the
- * operator named the field as a descriptor ("Hostname", "Asset tag",
- * "Rack"). A free-text field with any other name is a secret-capable
- * position.
+ * Copy a parsed record with every value that looks like a credential
+ * replaced by `[withheld]`, so the rest of the record can sync:
+ *
+ * - a string, or a key, is redacted span by span with the shared format scan
+ *   (`redactSensitiveText`, the same rules the writers check), so a script
+ *   keeps everything but the matched text;
+ * - a credential-named key that still carries a value has the whole value
+ *   withheld. Breeze already withholds credential-named fields; this is the
+ *   cheap second line for one that slips through.
+ *
+ * Identifier fields (`id`, `key`, `...Id`, the top-level `revision`) are not
+ * rewritten: an identity must never change. If one looked like a
+ * credential, the writer's own scan still withholds that record.
+ *
+ * `bounded` keeps the size bounds desired configuration always had (depth,
+ * node count, string length); other records are already bounded by their
+ * schemas.
  */
-function labelValueKeysFor(
-  endpoint: BreezeSourceEndpoint,
-  record: Record<string, unknown>,
-): ReadonlySet<string> {
-  if (endpoint !== 'custom-fields' && endpoint !== 'custom-field-values') return new Set();
-  const descriptorField = [record['fieldKey'], record['name']]
-    .filter((candidate): candidate is string => typeof candidate === 'string')
-    .some((candidate) => splitConfigurationFieldName(candidate)
-      .some((token) => CUSTOM_FIELD_DESCRIPTOR_TOKENS.has(token)));
-  return record['type'] !== 'text' || descriptorField ? new Set(CUSTOM_FIELD_CONTENT_FIELDS) : new Set();
-}
-
-function isSchemaLabelField(key: string, extraLabelFields: ReadonlySet<string>): boolean {
-  const joined = splitConfigurationFieldName(key).at(-1) ?? '';
-  return SCHEMA_LABEL_FIELDS.has(joined) || extraLabelFields.has(joined);
-}
-
-interface ConfigurationInspection {
-  verdict: 'safe' | 'sensitive' | 'bounds_exceeded';
-  /** Where a `sensitive` verdict matched, as key names and indexes only. */
-  fieldPath: string | null;
-}
-
-function inspectDesiredConfiguration(
-  root: unknown,
-  extraLabelFields: ReadonlySet<string> = new Set(),
-): ConfigurationInspection {
-  const pending: Array<{
-    value: unknown;
-    depth: number;
-    path: string;
-    trustedRevision?: boolean;
-    labelValue: boolean;
-  }> = [{ value: root, depth: 0, path: '', labelValue: false }];
-  const bounded: ConfigurationInspection = { verdict: 'bounds_exceeded', fieldPath: null };
-  const sensitive = (fieldPath: string): ConfigurationInspection => ({
-    verdict: 'sensitive',
-    fieldPath: boundFieldPath(fieldPath),
-  });
+function redactBreezeRecord(root: unknown, bounded: boolean): RecordRedactionResult {
+  const fieldPaths: string[] = [];
+  let count = 0;
   let visited = 0;
-  while (pending.length > 0) {
-    const { value, depth, path, trustedRevision, labelValue } = pending.pop()!;
+  let boundsExceeded = false;
+  const record = (path: string): void => {
+    count += 1;
+    if (fieldPaths.length < MAX_REDACTED_PATHS) fieldPaths.push(boundFieldPath(path || '(record)'));
+  };
+  const visit = (value: unknown, depth: number, path: string, key: string | null): unknown => {
     visited += 1;
-    if (visited > 10_000 || depth > 32) return bounded;
+    if (bounded && (visited > 10_000 || depth > 32)) {
+      boundsExceeded = true;
+      return value;
+    }
     if (typeof value === 'string') {
-      if (value.length > 12_288) return bounded;
-      if (
-        !(trustedRevision && SHA256_PATTERN.test(value)) &&
-        isSecretLikeConfigurationValue(value, { allowWordShaped: labelValue })
-      ) {
-        return sensitive(path);
+      if (bounded && value.length > 12_288) {
+        boundsExceeded = true;
+        return value;
       }
-      continue;
+      if (key !== null && isIdentifierKey(key, depth)) return value;
+      const redacted = redactSensitiveText(value);
+      if (redacted.redacted) record(path);
+      return redacted.text;
     }
-    if (!value || typeof value !== 'object') continue;
+    if (!value || typeof value !== 'object') return value;
     if (Array.isArray(value)) {
-      // Only the string elements of a top-level label array (`osTypes:
-      // ['windows']`, dropdown options) keep the label role; any object
-      // inside an array is free-form JSON and is inspected strictly.
-      value.forEach((child, index) => {
-        pending.push({
-          value: child,
-          depth: depth + 1,
-          path: appendArrayPath(path, index),
-          labelValue: labelValue && typeof child === 'string',
-        });
-      });
-      continue;
+      return value.map((child, index) => visit(child, depth + 1, appendArrayPath(path, index), null));
     }
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      const childPath = appendObjectPath(path, key);
-      if (isForbiddenConfigurationKey(key)) {
-        // A credential-named field with nothing in it (an empty S3 form in a
-        // backup feature, `requirePassword: true`) holds no secret. Any
-        // string or number under it still withholds the record.
-        if (isEmptyConfigurationValue(child, 0)) continue;
-        return sensitive(childPath);
+    const output: Record<string, unknown> = {};
+    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
+      const childPath = appendObjectPath(path, childKey);
+      // A key is source data too (a map keyed by token).
+      const keyRedaction = redactSensitiveText(childKey);
+      let outputKey = childKey;
+      if (keyRedaction.redacted) {
+        outputKey = uniqueKey(output, WITHHELD_PLACEHOLDER);
+        record(childPath);
       }
-      pending.push({
-        value: child,
-        depth: depth + 1,
-        path: childPath,
-        trustedRevision: depth === 0 && key === 'revision',
-        // The label role exists only for the record's own top-level fields
-        // (depth 0 is the record object). A key inside nested JSON never
-        // grants it, whatever it is named.
-        labelValue: depth === 0 && isSchemaLabelField(key, extraLabelFields),
-      });
+      if (isCredentialName(childKey) && !isEmptyConfigurationValue(child, 0)) {
+        output[outputKey] = WITHHELD_PLACEHOLDER;
+        record(childPath);
+        continue;
+      }
+      output[outputKey] = visit(child, depth + 1, childPath, childKey);
     }
+    return output;
+  };
+  const value = visit(root, 0, '', null);
+  return boundsExceeded
+    ? { value, count: 0, fieldPaths: [], boundsExceeded }
+    : { value, count, fieldPaths, boundsExceeded };
+}
+
+function isIdentifierKey(key: string, depth: number): boolean {
+  if (key === 'id' || key === 'key' || /^[a-z][A-Za-z0-9]*Id$/u.test(key)) return true;
+  // `depth` is the string's own depth: 1 for a top-level field.
+  return depth === 1 && (key === 'revision' || key === 'sourceUpdatedAt');
+}
+
+function uniqueKey(target: Record<string, unknown>, base: string): string {
+  if (!Object.hasOwn(target, base)) return base;
+  for (let index = 2; ; index += 1) {
+    const candidate = `${base} ${index}`;
+    if (!Object.hasOwn(target, candidate)) return candidate;
   }
-  return { verdict: 'safe', fieldPath: null };
 }
 
 /**
@@ -632,23 +616,24 @@ function inspectDesiredConfiguration(
  * token). Bounded; a list too deep or too long counts as not empty, so the
  * caller withholds it.
  */
+// A value the source already masked holds no secret; re-withholding it would
+// warn on every run.
+const MASKED_VALUE_PATTERN = /^(?:\*+|•+|\[?(?:redacted|withheld|hidden|masked)\]?)$/iu;
+
 function isEmptyConfigurationValue(value: unknown, depth: number): boolean {
   if (value === null || value === undefined || typeof value === 'boolean') return true;
-  if (typeof value === 'string') return value.trim() === '';
+  if (typeof value === 'string') return value.trim() === '' || MASKED_VALUE_PATTERN.test(value.trim());
   if (typeof value !== 'object' || depth >= 8) return false;
   if (!Array.isArray(value)) return Object.keys(value as Record<string, unknown>).length === 0;
   return value.length <= 256 && value.every((child) => isEmptyConfigurationValue(child, depth + 1));
 }
-
-const MAX_FIELD_PATH_LENGTH = 200;
-const SAFE_PATH_COMPONENT = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/u;
 
 // Same shape as the paths Breeze reports for its own withheld records. A key
 // is source data too, so only a plain identifier is shown. Anything else (an
 // assignment such as `password=abc`, spaces, punctuation, or a token-shaped
 // run) is shown as `[redacted]`, never rewritten into a readable form.
 function appendObjectPath(path: string, key: string): string {
-  const component = SAFE_PATH_COMPONENT.test(key) && !looksLikeCredentialText(key)
+  const component = SAFE_PATH_COMPONENT.test(key) && scanSensitiveMaterial(key) === 'safe'
     ? key
     : '[redacted]';
   return path ? `${path}.${component}` : component;
@@ -664,233 +649,6 @@ function boundFieldPath(path: string): string {
   return path.length <= MAX_FIELD_PATH_LENGTH
     ? path
     : `…${path.slice(path.length - (MAX_FIELD_PATH_LENGTH - 1))}`;
-}
-
-/** Credential formats and high-entropy runs only; word matches do not count. */
-function looksLikeCredentialText(value: string): boolean {
-  return SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(value))
-    || (value.match(/[A-Za-z0-9+/_=-]{32,}/gu) ?? [])
-      .some((candidate) => candidateLooksHighEntropy(candidate, false));
-}
-
-/**
- * The record's own name for a withheld-record message, or null when the
- * name is where the match was or could itself be secret-like.
- */
-function safeRecordName(record: Record<string, unknown>, fieldPath: string | null): string | null {
-  for (const key of ['name', 'policyName']) {
-    const name = record[key];
-    if (typeof name !== 'string' || name.trim() === '') continue;
-    if (fieldPath === key) return null;
-    if (isSecretLikeConfigurationValue(name, { allowWordShaped: true })) return null;
-    return [...singleLine(name)].slice(0, 120).join('');
-  }
-  return null;
-}
-
-function splitConfigurationFieldName(name: string): string[] {
-  const words = name
-    .replace(/([a-z0-9])([A-Z])/gu, '$1 $2')
-    .split(/[^A-Za-z0-9]+/u)
-    .filter(Boolean)
-    .map((word) => word.toLowerCase());
-  return [...words, words.join('')];
-}
-
-function isForbiddenConfigurationKey(name: string): boolean {
-  const tokens = splitConfigurationFieldName(name);
-  return tokens.some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token));
-}
-
-function shannonEntropy(value: string): number {
-  const frequencies = new Map<string, number>();
-  for (const character of value) frequencies.set(character, (frequencies.get(character) ?? 0) + 1);
-  let entropy = 0;
-  for (const count of frequencies.values()) {
-    const probability = count / value.length;
-    entropy -= probability * Math.log2(probability);
-  }
-  return entropy;
-}
-
-function boundedWindows(value: string, windowSize: number): string[] {
-  if (value.length <= windowSize) return [value];
-  const offsets = [0, Math.floor((value.length - windowSize) / 2), value.length - windowSize];
-  return [...new Set(offsets)].map((offset) => value.slice(offset, offset + windowSize));
-}
-
-// Word-shaped runs are policy names, hostnames, package names, and URL paths:
-// separator-delimited segments that are each a plain word of at most 24
-// letters, a plain number, a word with a short numeric affix ("x64", "30d",
-// "01"), or a camelCase chain of such words ("ThisIsAnOrdinaryDescription").
-// Structure alone is not enough — two random 20-letter groups joined by a
-// hyphen have the same shape — so every alphabetic piece of five or more
-// letters must also read like a word (`isWordLikePiece`), and the run as a
-// whole may carry only a bounded number of letter pairs that English words
-// almost never contain. Encoded credentials fail one of these tests and
-// still reach the entropy check below. Word-likeness cannot tell a
-// hyphenated passphrase from a hyphenated policy name, so the exemption is
-// granted only for the record's top-level schema label fields
-// (`SCHEMA_LABEL_FIELDS`); see `inspectDesiredConfiguration`.
-const WORD_SEGMENT_PATTERN =
-  /^(?:[A-Za-z]{1,24}|[0-9]{1,8}|[A-Za-z]{1,24}[0-9]{1,4}|[0-9]{1,4}[A-Za-z]{1,24})$/u;
-const CAMEL_CASE_PATTERN = /^[a-z]{0,24}(?:[A-Z][a-z]{1,23})+$/u;
-// A camelCase chain counts as words only when its pieces average at least
-// 4 letters: prose ("ThisIsAnOrdinaryDescription") does, while a random
-// alternating-case token ("kJhGfDsAqWeRt…") averages 2.
-const MIN_AVERAGE_CAMEL_PIECE_LENGTH = 4;
-// Letter pairs found in fewer than 0.04% of the 235,976 entries of the BSD
-// `web2` dictionary, minus five that English compounds join across a
-// morpheme boundary ("update", "lockdown", "speedtest", "offboarding").
-// Measured against 300,000 random letter groups per shape, the combined
-// word-likeness test admits at most 0.16% of them (four 8-letter groups)
-// and usually fewer than 0.06%, while 265 of 272 common IT product and
-// command names still read as words.
-const RARE_LETTER_BIGRAMS: ReadonlySet<string> = new Set((
-  'bf bg bk bn bq bv bw bx bz cb cd cf cg cj cm cp cv cw cx cz dk dp dq dx ' +
-  'dz fc fd fg fh fj fk fm fn fp fq fs fv fw fx fz gc gd gf gj gk gp gq gv ' +
-  'gx gz hc hd hg hh hj hk hq hv hx hz ij iw iy jb jc jd jf jg jh jj jk jl ' +
-  'jm jn jp jq jr js jt jv jw jx jy jz kc kg kj kk kp kq kv kx kz lj lq lx ' +
-  'lz mc md mg mh mj mk mq mr mt mv mw mx mz nx pc pg pj pk pq pv px pz qa ' +
-  'qb qc qd qe qf qg qh qi qj qk ql qm qn qo qp qq qr qs qt qv qw qx qy qz ' +
-  'rq rx rz sj sv sx sz tj tk tq tv tx uh uj uq uu uw uy vb vc vd vf vg vh ' +
-  'vj vk vl vm vn vp vq vr vs vt vv vw vx vy vz wc wf wg wj wm wp wq wt wu ' +
-  'wv ww wx wz xb xd xf xg xj xk xl xm xn xq xr xs xv xw xx xz yj yk yq yv ' +
-  'yy zb zc zd zf zg zh zj zk zm zn zp zq zr zs zt zu zv zw zx '
-).trim().split(' '));
-const VOWEL_PATTERN = /[aeiouy]/gu;
-const CONSONANT_CLUSTER_PATTERN = /[^aeiouy]{6,}/u;
-const MIN_VOWEL_RATIO = 0.1;
-// Word-likeness is judged on pieces of five or more letters; shorter pieces
-// are abbreviations ("srv", "HKLM", "msi") that carry no signal either way.
-const MIN_JUDGED_PIECE_LENGTH = 5;
-// A piece of six or more letters may contain one rare pair (English does:
-// "Bitlocker" has "tl"); a five-letter piece may contain none.
-const MIN_PIECE_LENGTH_FOR_ONE_RARE_PAIR = 6;
-// Across the whole run, allow one rare pair plus one more per 24 letters.
-const RARE_PAIR_RUN_ALLOWANCE_PER_LETTERS = 24;
-
-function rareLetterPairCount(lowerPiece: string): number {
-  let count = 0;
-  for (let index = 0; index < lowerPiece.length - 1; index += 1) {
-    if (RARE_LETTER_BIGRAMS.has(lowerPiece.slice(index, index + 2))) count += 1;
-  }
-  return count;
-}
-function isWordLikePiece(piece: string): boolean {
-  if (piece.length < MIN_JUDGED_PIECE_LENGTH) return true;
-  const lower = piece.toLowerCase();
-  const vowels = lower.match(VOWEL_PATTERN)?.length ?? 0;
-  if (vowels / lower.length < MIN_VOWEL_RATIO) return false;
-  if (CONSONANT_CLUSTER_PATTERN.test(lower)) return false;
-  const allowedRarePairs = lower.length >= MIN_PIECE_LENGTH_FOR_ONE_RARE_PAIR ? 1 : 0;
-  return rareLetterPairCount(lower) <= allowedRarePairs;
-}
-/** Alphabetic pieces of a segment, or null when the segment is not word-shaped. */
-function wordPieces(segment: string): string[] | null {
-  let pieces: string[];
-  if (WORD_SEGMENT_PATTERN.test(segment)) {
-    pieces = [segment.replace(/[0-9]/gu, '')];
-  } else if (CAMEL_CASE_PATTERN.test(segment)) {
-    pieces = segment.split(/(?=[A-Z])/u).filter(Boolean);
-    if (segment.length / pieces.length < MIN_AVERAGE_CAMEL_PIECE_LENGTH) return null;
-  } else {
-    return null;
-  }
-  return pieces.filter(Boolean);
-}
-function isWordShapedRun(candidate: string): boolean {
-  const segments = candidate.split(/[-_/]+/u).filter(Boolean);
-  if (segments.length === 0) return false;
-  const pieces: string[] = [];
-  for (const segment of segments) {
-    const segmentPieces = wordPieces(segment);
-    if (segmentPieces === null) return false;
-    pieces.push(...segmentPieces);
-  }
-  if (!pieces.every(isWordLikePiece)) return false;
-  let letters = 0;
-  let rarePairs = 0;
-  for (const piece of pieces) {
-    letters += piece.length;
-    rarePairs += rareLetterPairCount(piece.toLowerCase());
-  }
-  return rarePairs <= 1 + Math.floor(letters / RARE_PAIR_RUN_ALLOWANCE_PER_LETTERS);
-}
-function candidateLooksHighEntropy(candidate: string, allowWordShaped: boolean): boolean {
-  if (candidate.length < 32 || UUID_PATTERN.test(candidate)) return false;
-  if (allowWordShaped && isWordShapedRun(candidate)) return false;
-  const sampleSize = Math.min(64, candidate.length);
-  return boundedWindows(candidate, sampleSize).some((sample) => shannonEntropy(sample) >= 3.2);
-}
-
-function containsCredentialAssignment(value: string): boolean {
-  const assignments = value.matchAll(
-    /(?:^|[\s;|&{[,])(?:export\s+|setx?\s+)?["']?\$?(?:env:)?([A-Za-z][A-Za-z0-9_-]{0,127})["']?\s*(?:=|:)\s*(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;,}\]]+)/gimu,
-  );
-  for (const assignment of assignments) {
-    if (splitConfigurationFieldName(assignment[1] ?? '').some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token))) {
-      return true;
-    }
-  }
-  const setCommands = value.matchAll(
-    /\b(?:setx?)(?:\s+\/M)?\s+["']?([A-Za-z][A-Za-z0-9_-]{0,127})(?:\s*=\s*|\s+)(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s;]+)/gimu,
-  );
-  for (const command of setCommands) {
-    if (splitConfigurationFieldName(command[1] ?? '').some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token))) {
-      return true;
-    }
-  }
-  if (
-    /\bConvertTo-SecureString\b/iu.test(value) &&
-    /(?:^|\s)-AsPlainText(?:\s|$)/iu.test(value) &&
-    /(?:"[^"\r\n]+"|'[^'\r\n]+')/u.test(value)
-  ) {
-    return true;
-  }
-  return false;
-}
-
-function isSecretLikeConfigurationValue(
-  value: string,
-  { allowWordShaped }: { allowWordShaped: boolean },
-): boolean {
-  const highEntropyCandidates = value.match(/[A-Za-z0-9+/_=-]{32,}/gu) ?? [];
-  return SECRET_VALUE_PATTERNS.some((pattern) => pattern.test(value))
-    || containsCredentialAssignment(value)
-    || (/^[A-Za-z0-9_.-]{1,128}$/u.test(value)
-      && splitConfigurationFieldName(value).some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token)))
-    || highEntropyCandidates.some((candidate) => candidateLooksHighEntropy(candidate, allowWordShaped));
-}
-
-function isSensitiveScriptContent(content: string): boolean {
-  if (
-    /\bConvertTo-SecureString\b/iu.test(content) &&
-    /(?:^|\s)-AsPlainText(?:\s|$)/iu.test(content)
-  ) {
-    return true;
-  }
-  const hasForbiddenIdentifier = (identifier: string | undefined) =>
-    splitConfigurationFieldName(identifier ?? '')
-      .some((token) => FORBIDDEN_CONFIGURATION_KEYS.has(token));
-  for (const match of content.matchAll(/[A-Za-z][A-Za-z0-9_.-]*/gu)) {
-    const identifier = match[0];
-    const prefix = content.slice(Math.max(0, (match.index ?? 0) - 2), match.index ?? 0);
-    if (prefix === '--' && identifier.toLowerCase() === 'password-policy') continue;
-    if (hasForbiddenIdentifier(identifier)) return true;
-  }
-  for (const match of content.matchAll(
-    /(?:^|[\s{[,;|&])(?:export\s+|setx?(?:\s+\/M)?\s+)?["']?\$?(?:env:)?([A-Za-z][A-Za-z0-9_-]{0,127})["']?\s*(?==|:)/gimu,
-  )) {
-    if (hasForbiddenIdentifier(match[1])) return true;
-  }
-  for (const match of content.matchAll(
-    /(?:^|\s)--?([A-Za-z][A-Za-z0-9_-]{0,127})(?=$|[\s=])/gimu,
-  )) {
-    const compact = (match[1] ?? '').replace(/[^A-Za-z0-9]/gu, '').toLowerCase();
-    if (FORBIDDEN_CONFIGURATION_KEYS.has(compact)) return true;
-  }
-  return false;
 }
 
 function renderDesiredConfiguration(
@@ -933,7 +691,7 @@ function renderDesiredConfiguration(
     for (const [label, key] of [['Provider', 'provider'], ['Type', 'type'], ['Active', 'active'], ['Default', 'default'], ['Enabled', 'enabled'], ['Compression', 'compression'], ['Encryption', 'encryption'], ['Destination UUID', 'destinationId'], ['Legal hold', 'legalHold'], ['Legal hold reason', 'legalHoldReason'], ['Bandwidth limit Mbps', 'bandwidthLimitMbps'], ['Backup window start', 'backupWindowStart'], ['Backup window end', 'backupWindowEnd'], ['Priority', 'priority']] as const) {
       if (key in record) lines.push(`${label}: ${displayValue(record[key])}`);
     }
-    lines.push('', '## Schedule', fencedJson(record.schedule), '', '## Retention', fencedJson(record.retention), '', '## Exclusions', ...record.exclusions.map((item: string) => `- ${singleLine(item)}`), '', '## Restore capabilities', fencedJson(record.restore));
+    lines.push('', '## Schedule', fencedJson(record.schedule), '', '## Retention', fencedJson(record.retention), '', '## Exclusions', ...record.exclusions.map((item: string) => `- ${singleLine(item)}`));
     if ('selections' in record) lines.push('', '## Selections', fencedJson(record.selections));
     if ('targets' in record) lines.push('', '## Targets', fencedJson(record.targets));
     if ('gfs' in record) lines.push('', '## GFS', fencedJson(record.gfs));
@@ -952,7 +710,7 @@ function renderDesiredConfiguration(
     .replaceAll(MANAGED_END, '&lt;!-- weavestream:breeze:managed:end --&gt;');
   const markdown = `${MANAGED_START}\n${body}\n${MANAGED_END}`;
   if (markdown.split(MANAGED_START).length !== 2 || markdown.split(MANAGED_END).length !== 2) {
-    throw new Error('Breeze desired configuration produced invalid managed-region markers.');
+    throw new BreezeRecordGapError('invalid_managed_region');
   }
   return markdown;
 }
@@ -1016,7 +774,7 @@ function relationshipEndpoint(
   endpoint: { type: string; id: string },
 ): { resourceKey: string; id: string } {
   const resourceKey = relationshipResourceKey(endpoint.type);
-  if (!resourceKey) throw new Error('Unsupported Breeze relationship endpoint.');
+  if (!resourceKey) throw new BreezeRecordGapError('unsupported_relationship_endpoint');
   return { resourceKey, id: endpoint.type === 'organization' ? orgId : endpoint.id };
 }
 
@@ -1103,7 +861,7 @@ function currentStaticNetwork(address: Record<string, any>): {
   if (!cidr) return null;
   const gateway = address.gateway ? normalizeIpv4V4(String(address.gateway)) : null;
   if (address.gateway && (!gateway || !ipInCidr(gateway, cidr))) {
-    throw new Error('Breeze source contains an invalid static-address gateway.');
+    throw new BreezeRecordGapError('invalid_static_gateway', ['addresses.gateway']);
   }
   return { cidr, ipAddress, gateway };
 }
@@ -1114,7 +872,7 @@ function assertCompatibleSubnetGateways(candidates: Array<Record<string, any>>):
     if (!candidate.gateway) continue;
     const existing = gatewayByCidr.get(candidate.cidr);
     if (existing && existing !== candidate.gateway) {
-      throw new Error('Breeze source contains conflicting gateways for one canonical subnet.');
+      throw new BreezeRecordGapError('conflicting_subnet_gateways', ['addresses.gateway']);
     }
     gatewayByCidr.set(candidate.cidr, candidate.gateway);
   }

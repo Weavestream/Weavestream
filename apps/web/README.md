@@ -10,9 +10,8 @@ no rebuild is required — Next.js serves them statically.
 
 | File | Used by | Notes |
 | --- | --- | --- |
-| `public/brand/logo-mark.svg` | Sidebar header, `<AppLogo variant="mark">` | Square, ~512×512. The sidebar renders it at 22 px; keep it legible at that size. |
-| `public/brand/logo-wordmark-light.svg` and dark variant | Auth shell (login/setup), `<AppLogo>` default | Horizontal wordmark. Aspect ratio should stay close to 5:1 to avoid layout shifts — `AppLogo` caps the rendered width at `height * 7`. |
-| `public/brand/logo.svg` | Reserved for marketing surfaces (docs, emails). The app itself does not import this file. | Optional. |
+| `public/brand/logo-mark-light.svg` and dark variant | Sidebar header, `<AppLogo variant="mark">`, favicon (light variant) | Square mark (current artwork is 512×529). The sidebar renders it at 22 px; keep it legible at that size. The light variant is drawn for the light theme, the dark variant for the dark theme. |
+| `public/brand/logo-wordmark-light.svg` and dark variant | Auth shell (login/setup), `<AppLogo>` default | Horizontal wordmark. `AppLogo` caps the rendered width at `height * 7` and scales a wider logo down to fit, so keep the aspect ratio close to 7:1. |
 | `public/brand/pwa-icon-180.png` | iOS Home Screen icon | Opaque 180×180 PNG. Keep the mark centered and let iOS apply its own corner mask. |
 | `public/brand/pwa-icon-192.png` | PWA manifest icon | Opaque 192×192 PNG with `purpose: any`. |
 | `public/brand/pwa-icon-512.png` | PWA manifest icon | Opaque 512×512 PNG with `purpose: any`. |

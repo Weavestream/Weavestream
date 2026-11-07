@@ -44,11 +44,14 @@ export function RunsTab({
   runs,
   mappings,
   variant = 'records',
+  sourceLabel = integration.name,
 }: {
   integration: IntegrationDto;
   runs: IntegrationSyncRunDto[];
   mappings: IntegrationCompanyMappingDto[];
   variant?: RunsTabVariant;
+  /** The source's name (for example "Breeze RMM"), used in version notes. */
+  sourceLabel?: string;
 }) {
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const domains = variant === 'domains';
@@ -70,7 +73,7 @@ export function RunsTab({
       </header>
 
       <DataTable
-        columns={runColumns(variant, setOpenRunId)}
+        columns={runColumns(variant, setOpenRunId, sourceLabel)}
         rows={runs}
         onRowClick={(r) => setOpenRunId(r.id)}
         defaultSort={{ columnId: 'started', direction: 'desc' }}
@@ -87,6 +90,7 @@ export function RunsTab({
               <Tag tone="default">{r.kind}</Tag>
               {!domains && <RunModeTag mode={r.mode} />}
               {r.dryRun && <Tag tone="info">dry run</Tag>}
+              <SourceVersionChangeTag run={r} sourceLabel={sourceLabel} />
             </div>
             <MobileCardRow label="Started" mono>
               <FormattedDateTime value={r.startedAt ?? r.createdAt} />
@@ -105,6 +109,7 @@ export function RunsTab({
           mappings={mappings}
           resourceLabelByKey={resourceLabelByKey(integration)}
           variant={variant}
+          sourceLabel={sourceLabel}
           onClose={() => setOpenRunId(null)}
         />
       )}
@@ -120,6 +125,7 @@ export function RunsTab({
 function runColumns(
   variant: RunsTabVariant,
   open: (runId: string) => void,
+  sourceLabel: string,
 ): DataColumn<IntegrationSyncRunDto>[] {
   const cols: DataColumn<IntegrationSyncRunDto>[] = [
     {
@@ -147,6 +153,7 @@ function runColumns(
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
           <Tag tone="default">{r.kind}</Tag>
           {variant === 'records' && <RunModeTag mode={r.mode} />}
+          <SourceVersionChangeTag run={r} sourceLabel={sourceLabel} />
         </div>
       ),
       sortValue: (r) => r.kind,
@@ -178,6 +185,33 @@ function runColumns(
   return cols;
 }
 
+/**
+ * Early warning: the source reported a different release than on the
+ * previous run. Small on purpose; the run details name both versions.
+ */
+function SourceVersionChangeTag({
+  run,
+  sourceLabel,
+}: {
+  run: IntegrationSyncRunDto;
+  sourceLabel: string;
+}) {
+  const change = run.sourceVersionChange;
+  if (!change) return null;
+  return (
+    <span title={sourceVersionChangeText(sourceLabel, change)} style={{ display: 'inline-flex' }}>
+      <Tag tone="info">new version</Tag>
+    </span>
+  );
+}
+
+function sourceVersionChangeText(
+  sourceLabel: string,
+  change: NonNullable<IntegrationSyncRunDto['sourceVersionChange']>,
+): string {
+  return `${sourceLabel} version changed from ${change.from} to ${change.to} since the previous run.`;
+}
+
 function RunModeTag({ mode }: { mode: IntegrationSyncRunDto['mode'] }) {
   return <Tag tone={mode === 'full' ? 'accent' : 'default'}>{mode}</Tag>;
 }
@@ -194,6 +228,7 @@ function RunDetailDialog({
   mappings,
   resourceLabelByKey,
   variant,
+  sourceLabel,
   onClose,
 }: {
   integrationId: string;
@@ -201,6 +236,7 @@ function RunDetailDialog({
   mappings: IntegrationCompanyMappingDto[];
   resourceLabelByKey: Map<string, string>;
   variant: RunsTabVariant;
+  sourceLabel: string;
   onClose: () => void;
 }) {
   const [detail, setDetail] = useState<{
@@ -271,7 +307,22 @@ function RunDetailDialog({
                     ? run.triggeredBy.slice(0, 8)
                     : 'system'}
               </span>
+              {run.sourceServerVersion && (
+                <span title={`The release ${sourceLabel} reported for this run.`}>
+                  source version: {run.sourceServerVersion}
+                </span>
+              )}
+              {run.sourceSchemaVersion && (
+                <span title={`The API schema version ${sourceLabel} reported for this run.`}>
+                  API schema version: {run.sourceSchemaVersion}
+                </span>
+              )}
             </div>
+            {run.sourceVersionChange && (
+              <p style={versionChangeText}>
+                {sourceVersionChangeText(sourceLabel, run.sourceVersionChange)}
+              </p>
+            )}
             {variant === 'domains' ? (
               run.totals && (
                 <p style={{ margin: '10px 0 0', fontSize: 13, color: 'var(--muted)' }}>
@@ -409,6 +460,7 @@ function conflictTone(
     case 'manual_skip':
       return 'info';
     case 'secret_blocked':
+    case 'secret_redacted':
       return 'warn';
     default:
       return 'danger';
@@ -417,10 +469,15 @@ function conflictTone(
 
 /**
  * A succeeded run whose records were partly blocked (withheld, unreadable,
- * or with a link target that is not synced) shows "warnings": the run
- * finished, but the conflict list needs a look.
+ * or with a link target that is not synced) or synced with values withheld
+ * shows "warnings": the run finished, but the conflict list needs a look.
+ * A run the source paused (a schema version Weavestream does not know)
+ * shows "paused": nothing was written or archived.
  */
 function RunStatusTag({ status, totals }: { status: string; totals?: unknown }) {
+  if (status === 'succeeded' && isPaused(totals)) {
+    return <Tag tone="warn">paused</Tag>;
+  }
   if (status === 'succeeded' && hasRecordWarnings(totals)) {
     return <Tag tone="warn">warnings</Tag>;
   }
@@ -449,7 +506,12 @@ function hasRecordWarnings(totals: unknown): boolean {
   if (!totals || typeof totals !== 'object') return false;
   const t = totals as Partial<SyncRunTotals>;
   return (t.blocked ?? 0) > 0 || (t.missingDependency ?? 0) > 0 || (t.errors ?? 0) > 0
-    || (t.incomplete ?? 0) > 0;
+    || (t.incomplete ?? 0) > 0 || (t.redacted ?? 0) > 0 || (t.held ?? 0) > 0;
+}
+
+function isPaused(totals: unknown): boolean {
+  if (!totals || typeof totals !== 'object') return false;
+  return ((totals as Partial<SyncRunTotals>).paused ?? 0) > 0;
 }
 
 /**
@@ -519,6 +581,10 @@ function RunTotalsSummary({
       {totals.missingDependency > 0 ? ` · ${totals.missingDependency} missing dependency` : ''}
       {totals.errors > 0 ? ` · ${totals.errors} errors` : ''}
       {(totals.incomplete ?? 0) > 0 ? ` · ${totals.incomplete} incomplete` : ''}
+      {(totals.notSeen ?? 0) > 0 ? ` · ${totals.notSeen} not seen` : ''}
+      {(totals.redacted ?? 0) > 0 ? ` · ${totals.redacted} with values withheld` : ''}
+      {(totals.paused ?? 0) > 0 ? ` · ${totals.paused} paused` : ''}
+      {(totals.held ?? 0) > 0 ? ` · ${totals.held} held for review` : ''}
       {dryRun ? ' · dry-run' : ''}
     </span>
   );
@@ -550,7 +616,11 @@ function ResourceTotalsBreakdown({
         v.secretBlocked > 0 ||
         v.missingDependency > 0 ||
         v.errors > 0 ||
-        (v.incomplete ?? 0) > 0)
+        (v.incomplete ?? 0) > 0 ||
+        (v.notSeen ?? 0) > 0 ||
+        (v.redacted ?? 0) > 0 ||
+        (v.paused ?? 0) > 0 ||
+        (v.held ?? 0) > 0)
     );
   });
   if (entries.length === 0) return null;
@@ -634,6 +704,14 @@ function RunTotalsBreakdown({ totals }: { totals: SyncRunTotals | null }) {
       { label: 'missing dependency', value: totals.missingDependency, tone: 'warn' },
       { label: 'errors', value: totals.errors, tone: 'danger' },
       { label: 'incomplete', value: totals.incomplete ?? 0, tone: 'warn' },
+      // Not seen by a full sync, not archived yet (older runs lack the key).
+      { label: 'not seen', value: totals.notSeen ?? 0, tone: 'info' },
+      // Synced with values that looked like credentials withheld.
+      { label: 'values withheld', value: totals.redacted ?? 0, tone: 'warn' },
+      // The source reported a schema version Weavestream does not know.
+      { label: 'paused', value: totals.paused ?? 0, tone: 'warn' },
+      // A mass-removal hold kept these records; nothing was archived.
+      { label: 'held for review', value: totals.held ?? 0, tone: 'warn' },
     ] satisfies Cell[]
   ).filter((c) => c.value > 0);
   if (cells.length === 0) return <Tag tone="default">no records</Tag>;
@@ -697,6 +775,13 @@ const openButton: React.CSSProperties = {
   borderRadius: 6,
   color: 'var(--dim)',
   cursor: 'pointer',
+};
+
+const versionChangeText: React.CSSProperties = {
+  margin: '10px 0 0',
+  fontSize: 12.5,
+  color: 'var(--muted)',
+  overflowWrap: 'anywhere',
 };
 
 const runErrorText: React.CSSProperties = {

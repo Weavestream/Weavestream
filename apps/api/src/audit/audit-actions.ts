@@ -199,6 +199,9 @@ export const AUDIT_ACTIONS = {
     syncMappingStarted: 'integration.sync.mapping.started',
     syncMappingFinished: 'integration.sync.mapping.finished',
     syncMappingFailed: 'integration.sync.mapping.failed',
+    // A manual run that accepts held source changes (field drift, mass
+    // removal). Counts and ids only.
+    syncAcceptSourceChanges: 'integration.sync.accept_source_changes',
     // OAuth connect / disconnect. Rows carry the provider, scope list and a
     // reason category on failure; never tokens or provider error text.
     oauthConnect: 'integration.oauth.connect',

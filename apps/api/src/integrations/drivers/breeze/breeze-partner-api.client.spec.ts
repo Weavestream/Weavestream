@@ -1,6 +1,7 @@
 import {
   DriverAuthError,
   DriverRateLimitError,
+  DriverSourceVersionHoldError,
   type IntegrationContext,
 } from '../integration-driver.js';
 import {
@@ -116,6 +117,49 @@ afterEach(() => {
 });
 
 describe('BreezePartnerApiClient', () => {
+  describe('readServerVersion', () => {
+    it('reads the release from /health below the base path and never sends the API key', async () => {
+      const fx = installFetchScript([
+        { body: { status: 'ok', version: '0.126.0', binariesVersion: '0.126.0', uptime: 12 } },
+      ]);
+      await expect(
+        new BreezePartnerApiClient().readServerVersion(
+          context({ config: { baseUrl: 'https://breeze.example.test/rmm/' } }),
+        ),
+      ).resolves.toBe('0.126.0');
+      expect(fx.calls).toEqual([
+        { url: 'https://breeze.example.test/rmm/health', headers: { Accept: 'application/json' } },
+      ]);
+    });
+
+    it.each([
+      ['no version key', { body: { status: 'ok' } }],
+      ['a non-string version', { body: { version: 126 } }],
+      ['markup in the version', { body: { version: '<script>alert(1)</script>' } }],
+      ['spaces in the version', { body: { version: '0.126.0 build 7' } }],
+      ['an over-long version', { body: { version: `1.${'0'.repeat(80)}` } }],
+      ['an HTML page', { body: '<html>proxy</html>' }],
+      ['a JSON list', { body: ['0.126.0'] }],
+      ['a 404', { status: 404, body: { version: '0.126.0' } }],
+      ['a redirect', { status: 302, body: '', headers: { Location: 'https://elsewhere.test/' } }],
+    ] satisfies Array<[string, Frame]>)('returns null for %s', async (_label, frame) => {
+      installFetchScript([frame]);
+      await expect(new BreezePartnerApiClient().readServerVersion(context())).resolves.toBeNull();
+    });
+
+    it('keeps a prerelease or build label as sent', async () => {
+      installFetchScript([{ body: { version: ' v0.127.0-rc.1+build.7 ' } }]);
+      await expect(new BreezePartnerApiClient().readServerVersion(context())).resolves.toBe(
+        'v0.127.0-rc.1+build.7',
+      );
+    });
+
+    it('throws on a network failure so the caller can record null', async () => {
+      installFetchScript([{ error: new Error('connect ECONNREFUSED') }]);
+      await expect(new BreezePartnerApiClient().readServerVersion(context())).rejects.toThrow();
+    });
+  });
+
   it('builds the exact allowlisted URL and sends the API key only in X-API-Key', async () => {
     const fx = installFetchScript([{ body: envelope([site()]) }]);
     await new BreezePartnerApiClient().fetchPage(context(), {
@@ -239,7 +283,6 @@ describe('BreezePartnerApiClient', () => {
   });
 
   it.each([
-    envelope([site()], { schemaVersion: '2' }),
     envelope([site()], { nextCursor: null, hasMore: true }),
     envelope([site()], { snapshotAt: 'not-an-iso-date' }),
     { ...envelope([site()]), data: 'not-a-list' },
@@ -253,6 +296,37 @@ describe('BreezePartnerApiClient', () => {
         updatedSince: null,
       }),
     ).rejects.toThrow(/invalid response/i);
+  });
+
+  it.each([
+    [{ schemaVersion: '2' }, '2', /schema version 2, which Weavestream does not know yet/u],
+    [{ schemaVersion: undefined }, 'unrecognized', /did not report a partner API schema version/u],
+    [{ schemaVersion: 'x'.repeat(40) }, 'unrecognized', /did not report a partner API schema version/u],
+    [{ schemaVersion: 2 }, 'unrecognized', /did not report a partner API schema version/u],
+  ])('pauses on a schema version it does not know, before reading any record: %j', async (overrides, label, message) => {
+    installFetchScript([{ body: envelope([site()], overrides) }]);
+    const error = await new BreezePartnerApiClient().fetchPage(context(), {
+      resource: 'sites', externalOrgId: ORG, cursor: null, updatedSince: null,
+    }).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(DriverSourceVersionHoldError);
+    expect(error).toMatchObject({ sourceVersion: label, message: expect.stringMatching(message) });
+    expect((error as Error).message).toContain('Sync is paused and existing data is kept.');
+  });
+
+  it('reads an accepted or any-accepted schema version and labels the page with it', async () => {
+    installFetchScript([{ body: envelope([site()], { schemaVersion: '2' }) }, { body: envelope([site()], { schemaVersion: '3' }) }]);
+    const client = new BreezePartnerApiClient();
+    await expect(client.fetchPage(context(), {
+      resource: 'sites', externalOrgId: ORG, cursor: null, updatedSince: null, acceptedSchemaVersion: '2',
+    })).resolves.toMatchObject({ schemaVersion: '2', data: [{ id: SITE }] });
+    await expect(client.fetchPage(context(), {
+      resource: 'sites', externalOrgId: ORG, cursor: null, updatedSince: null, acceptAnySchemaVersion: true,
+    })).resolves.toMatchObject({ schemaVersion: '3' });
+  });
+
+  it('lists organizations and tests the connection under a version it does not know', async () => {
+    installFetchScript([{ body: envelope([], { schemaVersion: '2' }) }]);
+    await expect(new BreezePartnerApiClient().testConnection(context())).resolves.toEqual({ schemaVersion: '2' });
   });
 
   it('tolerates additive envelope keys and leaves records for per-record reading', async () => {
@@ -353,7 +427,7 @@ describe('BreezePartnerApiClient', () => {
 
   it('uses a bounded organization probe for testConnection', async () => {
     const fx = installFetchScript([{ body: envelope([]) }]);
-    await expect(new BreezePartnerApiClient().testConnection(context())).resolves.toBeUndefined();
+    await expect(new BreezePartnerApiClient().testConnection(context())).resolves.toEqual({ schemaVersion: '1' });
     expect(fx.calls[0]!.url).toBe(
       'https://breeze.example.test/api/v1/partner-api/organizations?limit=1',
     );
@@ -387,7 +461,7 @@ describe('BreezePartnerApiClient', () => {
           http: { timeoutMs: 25, maxRetries: 2, backoffMs: 0 },
         }),
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ schemaVersion: '1' });
     expect(fx.calls).toHaveLength(3);
   });
 

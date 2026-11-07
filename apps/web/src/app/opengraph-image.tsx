@@ -1,9 +1,15 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { ImageResponse } from 'next/og';
 
 /**
  * Phase 9b.1 — 1200×630 Open Graph / link-preview image. Kept
  * intentionally minimal: the product is internal, so OG previews mostly
  * appear in password managers and Slack unfurls of the login URL.
+ *
+ * The mark is read from `public/brand/logo-mark-dark.svg` (the variant
+ * drawn for a dark background), so swapping that file updates this
+ * image too — same single source as the sidebar and favicon.
  */
 
 export const alt = 'Weavestream';
@@ -11,7 +17,14 @@ export const size = { width: 1200, height: 630 };
 export const contentType = 'image/png';
 export const dynamic = 'force-static';
 
-export default function OpengraphImage() {
+export default async function OpengraphImage() {
+  const svg = await readFile(
+    path.join(process.cwd(), 'public/brand/logo-mark-dark.svg'),
+    'utf-8',
+  );
+  const markUrl = `data:image/svg+xml;base64,${Buffer.from(svg).toString(
+    'base64',
+  )}`;
   return new ImageResponse(
     (
       <div
@@ -28,24 +41,7 @@ export default function OpengraphImage() {
           gap: 28,
         }}
       >
-        <div
-          style={{
-            width: 168,
-            height: 168,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: '#b4e55a',
-            borderRadius: 32,
-            color: '#0a0a0a',
-            fontSize: 108,
-            fontWeight: 800,
-            fontStyle: 'italic',
-            lineHeight: 1,
-          }}
-        >
-          W
-        </div>
+        <img src={markUrl} width={163} height={168} alt="" />
         <div
           style={{
             display: 'flex',

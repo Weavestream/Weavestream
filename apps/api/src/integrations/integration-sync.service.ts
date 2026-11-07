@@ -10,6 +10,7 @@ import {
   QueueNames,
   stripNul,
   syncRunTotalsSchema,
+  type IntegrationSyncHoldDto,
   type IntegrationSyncMode,
   type IntegrationSyncRunCompanyResultDto,
   type IntegrationSyncRunDto,
@@ -26,6 +27,7 @@ import { QueuesService } from '../queues/queues.service.js';
 import { IntegrationDriverRegistry } from './drivers/integration-driver.registry.js';
 import type { AuditMeta } from './integrations.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
+import { parseFieldHold, parseRemovalHold, parseVersionHold } from './sync-holds.js';
 
 /**
  * Phase 11 — sync run orchestration + history.
@@ -67,7 +69,11 @@ export class IntegrationSyncService {
       take: Math.min(Math.max(limit, 1), 200),
     });
     const userIndex = await this.resolveTriggeredByUsers(rows);
-    return rows.map((r) => toRunDto(r, userIndex));
+    // Newest first: the previous run of row i is a later row. The oldest
+    // row in the window has nothing to compare with (the details do).
+    return rows.map((r, index) =>
+      toRunDto(r, userIndex, previousServerVersion(rows.slice(index + 1))),
+    );
   }
 
   async getRun(
@@ -93,9 +99,20 @@ export class IntegrationSyncService {
     });
 
     const userIndex = await this.resolveTriggeredByUsers([row]);
+    const previous = row.sourceServerVersion
+      ? await this.prisma.integrationSyncRun.findFirst({
+        where: {
+          integrationId,
+          createdAt: { lt: row.createdAt },
+          sourceServerVersion: { not: null },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { sourceServerVersion: true },
+      })
+      : null;
 
     return {
-      run: toRunDto(row, userIndex),
+      run: toRunDto(row, userIndex, previous?.sourceServerVersion ?? null),
       companyResults: results.map((r) => ({
         id: r.id,
         syncRunId: r.syncRunId,
@@ -123,7 +140,15 @@ export class IntegrationSyncService {
     dryRun: boolean,
     meta: AuditMeta,
     mode: IntegrationSyncMode = 'incremental',
+    options: { acceptSourceChanges?: boolean } = {},
   ): Promise<IntegrationSyncRunDto> {
+    // The controller checked `integration.manage` for an accepting run and
+    // forced a full, non-dry run; restate the shape here so no other caller
+    // can create an accepting dry or incremental run.
+    const acceptSourceChanges = options.acceptSourceChanges === true;
+    if (acceptSourceChanges && (dryRun || mode !== 'full')) {
+      throw new BadRequestException('Accepting source changes requires a full, non-dry run.');
+    }
     const integration = await this.prisma.integration.findUnique({
       where: { id: integrationId },
     });
@@ -172,6 +197,7 @@ export class IntegrationSyncService {
           mode,
           status: 'queued',
           dryRun,
+          ...(acceptSourceChanges ? { acceptSourceChanges: true } : {}),
           triggeredBy: actor.id,
         },
       });
@@ -211,9 +237,119 @@ export class IntegrationSyncService {
       before: null,
       after: { kind: 'manual', mode, dryRun, mappings: enabledMappingCount },
     });
+    if (acceptSourceChanges) {
+      const holds = await this.listHolds(integrationId);
+      await this.audit.log({
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.integration.syncAcceptSourceChanges,
+        entityType: 'IntegrationSyncRun',
+        entityId: run.id,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        after: {
+          integrationId,
+          runId: run.id,
+          fieldHolds: holds.filter((hold) => hold.kind === 'field').length,
+          versionHolds: holds.filter((hold) => hold.kind === 'version').length,
+          removalHolds: holds.filter((hold) => hold.kind === 'removal').length,
+          heldRemovals: holds.reduce((sum, hold) => sum + (hold.heldCount ?? 0), 0),
+        },
+      });
+    }
 
     const userIndex = await this.resolveTriggeredByUsers([run]);
     return toRunDto(run, userIndex);
+  }
+
+  /**
+   * Sync holds of an integration, for the operator banner: one row per
+   * held (company mapping, resource) and kind. Key paths and counts only.
+   * Callers gate on `integration.manage`.
+   */
+  async listHolds(integrationId: string): Promise<Array<IntegrationSyncHoldDto & { heldCount?: number }>> {
+    const rows = await this.prisma.integrationSyncCheckpoint.findMany({
+      where: {
+        resource: { integrationId },
+        OR: [
+          { fieldHold: { not: Prisma.DbNull } },
+          { removalHold: { not: Prisma.DbNull } },
+          { versionHold: { not: Prisma.DbNull } },
+        ],
+      },
+      select: {
+        companyId: true,
+        mode: true,
+        fieldHold: true,
+        removalHold: true,
+        versionHold: true,
+        company: { select: { name: true } },
+        resource: { select: { resourceKey: true } },
+      },
+      orderBy: [{ resourceId: 'asc' }, { companyId: 'asc' }, { mode: 'asc' }],
+      take: 200,
+    });
+    const integration = await this.prisma.integration.findUnique({
+      where: { id: integrationId },
+      select: { driver: true },
+    });
+    const descriptor = integration && this.drivers.has(integration.driver)
+      ? this.drivers.get(integration.driver).descriptor
+      : undefined;
+    const labelOf = (key: string) =>
+      descriptor?.resources?.find((resource) => resource.key === key)?.label ?? key;
+    const holds = new Map<string, IntegrationSyncHoldDto & { heldCount?: number }>();
+    for (const row of rows) {
+      const base = {
+        resourceKey: row.resource.resourceKey,
+        resourceLabel: labelOf(row.resource.resourceKey),
+        companyId: row.companyId,
+        companyName: row.company?.name ?? null,
+      };
+      const field = parseFieldHold(row.fieldHold);
+      if (field) {
+        // Both modes can hold the same fields; show one row per scope.
+        const key = `field:${row.resource.resourceKey}:${row.companyId}`;
+        const previous = holds.get(key);
+        const paths = [...new Set([...(previous?.detail ? previous.detail.split(', ') : []), ...field.paths])];
+        holds.set(key, {
+          ...base,
+          kind: 'field',
+          since: previous?.since && previous.since < field.since ? previous.since : field.since,
+          detail: paths.slice(0, 20).join(', '),
+        });
+      }
+      const version = parseVersionHold(row.versionHold);
+      if (version) {
+        // One row per company for all its paused resources: the version is
+        // the source's, not a resource's.
+        const key = `version:${row.companyId}`;
+        const previous = holds.get(key);
+        const resources = new Set([...(previous?.resourceKey.split(',') ?? []), row.resource.resourceKey]);
+        resources.delete('');
+        holds.set(key, {
+          ...base,
+          kind: 'version',
+          resourceKey: [...resources].join(','),
+          resourceLabel: resources.size === 1 ? base.resourceLabel : `${resources.size} resources`,
+          since: previous?.since && previous.since < version.since ? previous.since : version.since,
+          detail: version.version === 'unrecognized'
+            ? 'no readable schema version reported'
+            : `schema version ${version.version}`,
+        });
+      }
+      const removal = parseRemovalHold(row.removalHold);
+      if (removal) {
+        holds.set(`removal:${row.resource.resourceKey}:${row.companyId}:${row.mode}`, {
+          ...base,
+          kind: 'removal',
+          since: removal.since,
+          detail: `${removal.count} of ${removal.total} records missing from two full syncs`,
+          heldCount: removal.count,
+        });
+      }
+    }
+    return [...holds.values()];
   }
 
   /**
@@ -932,8 +1068,11 @@ function toRunDto(
     totals: unknown;
     error: string | null;
     createdAt: Date;
+    sourceServerVersion: string | null;
+    sourceSchemaVersion: string | null;
   },
   users: Map<string, TriggeredByUser>,
+  previousSourceServerVersion: string | null = null,
 ): IntegrationSyncRunDto {
   const triggeredByUser = row.triggeredBy ? users.get(row.triggeredBy) ?? null : null;
   return {
@@ -950,7 +1089,22 @@ function toRunDto(
     totals: (row.totals ?? null) as Record<string, unknown> | null,
     error: row.error,
     createdAt: row.createdAt.toISOString(),
+    sourceServerVersion: row.sourceServerVersion,
+    sourceSchemaVersion: row.sourceSchemaVersion,
+    sourceVersionChange:
+      row.sourceServerVersion &&
+      previousSourceServerVersion &&
+      previousSourceServerVersion !== row.sourceServerVersion
+        ? { from: previousSourceServerVersion, to: row.sourceServerVersion }
+        : null,
   };
+}
+
+/** The server release of the newest run in `older` that reported one. */
+function previousServerVersion(
+  older: ReadonlyArray<{ sourceServerVersion: string | null }>,
+): string | null {
+  return older.find((run) => run.sourceServerVersion !== null)?.sourceServerVersion ?? null;
 }
 
 function aggregateTotals(values: unknown[]): SyncRunTotals {
@@ -1012,6 +1166,10 @@ const TOTAL_KEYS = [
   'missingDependency',
   'errors',
   'incomplete',
+  'notSeen',
+  'redacted',
+  'paused',
+  'held',
 ] as const satisfies ReadonlyArray<keyof SyncRunResourceTotals>;
 
 export function zeroResourceTotals(): SyncRunResourceTotals {
@@ -1032,6 +1190,10 @@ export function zeroResourceTotals(): SyncRunResourceTotals {
     missingDependency: 0,
     errors: 0,
     incomplete: 0,
+    notSeen: 0,
+    redacted: 0,
+    paused: 0,
+    held: 0,
   };
 }
 
@@ -1090,6 +1252,11 @@ export function mergeAggregate(
     missingDependency: resourceTotals.missingDependency,
     errors: resourceTotals.errors,
     incomplete: resourceTotals.incomplete,
+    // Absent on totals from before the counter existed.
+    notSeen: resourceTotals.notSeen ?? 0,
+    redacted: resourceTotals.redacted ?? 0,
+    paused: resourceTotals.paused ?? 0,
+    held: resourceTotals.held ?? 0,
     status,
   };
   for (const totals of Object.values(acc.byResource)) {

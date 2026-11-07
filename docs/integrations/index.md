@@ -25,7 +25,7 @@ Weavestream's integration layer synchronises asset and infrastructure data from 
 ## Core Sync Behaviours
 
 - **Upsert Engine** — Records are created on first sync and updated on subsequent runs based on the provider's unique identifier.
-- **Soft Staling (No Deletion)** — Records removed or unseen in upstream platforms are flagged as stale rather than deleted, preserving full historical integrity.
+- **Soft Staling (No Deletion)** — Records removed or unseen in upstream platforms are flagged as stale rather than deleted, preserving full historical integrity. A record is flagged only after two full syncs, at least 12 hours apart, missed it, and a sudden large drop is held for review instead of archived (see [Breeze: Sync holds](/integrations/breeze/#sync-holds)).
 - **Granular Audit Log** — Sync runs, field changes, and status transitions write append-only records to the platform audit log.
 - **Integration Sections**: A driver can attach a read-only detail card to each synced asset (grouped values, usage bars, links). It appears on the asset page with the driver's logo and the last sync time, is replaced on every sync, and is never shown to client users. Section values are not searchable yet.
 - **Map Layouts and Match-first**: Drivers that suggest layout matches add a **Map layouts** tab: pick the layout for each kind of record (or create a new one, or skip it) and the field to match on. On sync, a record whose match value equals exactly one unlinked, manually created asset adopts that asset instead of creating a duplicate; two or more candidates are reported on the run and nothing is linked. New assets get only their name and match value; everything else goes in the integration section.

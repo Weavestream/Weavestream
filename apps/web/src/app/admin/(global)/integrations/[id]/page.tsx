@@ -6,6 +6,7 @@ import type {
   IntegrationCompanyMappingDto,
   IntegrationDifferencesPage,
   IntegrationDto,
+  IntegrationSyncHoldDto,
   IntegrationSyncRunDto,
 } from '@weavestream/shared';
 import { requireMe } from '../../../../../lib/server-api/auth';
@@ -18,6 +19,7 @@ import { PageBody, PageHeader } from '../../../../../components/shell/page-heade
 import { Panel } from '../../../../../components/ui';
 import { IntegrationTabs } from './integration-tabs';
 import { SecurityIntegrationTabs } from './cloudflare/security-integration-tabs';
+import { SyncHoldsBanner } from './sync-holds-banner';
 
 /**
  * Phase 11 — integration detail.
@@ -59,7 +61,7 @@ export default async function IntegrationDetailPage({
   // security drivers (Cloudflare) instead need the registered lists.
   // Splitting the rest by kind avoids hitting endpoints that 400 for
   // the wrong driver shape.
-  const [mappingsRes, runsRes, cfListsRes, cfDomainSyncRes] = await Promise.all([
+  const [mappingsRes, runsRes, cfListsRes, cfDomainSyncRes, holdsRes] = await Promise.all([
     kind === 'pull'
       ? serverApiFetch<IntegrationCompanyMappingDto[]>(
           `/admin/integrations/${id}/mappings`,
@@ -76,6 +78,13 @@ export default async function IntegrationDetailPage({
           `/admin/integrations/${id}/cloudflare/domains/sync`,
         )
       : Promise.resolve({ data: { run: null } }),
+    // Sync holds (records missing, a field no longer sent, an unknown
+    // source schema version): asset-import
+    // drivers only. The page itself requires INTEGRATION_MANAGE, which the
+    // endpoint checks again.
+    kind === 'pull'
+      ? serverApiFetch<IntegrationSyncHoldDto[]>(`/admin/integrations/${id}/holds`)
+      : Promise.resolve({ data: [] as IntegrationSyncHoldDto[] }),
   ]);
 
   // Badge count for the Differences tab: the first page carries the total.
@@ -86,6 +95,8 @@ export default async function IntegrationDetailPage({
   const runs = runsRes.data ?? [];
   const cloudflareLists = cfListsRes.data ?? [];
   const domainSyncRun = cfDomainSyncRes.data?.run ?? null;
+  const holds = holdsRes.data ?? [];
+  const sourceLabel = driver?.label ?? integration.driver;
 
   return (
     <>
@@ -102,6 +113,7 @@ export default async function IntegrationDetailPage({
         }
       />
       <PageBody>
+        <SyncHoldsBanner holds={holds} sourceLabel={sourceLabel} />
         <Panel noPad>
           {kind === 'security' ? (
             <SecurityIntegrationTabs
@@ -121,6 +133,7 @@ export default async function IntegrationDetailPage({
               driver={driver}
               canManageLayouts={hasCapability(me, 'LAYOUT_MANAGE')}
               differenceCount={differencesRes?.data?.total ?? null}
+              syncHoldCount={holds.length}
             />
           )}
         </Panel>

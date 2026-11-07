@@ -12,6 +12,7 @@ import { problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../../lib/api';
 import {
   Btn,
+  Checkbox,
   Field,
   Icon,
   Input,
@@ -55,10 +56,13 @@ export function CredentialsTab({
   integration,
   mappings,
   driver,
+  syncHoldCount = 0,
 }: {
   integration: IntegrationDto;
   mappings: IntegrationCompanyMappingDto[];
   driver: DriverDescriptor | null;
+  /** Open sync holds; when there are any, the run control offers to accept them. */
+  syncHoldCount?: number;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -76,6 +80,7 @@ export function CredentialsTab({
   const [testing, setTesting] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [acceptChanges, setAcceptChanges] = useState(false);
 
   const enabledMappingCount = useMemo(
     () => mappings.filter((m) => m.enabled).length,
@@ -201,9 +206,14 @@ export function CredentialsTab({
 
   async function triggerSync(dryRun: boolean) {
     setSyncing(true);
+    // Accepting applies to a real run only; the API makes it a full sync.
+    const accept = !dryRun && acceptChanges && syncHoldCount > 0;
     const res = await apiFetch<{ id: string }>(
       `/admin/integrations/${integration.id}/sync`,
-      { method: 'POST', body: JSON.stringify({ dryRun }) },
+      {
+        method: 'POST',
+        body: JSON.stringify(accept ? { dryRun, acceptSourceChanges: true } : { dryRun }),
+      },
     );
     setSyncing(false);
     if (!res.ok || !res.data) {
@@ -213,7 +223,15 @@ export function CredentialsTab({
       );
       return;
     }
-    toast.push(dryRun ? 'Dry run enqueued.' : 'Sync run enqueued.', 'ok');
+    toast.push(
+      dryRun
+        ? 'Dry run enqueued.'
+        : accept
+          ? 'Full sync enqueued. It accepts the held changes.'
+          : 'Sync run enqueued.',
+      'ok',
+    );
+    if (accept) setAcceptChanges(false);
     router.refresh();
   }
 
@@ -424,6 +442,15 @@ export function CredentialsTab({
             persists results.
           </p>
           {syncBlockedReason && <Tag tone="warn">{syncBlockedReason}</Tag>}
+          {syncHoldCount > 0 && (
+            <Checkbox
+              label={`Accept changes from ${driver?.label ?? integration.driver}`}
+              hint="Applies to Run sync now, which then runs a full sync. Records missing from two full syncs are archived, pages held for a field the source stopped sending are written, and the field check starts again from this sync."
+              checked={acceptChanges}
+              onChange={setAcceptChanges}
+              disabled={cannotSync || syncing}
+            />
+          )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <Btn
               kind="outline"

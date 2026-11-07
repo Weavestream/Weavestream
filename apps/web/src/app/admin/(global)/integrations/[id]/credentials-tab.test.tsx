@@ -16,10 +16,13 @@ jest.mock('../../../../../components/ui', () => ({
   Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
   Select: (props: React.SelectHTMLAttributes<HTMLSelectElement>) => <select {...props} />,
   Tag: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  // The shared control itself, so the test exercises the real checkbox.
+  Checkbox: jest.requireActual('../../../../../components/ui/checkbox').Checkbox,
   useToast: () => toast,
 }));
 
 const driver = {
+  label: 'Breeze RMM',
   configFields: [{ key: 'baseUrl', label: 'Breeze URL', kind: 'url', required: true }],
   secretFields: [{ key: 'apiKey', label: 'Partner API key', kind: 'password', required: true }],
   capabilities: { kind: 'pull' },
@@ -80,6 +83,32 @@ describe('CredentialsTab', () => {
     render(<CredentialsTab integration={{ ...integration, status: 'DISABLED' } as never} mappings={mappings} driver={driver} />);
     expect(screen.getByRole('button', { name: 'Dry run' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Run sync now' })).toBeDisabled();
+  });
+
+  it('offers no accept option while nothing is on hold', () => {
+    render(<CredentialsTab integration={integration as never} mappings={mappings} driver={driver} />);
+    expect(screen.queryByLabelText(/Accept changes from/)).not.toBeInTheDocument();
+  });
+
+  it('sends acceptSourceChanges only with Run sync now when the operator checks it', async () => {
+    render(<CredentialsTab integration={integration as never} mappings={mappings} driver={driver} syncHoldCount={2} />);
+    const accept = screen.getByLabelText(/Accept changes from Breeze RMM/);
+    expect(accept).not.toBeChecked();
+    fireEvent.click(accept);
+    expect(accept).toBeChecked();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dry run' }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/integration-1/sync', {
+      method: 'POST', body: JSON.stringify({ dryRun: true }),
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run sync now' }));
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledWith('/admin/integrations/integration-1/sync', {
+      method: 'POST', body: JSON.stringify({ dryRun: false, acceptSourceChanges: true }),
+    }));
+    expect(toast.push).toHaveBeenCalledWith('Full sync enqueued. It accepts the held changes.', 'ok');
+    // One accepting run per click: the box clears afterwards.
+    await waitFor(() => expect(screen.getByLabelText(/Accept changes from Breeze RMM/)).not.toBeChecked());
   });
 
   it('explains schedule inheritance while no interval is chosen', () => {

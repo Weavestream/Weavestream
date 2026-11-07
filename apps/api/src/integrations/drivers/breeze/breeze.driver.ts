@@ -4,7 +4,10 @@ import {
   type SourceOrgDto,
 } from '@weavestream/shared';
 import type {
+  DriverBlockedInput,
   DriverFetchPage,
+  DriverRedaction,
+  DriverSourceVersion,
   FetchRecordsContext,
   IntegrationContext,
   IntegrationDriver,
@@ -12,25 +15,34 @@ import type {
 } from '../integration-driver.js';
 import { assertRecommendedDestinations } from '../driver-utils.js';
 import {
+  BREEZE_KNOWN_SCHEMA_VERSION,
   BreezePartnerApiClient,
+  unknownSchemaVersionMessage,
   validateBreezeConfiguration,
 } from './breeze-partner-api.client.js';
 import {
   BREEZE_ENDPOINT_BY_RESOURCE,
+  breezeBlockedRecordSchema,
   breezeResourceKeySchema,
+  readBreezeRecordSafely,
+  type BreezeBlockedRecord,
   type BreezeOrganization,
   type BreezePartnerEnvelope,
   type BreezeResourceKey,
 } from './breeze.schemas.js';
+import { observeBreezeFields } from './breeze-field-presence.js';
 import {
   BreezeBoundedDefinitionError,
-  BreezeSensitiveDefinitionError,
+  BreezeRecordGapError,
   BreezeUnreadableRecordError,
   transformBreezeRecord,
+  type BreezeRecordRedaction,
 } from './breeze.transforms.js';
 
 interface BreezeClientPort {
-  testConnection(ctx: IntegrationContext): Promise<void>;
+  testConnection(ctx: IntegrationContext): Promise<{ schemaVersion: string }>;
+  /** Optional: a client without it reports no server version. */
+  readServerVersion?(ctx: IntegrationContext): Promise<string | null>;
   listOrganizations(ctx: IntegrationContext): Promise<BreezeOrganization[]>;
   fetchPage(
     ctx: IntegrationContext,
@@ -39,6 +51,8 @@ interface BreezeClientPort {
       externalOrgId: string;
       cursor: string | null;
       updatedSince: string | null;
+      acceptedSchemaVersion?: string | null;
+      acceptAnySchemaVersion?: boolean;
     },
   ): Promise<BreezePartnerEnvelope<unknown>>;
 }
@@ -362,8 +376,37 @@ export class BreezeDriver implements IntegrationDriver {
   }
 
   async testConnection(ctx: IntegrationContext): Promise<{ ok: true; details?: string }> {
-    await this.client.testConnection(ctx);
-    return { ok: true, details: 'Reached Breeze Partner API.' };
+    // The server version is informational: a failed read never fails the test.
+    const [{ schemaVersion }, serverVersion] = await Promise.all([
+      this.client.testConnection(ctx),
+      this.readServerVersion(ctx).catch(() => null),
+    ]);
+    const versions = serverVersion
+      ? ` (Breeze ${serverVersion}, partner API schema version ${schemaVersion})`
+      : ` (partner API schema version ${schemaVersion})`;
+    const reached = `Reached Breeze Partner API${versions}.`;
+    if (schemaVersion === BREEZE_KNOWN_SCHEMA_VERSION) return { ok: true, details: reached };
+    return { ok: true, details: `${reached} ${unknownSchemaVersionMessage(schemaVersion)}` };
+  }
+
+  /**
+   * Early warning: the Breeze release and partner API schema version, saved
+   * on each sync run. Each half is read on its own and a failed read is
+   * null; this method never throws.
+   */
+  async readSourceVersion(ctx: IntegrationContext): Promise<DriverSourceVersion> {
+    const [server, schema] = await Promise.allSettled([
+      this.readServerVersion(ctx),
+      this.client.testConnection(ctx),
+    ]);
+    return {
+      serverVersion: server.status === 'fulfilled' ? server.value : null,
+      schemaVersion: schema.status === 'fulfilled' ? schema.value.schemaVersion : null,
+    };
+  }
+
+  private async readServerVersion(ctx: IntegrationContext): Promise<string | null> {
+    return this.client.readServerVersion ? this.client.readServerVersion(ctx) : null;
   }
 
   async listSourceOrgs(ctx: IntegrationContext): Promise<SourceOrgDto[]> {
@@ -404,24 +447,41 @@ export class BreezeDriver implements IntegrationDriver {
       externalOrgId: ctx.externalOrgId,
       cursor,
       updatedSince: ctx.mode === 'full' ? null : ctx.updatedSince,
+      acceptedSchemaVersion: ctx.acceptedSourceVersion ?? null,
+      acceptAnySchemaVersion: ctx.acceptAnySourceVersion === true,
     });
     if (ctx.snapshotAt && page.snapshotAt !== ctx.snapshotAt) {
       throw new Error('Breeze partner API snapshot changed during traversal.');
     }
-    for (const blocked of page.blocked ?? []) {
-      if (
-        blocked.orgId !== ctx.externalOrgId ||
-        blocked.resource !== BREEZE_ENDPOINT_BY_RESOURCE[resource.data]
-      ) {
-        throw new Error(
-          'Breeze partner API returned blocked metadata for a different organization or resource.',
-        );
+    const endpoint = BREEZE_ENDPOINT_BY_RESOURCE[resource.data];
+    const namespacedId = (sourceId: string) => `${ctx.externalOrgId}:${resource.data}:${sourceId}`;
+    // Hard stops are kept only for safety: data for another organization
+    // than the one requested. Every other oddity costs the affected records
+    // only (a `validation` gap: the record is skipped, its last-known-good
+    // data is kept, and the traversal is non-authoritative, so no stale
+    // sweep runs).
+    const recordGaps: DriverBlockedInput[] = [];
+    const breezeBlocked: BreezeBlockedRecord[] = [];
+    for (const raw of page.blocked ?? []) {
+      const rawOrgId = raw && typeof raw === 'object' ? (raw as Record<string, unknown>)['orgId'] : undefined;
+      if (rawOrgId !== undefined && rawOrgId !== ctx.externalOrgId) {
+        throw new Error('Breeze partner API returned blocked metadata for a different organization.');
       }
+      const blocked = readBreezeRecordSafely(breezeBlockedRecordSchema, raw);
+      if (!blocked.success || blocked.data.orgId !== ctx.externalOrgId) {
+        recordGaps.push(recordGap(resource.data, null, 'unreadable_blocked_notice',
+          `Breeze withheld a ${resource.data} record, but Weavestream could not read which one. The other records in the page were synced.`));
+        continue;
+      }
+      if (blocked.data.resource !== endpoint) {
+        recordGaps.push(recordGap(resource.data, null, 'blocked_notice_other_resource',
+          `Breeze reported a withheld record for another resource while Weavestream read ${resource.data}. The other records in the page were synced.`));
+        continue;
+      }
+      breezeBlocked.push(blocked.data);
     }
     const transformed = [] as ReturnType<typeof transformBreezeRecord>;
-    const inlineBlocked: BreezeSensitiveDefinitionError[] = [];
-    const boundedBlocked: Array<{ id: string; orgId: string }> = [];
-    const unreadable: BreezeUnreadableRecordError[] = [];
+    const redactions: DriverRedaction[] = [];
     for (const record of page.data) {
       if (
         !record ||
@@ -430,21 +490,31 @@ export class BreezeDriver implements IntegrationDriver {
       ) {
         throw new Error('Breeze partner API returned a record for a different organization.');
       }
+      const rawId = (record as Record<string, unknown>)['id'];
+      const sourceId = typeof rawId === 'string' && UUID_PATTERN.test(rawId) ? rawId : null;
+      let redaction: BreezeRecordRedaction | null = null;
       try {
-        transformed.push(...transformBreezeRecord(resource.data, record));
+        transformed.push(...transformBreezeRecord(resource.data, record, (found) => {
+          redaction = found;
+        }));
       } catch (error) {
-        if (error instanceof BreezeSensitiveDefinitionError) {
-          inlineBlocked.push(error);
-        } else if (error instanceof BreezeBoundedDefinitionError) {
-          boundedBlocked.push({ id: error.sourceId, orgId: error.orgId });
-        } else if (error instanceof BreezeUnreadableRecordError) {
-          unreadable.push(error);
-        } else {
-          throw error;
-        }
+        recordGaps.push(transformErrorGap(resource.data, sourceId, namespacedId, error));
+        continue;
+      }
+      if (redaction) {
+        const found = redaction as BreezeRecordRedaction;
+        redactions.push({
+          externalId: `${found.orgId}:${resource.data}:${found.sourceId}`,
+          count: found.count,
+          fieldPaths: found.fieldPaths,
+        });
       }
     }
-    const records = deduplicateDriverRecords(transformed);
+    const deduplicated = deduplicateDriverRecords(transformed, namespacedId);
+    recordGaps.push(...deduplicated.gaps.map((gap) => recordGap(
+      resource.data, gap.externalId, gap.reasonCode, gap.message,
+    )));
+    const records = deduplicated.records;
     // Breeze documents `snapshotAt` as the consumer checkpoint: every change
     // up to it is in this traversal. It is constant across the traversal, so
     // the checkpoint does not depend on how Breeze orders records in a page.
@@ -456,62 +526,24 @@ export class BreezeDriver implements IntegrationDriver {
       cursor: page.nextCursor,
       schemaVersion: page.schemaVersion,
       snapshotAt: page.snapshotAt,
+      // Key presence of the fields Weavestream reads, from the raw records,
+      // so the runner can hold a page when Breeze stops sending one.
+      observedFields: observeBreezeFields(endpoint, page.data),
+      redactions,
       blockedInputs: [
-        ...(page.blocked ?? []).map((blocked) => ({
-        kind: 'secret_blocked' as const,
-        externalId: `${blocked.orgId}:${resource.data}:${blocked.id}`,
-        message: `Breeze withheld a ${resource.data} record because it detected secret material in it. Remove the secret from the record in Breeze and rerun the sync.`,
-        details: {
-          reasonCode: blocked.reason,
-          fieldPaths: blocked.fieldPaths,
-          sourceResource: resource.data,
-          sourceOrgId: blocked.orgId,
-          sourceId: blocked.id,
-        },
-        })),
-        // Weavestream's own inspection, not Breeze's: the record arrived in
-        // full and the transform quarantined it. Name the side that withheld
-        // it so an operator knows where to correct the definition, and keep a
-        // distinct reason code from Breeze's `secret_detected`.
-        ...inlineBlocked.map((blocked) => ({
+        ...breezeBlocked.map((blocked) => ({
           kind: 'secret_blocked' as const,
-          externalId: `${blocked.orgId}:${resource.data}:${blocked.sourceId}`,
-          message: weavestreamWithheldMessage(resource.data, blocked),
-          details: {
-            reasonCode: 'secret_like_material',
-            fieldPaths: blocked.fieldPath ? [blocked.fieldPath] : [],
-            sourceResource: resource.data,
-            sourceOrgId: blocked.orgId,
-            sourceId: blocked.sourceId,
-          },
-        })),
-        ...boundedBlocked.map((blocked) => ({
-          kind: 'validation' as const,
           externalId: `${blocked.orgId}:${resource.data}:${blocked.id}`,
-          message: `Weavestream withheld a ${resource.data} record because it exceeds a native field bound.`,
+          message: `Breeze withheld a ${resource.data} record because it detected secret material in it. Remove the secret from the record in Breeze and rerun the sync.`,
           details: {
-            reasonCode: 'bounded_input',
+            reasonCode: blocked.reason,
+            fieldPaths: blocked.fieldPaths,
             sourceResource: resource.data,
             sourceOrgId: blocked.orgId,
             sourceId: blocked.id,
           },
         })),
-        // A record Weavestream could not read is skipped and the rest of the
-        // page is written. `validation` keeps the resource non-authoritative,
-        // so the stale sweep never archives data because of a record that was
-        // only unreadable this time.
-        ...unreadable.map((error) => ({
-          kind: 'validation' as const,
-          externalId: error.sourceId ? `${ctx.externalOrgId}:${resource.data}:${error.sourceId}` : null,
-          message: `Weavestream skipped a ${resource.data} record it could not read. The other records in the page were synced.`,
-          details: {
-            reasonCode: 'unreadable_source_record',
-            fieldPaths: error.fieldPaths,
-            sourceResource: resource.data,
-            sourceOrgId: ctx.externalOrgId,
-            ...(error.sourceId ? { sourceId: error.sourceId } : {}),
-          },
-        })),
+        ...recordGaps,
       ],
       sourceHighWater: highWater,
       terminal: !page.hasMore,
@@ -519,35 +551,130 @@ export class BreezeDriver implements IntegrationDriver {
   }
 }
 
-function deduplicateDriverRecords(records: DriverFetchPage['records']): DriverFetchPage['records'] {
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/** A record-level `validation` gap: the record is skipped, nothing else. */
+function recordGap(
+  resource: BreezeResourceKey,
+  externalId: string | null,
+  reasonCode: string,
+  message: string,
+  extra: { fieldPaths?: string[]; sourceId?: string; sourceOrgId?: string } = {},
+): DriverBlockedInput {
+  return {
+    kind: 'validation',
+    externalId,
+    message: boundStart(message, MAX_GAP_MESSAGE_LENGTH),
+    details: {
+      reasonCode,
+      sourceResource: resource,
+      ...(extra.fieldPaths && extra.fieldPaths.length > 0 ? { fieldPaths: extra.fieldPaths } : {}),
+      ...(extra.sourceOrgId ? { sourceOrgId: extra.sourceOrgId } : {}),
+      ...(extra.sourceId ? { sourceId: extra.sourceId } : {}),
+    },
+  };
+}
+
+/**
+ * One record that could not be transformed becomes a gap for that record.
+ * Only fixed reason codes and key paths go into the gap: an unexpected
+ * error's message is never copied, because it could carry source text.
+ */
+function transformErrorGap(
+  resource: BreezeResourceKey,
+  sourceId: string | null,
+  namespacedId: (sourceId: string) => string,
+  error: unknown,
+): DriverBlockedInput {
+  const externalId = sourceId ? namespacedId(sourceId) : null;
+  const ids = sourceId ? { sourceId } : {};
+  if (error instanceof BreezeBoundedDefinitionError) {
+    return recordGap(resource, externalId, 'bounded_input',
+      `Weavestream withheld a ${resource} record because it exceeds a native field bound.`, ids);
+  }
+  if (error instanceof BreezeUnreadableRecordError) {
+    // A record Weavestream could not read is skipped and the rest of the
+    // page is written.
+    return recordGap(resource, externalId, 'unreadable_source_record',
+      `Weavestream skipped a ${resource} record it could not read. The other records in the page were synced.`,
+      { ...ids, fieldPaths: error.fieldPaths });
+  }
+  if (error instanceof BreezeRecordGapError) {
+    return recordGap(resource, externalId, error.reasonCode,
+      `Weavestream skipped a ${resource} record whose data is inconsistent (${error.reasonCode}). The other records in the page were synced.`,
+      { ...ids, fieldPaths: error.fieldPaths });
+  }
+  return recordGap(resource, externalId, 'record_transform_failed',
+    `Weavestream skipped a ${resource} record it could not process. The other records in the page were synced.`, ids);
+}
+
+interface DeduplicationGap {
+  externalId: string;
+  reasonCode: string;
+  message: string;
+}
+
+/**
+ * Merge records that share one stable identity. Records that conflict (the
+ * same identity with different data, or one network with different facts
+ * or gateways) are all dropped from the page and reported as gaps: which
+ * one is right is unknown, so the last-known-good data is kept.
+ */
+function deduplicateDriverRecords(
+  records: DriverFetchPage['records'],
+  namespacedId: (sourceId: string) => string,
+): { records: DriverFetchPage['records']; gaps: DeduplicationGap[] } {
   const byIdentity = new Map<string, DriverFetchPage['records'][number]>();
+  const conflicted = new Set<string>();
+  const gaps: DeduplicationGap[] = [];
   for (const record of records) {
-    const identity = record.reconstructionInput
-      ? `${record.reconstructionInput.targetKind}:${record.reconstructionInput.externalId}`
-      : `asset:${record.externalId}`;
+    const identity = driverRecordIdentity(record);
+    if (conflicted.has(identity)) continue;
     const existing = byIdentity.get(identity);
     if (existing) {
       const merged = mergeDriverRecords(existing, record);
       if (!merged) {
-        throw new Error('Breeze partner API returned a conflicting duplicate stable identity.');
+        byIdentity.delete(identity);
+        conflicted.add(identity);
+        gaps.push({
+          externalId: gapExternalId(record, namespacedId),
+          reasonCode: 'conflicting_duplicate_identity',
+          message: 'Breeze returned the same record twice with different data. Weavestream skipped it and kept the last synced version.',
+        });
+        continue;
       }
       byIdentity.set(identity, merged);
     } else {
       byIdentity.set(identity, record);
     }
   }
-  return convergeCanonicalIpamFacts([...byIdentity.values()]).sort((left, right) =>
-    driverRecordIdentity(left).localeCompare(driverRecordIdentity(right)),
-  );
+  const converged = convergeCanonicalIpamFacts([...byIdentity.values()], namespacedId);
+  return {
+    records: converged.records.sort((left, right) =>
+      driverRecordIdentity(left).localeCompare(driverRecordIdentity(right)),
+    ),
+    gaps: [...gaps, ...converged.gaps],
+  };
+}
+
+function gapExternalId(
+  record: DriverFetchPage['records'][number],
+  namespacedId: (sourceId: string) => string,
+): string {
+  return record.reconstructionInput
+    ? record.reconstructionInput.externalId
+    : namespacedId(record.externalId);
 }
 
 function convergeCanonicalIpamFacts(
   records: DriverFetchPage['records'],
-): DriverFetchPage['records'] {
-  const output = [...records];
+  namespacedId: (sourceId: string) => string,
+): { records: DriverFetchPage['records']; gaps: DeduplicationGap[] } {
+  const output: Array<DriverFetchPage['records'][number] | null> = [...records];
+  const gaps: DeduplicationGap[] = [];
   const subnetIndexes = new Map<string, number[]>();
   for (const [index, record] of output.entries()) {
-    const input = record.reconstructionInput;
+    const input = record?.reconstructionInput;
     if (input?.targetKind !== 'subnet') continue;
     const indexes = subnetIndexes.get(input.cidr) ?? [];
     indexes.push(index);
@@ -561,12 +688,20 @@ function convergeCanonicalIpamFacts(
     const canonicalFacts = inputs.map(({ externalId: _externalId, source: _source, gateway: _gateway, ...facts }) =>
       JSON.stringify(facts),
     );
-    if (new Set(canonicalFacts).size !== 1) {
-      throw new Error('Breeze partner API returned conflicting canonical subnet facts.');
-    }
     const gateways = [...new Set(inputs.map((input) => input.gateway).filter(Boolean))];
-    if (gateways.length > 1) {
-      throw new Error('Breeze partner API returned conflicting gateways for one canonical subnet.');
+    if (new Set(canonicalFacts).size !== 1 || gateways.length > 1) {
+      const reasonCode = new Set(canonicalFacts).size !== 1
+        ? 'conflicting_subnet_facts'
+        : 'conflicting_subnet_gateways';
+      for (const index of indexes) {
+        gaps.push({
+          externalId: gapExternalId(output[index]!, namespacedId),
+          reasonCode,
+          message: 'Breeze reported one network with different gateways or facts. Weavestream skipped those network records and kept the last synced versions.',
+        });
+        output[index] = null;
+      }
+      continue;
     }
     for (const index of indexes) {
       const record = output[index]!;
@@ -580,7 +715,10 @@ function convergeCanonicalIpamFacts(
       };
     }
   }
-  return output;
+  return {
+    records: output.filter((record): record is DriverFetchPage['records'][number] => record !== null),
+    gaps,
+  };
 }
 
 function driverRecordIdentity(record: DriverFetchPage['records'][number]): string {
@@ -643,27 +781,8 @@ function driverRecordSemantics(record: DriverFetchPage['records'][number]): stri
   });
 }
 
-/**
- * Names the record and the field so an operator can fix it in Breeze. The
- * path is key names only and the name was checked as safe; the value that
- * matched is never in the message.
- */
-function weavestreamWithheldMessage(
-  resource: BreezeResourceKey,
-  blocked: BreezeSensitiveDefinitionError,
-): string {
-  // The runner rejects a page with any message over 512 characters, so each
-  // part is bounded here and the whole message is bounded again.
-  const name = blocked.recordName ? boundStart(blocked.recordName, 80) : null;
-  const sourceId = boundStart(blocked.sourceId, 64);
-  const record = name ? `${resource} record "${name}" (${sourceId})` : `${resource} record ${sourceId}`;
-  // The end of a path names the field, so a long path keeps its end.
-  const where = blocked.fieldPath ? `the field ${boundEnd(blocked.fieldPath, 160)}` : 'its definition';
-  const message = `Weavestream withheld ${record} because ${where} looks like it holds a credential. Remove or change that value in Breeze and rerun the sync.`;
-  return boundStart(message, MAX_WITHHELD_MESSAGE_LENGTH);
-}
-
-const MAX_WITHHELD_MESSAGE_LENGTH = 500;
+// The runner rejects a gap message over 512 characters.
+const MAX_GAP_MESSAGE_LENGTH = 500;
 
 // Bounds count UTF-16 code units, as the runner's `message.length` check
 // does, and never split a character. The ellipsis is one code unit.
@@ -675,16 +794,6 @@ function boundStart(value: string, max: number): string {
     kept += char;
   }
   return `${kept}…`;
-}
-
-function boundEnd(value: string, max: number): string {
-  if (value.length <= max) return value;
-  let kept = '';
-  for (const char of [...value].reverse()) {
-    if (kept.length + char.length > max - 1) break;
-    kept = char + kept;
-  }
-  return `…${kept}`;
 }
 
 function field(

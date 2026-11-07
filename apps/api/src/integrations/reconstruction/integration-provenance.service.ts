@@ -25,6 +25,16 @@ const DEFAULT_STALE_LIMIT = 10_000;
 const TARGET_MUTATION_BATCH = RECONSTRUCTION_RUNTIME_LIMITS.nativeMutationBatch;
 const MAX_GAPS_PER_PAGE = 1_000;
 
+/** A binding is archived only on a second miss at least this long after the first. */
+export const STALE_CONFIRM_DELAY_MS = 12 * 60 * 60 * 1_000;
+/**
+ * Mass-removal hold: when the confirmed misses of one (mapping, resource)
+ * scope reach both bounds, the sweep archives nothing. A source that
+ * suddenly returns far fewer records is more likely broken than emptied.
+ */
+export const MASS_REMOVAL_MIN_COUNT = 3;
+export const MASS_REMOVAL_MIN_RATIO = 0.1;
+
 export async function readTargetProvenance(
   prisma: Pick<PrismaService, 'integrationSyncRecord'>,
   input: { companyId: string; targetKind: IntegrationTargetKind; targetId: string },
@@ -339,6 +349,23 @@ export interface StaleSweepInput extends Omit<ProvenanceScope, 'observedAt'> {
   auditActorId: string;
   batchSize?: number;
   maxRecords?: number;
+  /**
+   * An operator accepted the source changes: skip the mass-removal
+   * threshold. The two-miss rule still applies.
+   */
+  acceptSourceChanges?: boolean;
+}
+
+export interface StaleSweepResult {
+  stale: number;
+  archived: number;
+  /**
+   * Unseen bindings left in place: first misses, misses still inside the
+   * 12-hour wait, and confirmed misses held back by the mass-removal hold.
+   */
+  notSeen: number;
+  /** Set when the mass-removal threshold held back the confirmed misses. */
+  held: { count: number; total: number } | null;
 }
 
 export interface MoveConflictInput {
@@ -514,11 +541,20 @@ export class IntegrationProvenanceService {
    * all. Inside the runner's terminal page this re-lock is a no-op
    * (`resolveAbsentGaps` already holds the row); it is load-bearing
    * for direct callers.
+   *
+   * Never archive on a surprise. A binding is archived only on a confirmed
+   * miss: a full traversal missed it before (`missed_at`), it was not seen
+   * since (`missed_at > last_seen_at`), and that first miss is at least
+   * 12 hours old. A first miss only records `missed_at`. A sighting in
+   * between resets the rule with no extra write, because the page refresh
+   * moves `last_seen_at` past `missed_at`. When the confirmed misses of the
+   * scope reach the mass-removal threshold, nothing is archived and the
+   * caller records a hold (unless the run accepts source changes).
    */
   async staleUnseen(
     tx: Prisma.TransactionClient,
     input: StaleSweepInput,
-  ): Promise<{ stale: number; archived: number }> {
+  ): Promise<StaleSweepResult> {
     const batchSize = Math.min(Math.max(input.batchSize ?? DEFAULT_STALE_BATCH, 1), 500);
     const maxRecords = Math.min(Math.max(input.maxRecords ?? DEFAULT_STALE_LIMIT, 1), 10_000);
     await lockScopeWatermark(tx, {
@@ -560,6 +596,59 @@ export class IntegrationProvenanceService {
       if (!cursor) break;
     }
 
+    const confirmBefore = new Date(input.snapshotAt.getTime() - STALE_CONFIRM_DELAY_MS);
+    const firstMisses: StaleBinding[] = [];
+    const confirmed: StaleBinding[] = [];
+    let waiting = 0;
+    for (const row of rows) {
+      if (!row.missedAt || row.missedAt <= row.lastSeenAt) firstMisses.push(row);
+      else if (row.missedAt <= confirmBefore) confirmed.push(row);
+      else waiting += 1;
+    }
+
+    // First misses: record the miss and nothing else. The predicate is the
+    // candidate filter restated at write time (as for the stale transition
+    // below), so a binding a concurrent page refreshed is not marked.
+    let marked = 0;
+    for (let offset = 0; offset < firstMisses.length; offset += TARGET_MUTATION_BATCH) {
+      const batch = firstMisses.slice(offset, offset + TARGET_MUTATION_BATCH);
+      marked += await tx.$executeRaw(Prisma.sql`
+        UPDATE "integration_sync_records"
+        SET "missed_at" = ${input.snapshotAt}
+        WHERE "id" IN (${Prisma.join(batch.map((row) => Prisma.sql`${row.id}::uuid`))})
+          AND "company_id" = ${input.companyId}::uuid
+          AND "integration_company_mapping_id" = ${input.integrationCompanyMappingId}::uuid
+          AND "resource_id" = ${input.resourceId}::uuid
+          AND "state" IN ('active'::"IntegrationSyncState", 'blocked'::"IntegrationSyncState")
+          AND "last_seen_at" < ${input.snapshotAt}
+          AND "provenance"->>'ownership' = 'breeze'
+          AND ("missed_at" IS NULL OR "missed_at" <= "last_seen_at")
+      `);
+    }
+
+    // Mass-removal hold: count only when the confirmed misses can reach
+    // the absolute bound, so a normal sweep costs no extra query.
+    if (!input.acceptSourceChanges && confirmed.length >= MASS_REMOVAL_MIN_COUNT) {
+      const total = await tx.integrationSyncRecord.count({
+        where: {
+          companyId: input.companyId,
+          integrationCompanyMappingId: input.integrationCompanyMappingId,
+          resourceId: input.resourceId,
+          targetKind: input.targetKind,
+          state: { in: ['active', 'blocked'] },
+          provenance: { path: ['ownership'], equals: 'breeze' },
+        },
+      });
+      if (confirmed.length >= total * MASS_REMOVAL_MIN_RATIO) {
+        return {
+          stale: 0,
+          archived: 0,
+          notSeen: marked + waiting + confirmed.length,
+          held: { count: confirmed.length, total },
+        };
+      }
+    }
+
     // Guarded transition BEFORE any target mutation. The predicate is
     // the candidate filter restated at write time (tenant scope is in
     // the predicate too — raw statements bypass the tenant
@@ -570,8 +659,8 @@ export class IntegrationProvenanceService {
     // row-locked until commit, so no concurrent page can refresh it
     // between here and the target archive below.
     const survivors: StaleTargetRef[] = [];
-    for (let offset = 0; offset < rows.length; offset += TARGET_MUTATION_BATCH) {
-      const batch = rows.slice(offset, offset + TARGET_MUTATION_BATCH);
+    for (let offset = 0; offset < confirmed.length; offset += TARGET_MUTATION_BATCH) {
+      const batch = confirmed.slice(offset, offset + TARGET_MUTATION_BATCH);
       const transitioned = await tx.$queryRaw<StaleTargetRef[]>(Prisma.sql`
         UPDATE "integration_sync_records"
         SET
@@ -586,6 +675,9 @@ export class IntegrationProvenanceService {
           AND "state" IN ('active'::"IntegrationSyncState", 'blocked'::"IntegrationSyncState")
           AND "last_seen_at" < ${input.snapshotAt}
           AND "provenance"->>'ownership' = 'breeze'
+          AND "missed_at" IS NOT NULL
+          AND "missed_at" > "last_seen_at"
+          AND "missed_at" <= ${confirmBefore}
         RETURNING
           "id",
           "target_kind" AS "targetKind",
@@ -637,7 +729,7 @@ export class IntegrationProvenanceService {
       });
       await this.audit.logManyWithClient(tx, auditEntries);
     }
-    return { stale: survivors.length, archived };
+    return { stale: survivors.length, archived, notSeen: marked + waiting, held: null };
   }
 }
 
@@ -654,6 +746,8 @@ type StaleTargetRef = {
 
 type StaleBinding = StaleTargetRef & {
   staleSince: Date | null;
+  lastSeenAt: Date;
+  missedAt: Date | null;
   state: 'active' | 'blocked' | 'stale';
   provenance: unknown;
 };

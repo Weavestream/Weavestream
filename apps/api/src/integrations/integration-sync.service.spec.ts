@@ -7,7 +7,8 @@ import {
 const totals = (created: number) => ({
   fetched: created, created, updated: 0, unchanged: 0, claimed: 0, archived: 0,
   skippedAmbiguous: 0, skippedManual: 0, skippedArchived: 0, stale: 0,
-  restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0, incomplete: 0,
+  restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0, incomplete: 0, notSeen: 0,
+  redacted: 0, paused: 0, held: 0,
 });
 
 describe('mergeAggregate retry replacement', () => {
@@ -19,6 +20,25 @@ describe('mergeAggregate retry replacement', () => {
       created: 1,
       byResource: { devices: { created: 1, status: 'succeeded' } },
     });
+  });
+
+  it('sums the notSeen counter and reads it as 0 on totals from before it existed', () => {
+    const legacy = {
+      fetched: 2, created: 2, byResource: { sites: { fetched: 2, created: 2, status: 'succeeded' } },
+    };
+    const merged = mergeAggregate(legacy, 'devices', { ...totals(1), notSeen: 4 }, 'succeeded');
+    expect(merged.notSeen).toBe(4);
+    expect(merged.byResource?.sites?.notSeen).toBe(0);
+    expect(merged.byResource?.devices?.notSeen).toBe(4);
+  });
+
+  it('sums the redacted and paused counters and reads them as 0 on older totals', () => {
+    const legacy = {
+      fetched: 2, created: 2, byResource: { sites: { fetched: 2, created: 2, status: 'succeeded' } },
+    };
+    const merged = mergeAggregate(legacy, 'scripts', { ...totals(1), redacted: 2, paused: 1 }, 'succeeded');
+    expect(merged).toMatchObject({ redacted: 2, paused: 1 });
+    expect(merged.byResource?.sites).toMatchObject({ redacted: 0, paused: 0 });
   });
 });
 
@@ -145,6 +165,78 @@ describe('IntegrationSyncService.triggerManual', () => {
     await expect(service.triggerManual(actor, 'integration', false, meta, 'full'))
       .rejects.toThrow(/scheduled sync or full reconstruction sync is already queued or running/i);
     expect(add).not.toHaveBeenCalled();
+  });
+
+  it('stores an accepting run and audits it with hold counts only', async () => {
+    const { service, prisma, audit } = setup('ACTIVE');
+    const drivers = (service as unknown as { drivers: Record<string, unknown> }).drivers;
+    drivers.get = jest.fn().mockReturnValue({ descriptor: { resources: [{ key: 'devices', label: 'Devices' }] } });
+    Object.assign(prisma, {
+      integrationSyncCheckpoint: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            companyId: '00000000-0000-4000-8000-000000000009', mode: 'full',
+            fieldHold: { since: '2026-11-01T00:00:00.000Z', paths: ['device:addresses[].assignment'] },
+            removalHold: { since: '2026-11-02T00:00:00.000Z', count: 4, total: 10 },
+            company: { name: 'Acme' }, resource: { resourceKey: 'devices' },
+          },
+        ]),
+      },
+    });
+
+    await service.triggerManual(actor, 'integration', false, meta, 'full', { acceptSourceChanges: true });
+
+    expect(prisma.integrationSyncRun.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ mode: 'full', dryRun: false, acceptSourceChanges: true }),
+    });
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'integration.sync.accept_source_changes',
+      entityType: 'IntegrationSyncRun',
+      entityId: 'run-1',
+      after: {
+        integrationId: 'integration', runId: 'run-1',
+        fieldHolds: 1, removalHolds: 1, heldRemovals: 4, versionHolds: 0,
+      },
+    }));
+  });
+
+  it('lists one version hold per company for all its paused resources', async () => {
+    const { service, prisma } = setup('ACTIVE');
+    const drivers = (service as unknown as { drivers: Record<string, unknown> }).drivers;
+    drivers.has = jest.fn().mockReturnValue(true);
+    drivers.get = jest.fn().mockReturnValue({ descriptor: { resources: [
+      { key: 'devices', label: 'Devices' }, { key: 'sites', label: 'Sites' },
+    ] } });
+    const company = '00000000-0000-4000-8000-000000000009';
+    Object.assign(prisma, {
+      integration: { ...(prisma as unknown as { integration: object }).integration,
+        findUnique: jest.fn().mockResolvedValue({ driver: 'breeze' }) },
+      integrationSyncCheckpoint: {
+        findMany: jest.fn().mockResolvedValue([
+          { companyId: company, mode: 'full', fieldHold: null, removalHold: null,
+            versionHold: { since: '2026-11-03T00:00:00.000Z', version: '2' },
+            company: { name: 'Acme' }, resource: { resourceKey: 'devices' } },
+          { companyId: company, mode: 'incremental', fieldHold: null, removalHold: null,
+            versionHold: { since: '2026-11-02T00:00:00.000Z', version: '2' },
+            company: { name: 'Acme' }, resource: { resourceKey: 'sites' } },
+        ]),
+      },
+    });
+    await expect(service.listHolds('integration')).resolves.toEqual([{
+      kind: 'version', resourceKey: 'devices,sites', resourceLabel: '2 resources',
+      companyId: company, companyName: 'Acme', since: '2026-11-02T00:00:00.000Z',
+      detail: 'schema version 2',
+    }]);
+  });
+
+  it.each([
+    [true, 'full'],
+    [false, 'incremental'],
+  ] as const)('refuses an accepting run with dryRun=%s mode=%s', async (dryRun, mode) => {
+    const { service, prisma } = setup('ACTIVE');
+    await expect(service.triggerManual(actor, 'integration', dryRun, meta, mode, { acceptSourceChanges: true }))
+      .rejects.toThrow(/full, non-dry run/i);
+    expect(prisma.integrationSyncRun.create).not.toHaveBeenCalled();
   });
 
   it('rejects DISABLED before persistence, queueing, or audit', async () => {
@@ -693,4 +785,72 @@ describe('IntegrationSyncService.failRun', () => {
       expect(audit.log).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('IntegrationSyncService run source version', () => {
+  const INTEGRATION = '00000000-0000-4000-8000-000000000001';
+  const row = (id: string, minute: number, server: string | null, schema: string | null = '1') => ({
+    id, integrationId: INTEGRATION, kind: 'scheduled', mode: 'incremental', status: 'succeeded',
+    dryRun: false, triggeredBy: null, startedAt: null, finishedAt: null, totals: null, error: null,
+    createdAt: new Date(Date.UTC(2026, 10, 7, 10, minute)),
+    sourceServerVersion: server, sourceSchemaVersion: schema,
+  });
+
+  function setup(rows: unknown[], previous: unknown = null) {
+    const prisma = {
+      integrationSyncRun: {
+        findMany: jest.fn().mockResolvedValue(rows),
+        findFirst: jest.fn()
+          .mockResolvedValueOnce(rows[0] ?? null)
+          .mockResolvedValueOnce(previous),
+      },
+      integrationSyncRunCompanyResult: { findMany: jest.fn().mockResolvedValue([]) },
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new IntegrationSyncService(prisma as never, {} as never, {} as never, {} as never);
+    return { service, prisma };
+  }
+
+  it('lists each run with its versions and a change against the previous reported release', async () => {
+    const { service } = setup([
+      row('run-4', 4, '0.126.0'),
+      row('run-3', 3, null, null),
+      row('run-2', 2, '0.125.0'),
+      row('run-1', 1, '0.125.0'),
+    ]);
+    const runs = await service.listRuns(INTEGRATION);
+    expect(runs.map((r) => [r.id, r.sourceServerVersion, r.sourceSchemaVersion, r.sourceVersionChange])).toEqual([
+      // A run that could not read the release is skipped when comparing.
+      ['run-4', '0.126.0', '1', { from: '0.125.0', to: '0.126.0' }],
+      ['run-3', null, null, null],
+      ['run-2', '0.125.0', '1', null],
+      ['run-1', '0.125.0', '1', null],
+    ]);
+  });
+
+  it('compares the run details with the newest earlier run that reported a release', async () => {
+    const { service, prisma } = setup([row('run-9', 9, '0.126.0')], { sourceServerVersion: '0.124.0' });
+    const { run } = await service.getRun(INTEGRATION, 'run-9');
+    expect(run.sourceVersionChange).toEqual({ from: '0.124.0', to: '0.126.0' });
+    expect(prisma.integrationSyncRun.findFirst).toHaveBeenLastCalledWith({
+      where: {
+        integrationId: INTEGRATION,
+        createdAt: { lt: new Date(Date.UTC(2026, 10, 7, 10, 9)) },
+        sourceServerVersion: { not: null },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { sourceServerVersion: true },
+    });
+  });
+
+  it('reports no change for the first run with a release, or an unknown release', async () => {
+    const first = setup([row('run-1', 1, '0.126.0')], null);
+    expect((await first.service.getRun(INTEGRATION, 'run-1')).run.sourceVersionChange).toBeNull();
+
+    const unknown = setup([row('run-2', 2, null)]);
+    const { run } = await unknown.service.getRun(INTEGRATION, 'run-2');
+    expect(run.sourceVersionChange).toBeNull();
+    // No lookup of the previous run when this run has no release.
+    expect(unknown.prisma.integrationSyncRun.findFirst).toHaveBeenCalledTimes(1);
+  });
 });

@@ -20,7 +20,7 @@ In Breeze, create a partner service principal for Weavestream. Human JWTs and or
 | `inventory:read` | Inventory, software, network facts, virtual machines, and relationships |
 | `configuration:read` | Policies, assignments, and automations |
 | `scripts:read` | Rebuild-safe scripts |
-| `backup-configuration:read` | Backup schedules, retention, exclusions, and documented restore capabilities |
+| `backup-configuration:read` | Backup schedules, retention, and exclusions |
 | `custom-fields:read` | Custom-field definitions and values |
 
 A deliberately narrower integration may omit a scope only when every resource that requires it will remain disabled. No listed scope permits remote access, command execution, secret reads, user management, or administrative writes.
@@ -47,7 +47,7 @@ Weavestream encrypts the Partner API key at rest with the kid-tagged `INTEGRATIO
 
 ## Resources and ordering
 
-Enabled resources execute as an acyclic dependency graph. Weavestream rejects cycles and does not run a child before its configured parents.
+Enabled resources execute as an acyclic dependency graph. Weavestream rejects cycles and does not run a child before its configured parents. A dependency sets the order only. A child always runs, also when a parent failed or is disabled. Each record whose parent is not synced becomes a `missing_dependency` gap for that record only, and the other records sync.
 
 | Native target | Breeze resources and dependencies |
 |---|---|
@@ -77,22 +77,38 @@ Weavestream reads only the Breeze fields it maps to Weavestream fields, so a Bre
 - A field Breeze adds is ignored. It is not inspected, rendered, or stored.
 - A new value in a list Weavestream only displays (an OS, role, equipment type, script language, relationship type) syncs as plain text.
 - A new record variant (a subject type or backup kind) or a relationship to an endpoint kind Weavestream does not model is skipped.
-- A field Weavestream reads but Breeze no longer sends becomes empty.
+- A field Weavestream reads but Breeze no longer sends is read as unknown, not as empty. Weavestream remembers how often each field it reads was present in the last clean sync. When a field that was present on every record (over at least 5) is missing from every record on a page, that page writes nothing and the resource gets a **field hold** (see [Sync holds](#sync-holds)). A field that was sometimes absent before is not watched; it becomes empty as before.
 - A record that Weavestream still cannot read (a field it uses has an unexpected type, a record type is missing, a list it reads holds more than 1,000 items, or nesting is too deep) is skipped with a `validation` gap that names the field paths (never the values). Weavestream never truncates such a list. The other records in the page sync. The resource is reported incomplete, so no stale sweep archives data because of that record.
 
-A new `schemaVersion` still stops the sync. Breeze bumps it for removals, renames, and type changes, and those need a Weavestream update.
+A new `schemaVersion` pauses the sync. Breeze bumps it for removals, renames, and type changes. Weavestream does not read a response with a version it does not know, so it writes nothing and archives nothing. The run shows **paused** with the message "Breeze reported partner API schema version X, which Weavestream does not know yet. Sync is paused and existing data is kept.", and the integration page shows a **version hold** (see [Sync holds](#sync-holds)). Test connection reports the same message. An admin can continue with **Accept changes from Breeze RMM**.
+
+### Breeze version on each run
+
+At the start of each sync run, Weavestream reads the Breeze release from `GET /health` (`version`; this endpoint needs no login, so the API key is not sent) and the partner API `schemaVersion`, and saves both on the run. Open a run on the **Runs** tab to see them as **source version** and **API schema version**. When the Breeze release differs from the previous run that reported one, the run shows a **new version** tag, and the run details say "Breeze RMM version changed from X to Y since the previous run." **Test connection** also names both versions.
+
+The read is advisory. It runs after the run has queued its work, with one 5-second try. When Breeze does not answer, sends no version, or sends a value that is not a plain version label (letters, digits, `.`, `_`, `+`, and `-`, at most 64 characters), the run shows no version and syncs as usual.
+
+### Early warning for new Breeze releases
+
+A scheduled GitHub Actions workflow (`.github/workflows/breeze-contract.yml`, Mondays and on demand) compares the newest Breeze release with what Weavestream reads. It fetches only the partner API source files of that release (`apps/api/src/routes/partnerApi/` and `services/versionInfo.ts`), reads them as text, and never builds or runs them. It needs no secrets and no running Breeze. The field list comes from the Breeze driver itself, so it stays in step with the driver.
+
+The job fails when the release removes or renames a field Weavestream reads, turns a list into a single value, removes an endpoint or a record variant, or declares a new `schemaVersion`. The job summary lists each change with its endpoint and field path. A change to the `/health` version is shown as a notice and does not fail the job, because it affects only the version shown on runs. To check a specific Breeze tag, run the workflow by hand and enter the tag. To check a local Breeze checkout, run from `apps/api`:
+
+```bash
+pnpm exec tsc -p scripts/tsconfig.check-breeze-contract.json && node node_modules/.cache/breeze-contract-check/scripts/check-breeze-contract.js <path-to-breeze-checkout> --ref <tag>
+```
 
 ## Run modes and scheduling
 
 - **Dry run** fetches, validates, transforms, and reports outcomes but rolls back native targets, bindings, audits, gaps, and checkpoints.
 - **Incremental** starts from the last committed high-water checkpoint and applies changed source records. The high-water mark is the traversal `snapshotAt`, which Breeze documents as the consumer checkpoint, so it does not depend on how Breeze orders records within a page. The first incremental run after a full or empty traversal has no checkpoint yet; it sends no `updatedSince` and commits the traversal `snapshotAt` so the next run is incremental.
-- **Full** traverses the complete source snapshot. Only a terminal, authoritative full traversal may mark unseen exact Breeze-owned bindings stale.
+- **Full** traverses the complete source snapshot. Only a terminal, authoritative full traversal may mark unseen exact Breeze-owned bindings stale, and only on a second miss (see [Sync holds](#sync-holds)).
 
 A blank integration schedule inherits `INTEGRATION_SYNC_DEFAULT_CRON`, which defaults to `*/15 * * * *` (every 15 minutes). Pick an explicit interval preset in the integration's schedule dropdown for a different cadence (stored as a five-field UTC cron), or set the global default to `off` for manual-only inherited schedules. Manual runs can select incremental or full mode.
 
 Scheduled delivery uses a stable delivery key so a repeated scheduler delivery does not create a duplicate run. If every enabled mapping/resource scope has a successful full checkpoint from the preceding 24 hours, the scheduler selects incremental; otherwise it selects full. At most one full run per integration may be queued or running, and a racing full request falls back to incremental. Do not launch overlapping runs to evade a provider rate limit.
 
-Each page commits its native writes, audit rows, bindings, safe gaps, and checkpoint atomically. A crash resumes from the last committed opaque cursor. Cancellation, an incomplete page walk, rejected schema, invalid cursor, exhausted retry, or a `validation`, `missing_dependency`, or `synchronization_error` gap leaves the traversal non-authoritative: last-known-good data stays in place, no absent gaps resolve, and no stale sweep occurs. A walk that finishes with only record-level gaps still ends the resource as succeeded, so the resources that depend on it run. The Runs tab shows such a run as **warnings**, and the conflict list names each record that was not written. A resource fails only when the walk itself fails (transport, schema, cursor, or authorization). A safe, explicit `secret_blocked`, `unsupported`, or `ambiguous` observation does not by itself make an otherwise complete traversal non-authoritative; the observation remains visible in completeness for operator action.
+Each page commits its native writes, audit rows, bindings, safe gaps, and checkpoint atomically. A crash resumes from the last committed opaque cursor. Cancellation, an incomplete page walk, rejected schema, invalid cursor, exhausted retry, or a `validation`, `missing_dependency`, or `synchronization_error` gap leaves the traversal non-authoritative: last-known-good data stays in place, no absent gaps resolve, and no stale sweep occurs. A walk that finishes with only record-level gaps still ends the resource as succeeded. The Runs tab shows such a run as **warnings**, and the conflict list names each record that was not written. A resource fails only when the walk itself fails: transport, authorization, a response envelope Weavestream cannot read, a cursor that does not advance or repeats, or a record or notice from a Breeze organization other than the one requested. A safe, explicit `secret_blocked`, `unsupported`, or `ambiguous` observation does not by itself make an otherwise complete traversal non-authoritative; the observation remains visible in completeness for operator action.
 
 Scheduled writes are attributed to the user who created the integration when no manual trigger actor exists. If no authorized audit actor is available, the resource fails closed as `missing_audit_actor` before a native writer runs.
 
@@ -111,7 +127,31 @@ Operational bounds are deliberate:
 | Run conflicts retained | 10,000 |
 | Native stale/archive mutation batch | 500 |
 
+**Fail small.** A problem with one record costs that record, not the run. Weavestream skips the record with a `validation` gap (its field paths, never its values), keeps the last-known-good data, and marks the traversal non-authoritative so nothing is archived. These cases are record gaps:
+
+- Two records with the same stable identity but different content (`conflicting_duplicate_identity`). All copies are skipped.
+- Records that give one subnet different facts or gateways (`conflicting_subnet_facts`, `conflicting_subnet_gateways`). All records for that subnet are skipped.
+- A record with a gateway that is not valid, or with more than one gateway for one subnet (`invalid_static_gateway`, `conflicting_subnet_gateways`).
+- A record with managed-region markers Weavestream cannot read (`invalid_managed_region`), or a relationship to an endpoint kind Weavestream does not model (`unsupported_relationship_endpoint`).
+- A record the transform cannot read for any other reason (`unreadable_source_record`, `record_transform_failed`).
+- A Breeze "blocked" notice Weavestream cannot read, or one for a different resource (`unreadable_blocked_notice`, `blocked_notice_other_resource`).
+- A gap notice from the driver that is malformed, and gap notices past the per-page limit (`invalid_blocked_input`, `gap_observation_overflow`).
+
 Opaque Breeze cursors bind the resource, filters, mode, and snapshot and expire after 24 hours. Weavestream requires a stable `schemaVersion` and snapshot across pages, rejects cursor cycles and high-water regression, and advances completion/high-water only after a successful authoritative terminal page.
+
+## Sync holds
+
+Weavestream never archives or blanks synced data because of one surprising Breeze response. These rules apply to every integration that syncs through the reconstruction pipeline, not only Breeze.
+
+**Two misses before archiving.** When a full sync does not see a record, Weavestream only notes the miss. The record is marked stale and its asset, article, or subnet is archived only when a later full sync, at least 12 hours after the first miss, also does not see it, and no sync saw it in between. A record that comes back in between starts over. The Runs tab counts records that were missed but not archived as **not seen**. Records synced before this rule existed start with no miss, so the first full sync after an upgrade archives nothing.
+
+**Mass-removal hold.** When the second misses of one company mapping and resource are at least 3 records and at least 10% of its synced records, Weavestream archives none of them. The run shows a warning ("Breeze RMM returned far fewer … records than before. Nothing was archived."), and the integration page shows a hold.
+
+**Field hold.** When Breeze stops sending a field that was always present (for example after a rename), the affected pages write nothing, their records count as blocked, and the run shows a warning that names the field path, never a value. No stale sweep runs for that resource. The hold clears by itself after a clean sync in which the field is back.
+
+**Version hold.** When Breeze reports a partner API `schemaVersion` Weavestream does not know, the resource reads nothing from that response. It writes nothing and archives nothing, its cursor is reset, and the run shows **paused**. The integration page shows one **Unknown source version** hold per company with the version label (letters, digits, `.`, `_`, and `-` only, at most 32 characters; anything else shows as "no readable schema version reported"). The hold stays until a Weavestream release knows the version or an admin accepts it.
+
+**Accepting changes.** The integration page lists every open hold (resource, company, kind, since when, and a short detail). When the change in Breeze is expected, select **Accept changes from Breeze RMM** next to **Run sync now** on the Credentials & schedule tab. The option shows only while a hold is open and needs the integration configuration permission. The run is always a full sync. It archives held records that were missed twice (the two-miss rule still applies), writes pages despite missing fields, rebuilds the field baseline from this sync, reads a response with any `schemaVersion`, and clears all holds. Weavestream stores the version it read as accepted for that company and resource, so later scheduled runs read it without a new hold. A different version later pauses again. It is audited as `integration.sync.accept_source_changes` with counts only.
 
 ## Completeness, stale records, and audits
 
@@ -121,9 +161,9 @@ The reconstruction view reports six separate states:
 |---|---|
 | Synchronized current | Current Breeze-owned native evidence exists. |
 | Manually documented | Required local evidence is supplied and manually owned. Protect it during mapping changes. |
-| Secret blocked | Breeze withheld a definition, or Weavestream rejected it because secret-like material was detected. The gap message names the side that withheld the record. Document the fact safely; never paste the rejected value into a gap. |
+| Secret blocked | Breeze withheld a definition, or Weavestream's final write check found secret-like material that in-place withholding did not remove. Document the fact safely; never paste the rejected value into a gap. |
 | Missing | A required fact or dependency is absent. Restore the source endpoint/mapping or document it manually. |
-| Stale | A complete full traversal no longer saw the binding. Confirm the source deletion; last-known native/manual history is retained. |
+| Stale | Two complete full traversals, at least 12 hours apart, no longer saw the binding. Confirm the source deletion; last-known native/manual history is retained. |
 | Synchronization error | A transport, schema, validation, or write failure prevented current evidence. Correct the failure and rerun. |
 
 The checklist is evaluated for every Breeze resource of every mapped company. Each capability without evidence produces one gap that starts with "Reconstruction checklist:". These gaps are documentation items, not missing Breeze data. A resource such as Device software cannot supply evidence for most capabilities, so a tenant with many resources and companies shows hundreds of checklist gaps until an operator documents each fact in a form the evaluator recognizes. Each gap message lists that form. The evaluator matches an asset field by its **slug**, never by its value, so backup instructions typed into a generic Notes field do not clear a gap. A linked article is an article related to an item this resource synced; its manually authored text must contain the listed phrase.
@@ -141,7 +181,7 @@ The checklist is evaluated for every Breeze resource of every mapped company. Ea
 | Post restoration validation | A field slug containing `post_restoration_validation` or `validation_steps`; article text "post-restoration validation" or "validation steps". |
 | Vendor escalation contact | A field slug containing `vendor_contact`, `escalation_contact`, or `support_contact`; article text "vendor contact", "escalation contact", or "support contact". |
 
-The Secret-blocked counter in this view counts capabilities, not gaps: a withheld record only moves the counter when its source resource maps to a capability (sites, scripts, automations, backup configurations, relations, subnets, and IP reservations). The per-run "secret blocked" total on the Runs tab counts every withheld record.
+The Secret-blocked counter in this view counts capabilities, not gaps: a withheld record only moves the counter when its source resource maps to a capability (sites, scripts, automations, backup configurations, relations, subnets, and IP reservations). The per-run "secret blocked" total on the Runs tab counts every withheld record. A record that synced with some values withheld counts under "values withheld", not "secret blocked".
 
 Staling preserves target IDs, provenance dates, checksums, manual content, and history. Assets, articles, and subnets owned only by stale Breeze bindings are soft-archived; reservations and relations are retained. A returned source record reuses and restores its original target, clears `staleSince`, and becomes active. Repeated successful runs are idempotent.
 
@@ -172,7 +212,7 @@ If the Weavestream integration ciphertext cannot be decrypted after restore, rec
 
 ### Schema, cursor, or malformed-page failure
 
-Pause the schedule if failures repeat. Preserve the failed run and gap evidence, confirm Breeze still returns schema version `1`, and upgrade whichever side owns the contract change. Never edit an opaque cursor or force the old checkpoint forward. After the contract is compatible, run a full dry run followed by a real full traversal. Unknown schema, malformed JSON, repeated cursor, invalid identity, or cross-company data fails before the affected page writes.
+An unknown schema version pauses the resource with a version hold; it does not fail. Check the Breeze release notes for the new version. If the change is expected, select **Accept changes from Breeze RMM**, or wait for a Weavestream release that knows the version. For other failures, pause the schedule if they repeat, preserve the failed run and gap evidence, and upgrade whichever side owns the contract change. Never edit an opaque cursor or force the old checkpoint forward. After the contract is compatible, run a full dry run followed by a real full traversal. Malformed JSON, a repeated cursor, or cross-company data fails before the affected page writes.
 
 ### Rate limiting, timeout, or provider outage
 
@@ -180,6 +220,13 @@ Honor `Retry-After`, reduce schedule/concurrency pressure if needed, and wait fo
 
 ### Missing dependency or blocked definition
 
-A resource is skipped only when a resource it depends on ran in the same run and failed. A dependency that is disabled, or has nothing to sync, does not skip it: each record whose link target is not synced becomes a safe gap instead of a dangling or cross-company relation. Device relationships depends only on sites, devices, virtual machines, and network equipment. To clear such gaps, enable the endpoint resource, map both relation endpoints to the same company, and grant the service principal the exact read scope. A secret-blocked item must be rewritten at its source to contain only durable non-secret reconstruction facts, then rerun; Weavestream does not offer a bypass that stores the rejected value.
+A resource is never skipped because of its dependencies. When a parent resource failed, is disabled, or has nothing to sync, each record whose link target is not synced becomes a safe `missing_dependency` gap instead of a dangling or cross-company relation. Device relationships depends only on sites, devices, virtual machines, and network equipment. To clear such gaps, enable the endpoint resource, map both relation endpoints to the same company, and grant the service principal the exact read scope. A secret-blocked item must be rewritten at its source to contain only durable non-secret reconstruction facts, then rerun; Weavestream does not offer a bypass that stores the rejected value.
 
-Two messages report a withheld record. "Breeze withheld a … record" means the Breeze partner API redacted the record before it left Breeze; its gap details carry the field paths Breeze reported. "Weavestream withheld a … record" means the record arrived in full and Weavestream's own inspection quarantined it because a value looked like a credential (a forbidden key name such as `password` or `token`, credential syntax in script content, or an encoded token). The message names the record and the field path that matched, for example `features[1].settings.destination.secretAccessKey`, never the value. A key that is not a plain identifier (for example one that contains `=` or spaces) is shown as `[redacted]`, and a long path keeps its end. A credential-named field with nothing in it (blank text, `null`, a boolean, an object with no keys, or a list of only those) is not withheld, so an empty S3 destination form does not block a policy. Weavestream withholds the complete record, so one flagged value hides every fact in that policy, script, automation, backup configuration, custom field, or custom-field value. Plain names, hostnames, package names, and URLs are not treated as credentials when they sit in a top-level schema label field: a record's name, description, category, or filter fields, a dropdown, number, boolean, or date custom field, or a free-text custom field whose name is itself a descriptor ("Hostname", "Asset tag", "Rack"). Anything inside free-form JSON — a policy feature's settings, a script's parameters, an automation's trigger, conditions, or actions, a backup configuration's notes — is inspected strictly whatever its keys are called, and so is a free-text custom field with any other name. A long hyphenated value in those positions is still withheld even when it reads like words, because a word-list passphrase and a hyphenated name cannot be told apart. Name such a field for what it holds, or shorten the value. A custom field whose name contains "passphrase" is withheld outright, like "password" or "token". The Runs tab labels both cases "secret blocked".
+**Values withheld in place.** Weavestream withholds a value, not a record. When a value in a synced record looks like a credential, Weavestream replaces it with `[withheld]` and syncs the rest of the record. In script content and other long text, only the matched part is replaced, so the script stays readable. The run shows **warnings**, and the conflict list has one "values withheld" line per record with the count and the field paths (for example `features[1].settings.destination.secretAccessKey`), never the value. A key that is not a plain identifier (for example one that contains `=` or spaces) shows as `[redacted]`, and a long path keeps its end. These values are withheld:
+
+- The value of a field whose name is a credential name (for example `password`, `secret`, `token`, `apiKey`, `secretAccessKey`, `privateKey`, `psk`). An empty value (blank text, `null`, a boolean, a masked value such as `********`, an object with no keys, or a list of only those) is not withheld, so an empty S3 destination form shows as empty.
+- The value of a custom field whose name is a credential name, for example "Local admin password".
+- A credential assignment in text, for example `$Password = '…'`, `API_KEY=…`, `--password …`, or `ConvertTo-SecureString '…' -AsPlainText`.
+- A value with a known credential shape: a private key block, a bearer or basic authorization value, user information in a URL, a GitHub, Slack, OpenAI-style, AWS, or Google API key, a JSON Web Token, or a long random string.
+
+Breeze withholds credential fields before they leave Breeze. "Breeze withheld a … record" means the Breeze partner API held back the record; its gap details carry the field paths Breeze reported. Weavestream's own check is a second defense and does not replace that. A long hyphenated value that contains digits can look random and be withheld; name such a field for what it holds, or shorten the value.

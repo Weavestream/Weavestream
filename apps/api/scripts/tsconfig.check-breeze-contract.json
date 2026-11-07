@@ -1,0 +1,17 @@
+{
+  // Compiles scripts/check-breeze-contract.ts and the driver modules it
+  // imports for the scheduled Breeze contract check
+  // (.github/workflows/breeze-contract.yml). Output goes below
+  // node_modules/.cache so it is never committed and still resolves the
+  // workspace packages.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "outDir": "../node_modules/.cache/breeze-contract-check",
+    "noEmit": false,
+    "declaration": false,
+    "sourceMap": false,
+    "types": ["node"]
+  },
+  "include": ["check-breeze-contract.ts"]
+}

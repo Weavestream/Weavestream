@@ -389,12 +389,12 @@ describe('IntegrationCompletenessService', () => {
     expect(elapsedMs).toBeLessThan(1_000);
   });
 
-  it('does not treat Task 7 restore capabilities as a procedure without notes and maps real gap sourceResource', async () => {
+  it('does not treat a Breeze backup article as a restore procedure and maps real gap sourceResource', async () => {
     const backupRecord = transformBreezeRecord('backup-configurations', {
       ...breezeBase('00000000-0000-4000-8000-000000000041'),
       sourceScope: 'organization', name: 'Backup', kind: 'profile', description: null,
       active: true, selections: {}, destinationId: '00000000-0000-4000-8000-000000000042',
-      schedule: null, retention: null, exclusions: [], restore: { types: ['full'], notes: null },
+      schedule: null, retention: null, exclusions: [],
     })[0]!;
     const backup = backupRecord.reconstructionInput;
     if (backup?.targetKind !== 'article') throw new Error('Expected Task 7 backup article.');

@@ -28,6 +28,7 @@ import {
   type CreateIntegrationResourceInput,
   type ReplaceFieldMappingsInput,
   type TriggerSyncInput,
+  type IntegrationSyncHoldDto,
   type UpdateIntegrationCompanyMappingInput,
   type UpdateIntegrationInput,
   type UpdateIntegrationResourceInput,
@@ -577,13 +578,37 @@ export class IntegrationsController {
 
   @Post(':id/sync')
   @RequirePermission('sync.trigger')
-  triggerSync(
+  async triggerSync(
     @CurrentUser() user: AuthedUser,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body(new ZodBody(triggerSyncSchema)) dto: TriggerSyncInput,
     @Req() req: Request,
   ) {
-    return this.sync.triggerManual(user, id, dto.dryRun, meta(req), dto.mode);
+    if (!dto.acceptSourceChanges) {
+      return this.sync.triggerManual(user, id, dto.dryRun, meta(req), dto.mode);
+    }
+    // Accepting held source changes can archive records a mass-removal hold
+    // kept and rebuilds the field baseline, so it is an integration
+    // configuration decision: check `integration.manage` here, on top of
+    // the route's `sync.trigger`, instead of relying on the two sharing a
+    // capability today.
+    const decision = await this.permissions.can(user, 'integration.manage');
+    if (!decision.allowed) {
+      throw new ForbiddenException('Accepting source changes requires permission to configure integrations.');
+    }
+    if (dto.dryRun) {
+      throw new BadRequestException('A dry run cannot accept source changes.');
+    }
+    // Held removals are archived only by the stale sweep, which runs on a
+    // full traversal, so an accepting run is always a full run.
+    return this.sync.triggerManual(user, id, false, meta(req), 'full', { acceptSourceChanges: true });
+  }
+
+  @Get(':id/holds')
+  @RequirePermission('integration.manage')
+  async listHolds(@Param('id', new ParseUUIDPipe()) id: string): Promise<IntegrationSyncHoldDto[]> {
+    const holds = await this.sync.listHolds(id);
+    return holds.map(({ heldCount: _heldCount, ...hold }) => hold);
   }
 
   @Get(':id/runs')

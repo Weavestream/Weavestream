@@ -1752,6 +1752,14 @@ model IntegrationSyncRun {
   deliveryKey   String?              @unique @map("delivery_key") @db.VarChar(512)
   status        IntegrationRunStatus @default(queued)
   dryRun        Boolean              @default(false) @map("dry_run")
+  /// Manual run that accepts held source changes (field drift, mass
+  /// removal). Set only by an operator with `integration.manage`.
+  acceptSourceChanges Boolean        @default(false) @map("accept_source_changes")
+  /// Server release the source reported for this run (Breeze `/health`
+  /// `version`). Sanitized label; NULL when unknown or the read failed.
+  sourceServerVersion String?        @map("source_server_version") @db.VarChar(64)
+  /// Source API schema version seen for this run (Breeze `schemaVersion`).
+  sourceSchemaVersion String?        @map("source_schema_version") @db.VarChar(64)
   triggeredBy   String?              @map("triggered_by") @db.Uuid
   startedAt     DateTime?            @map("started_at")
   finishedAt    DateTime?            @map("finished_at")
@@ -1828,6 +1836,10 @@ model IntegrationSyncRecord {
   state                       IntegrationSyncState  @default(active)
   lastSeenAt                  DateTime              @map("last_seen_at")
   staleSince                  DateTime?             @map("stale_since")
+  /// When a full traversal last did not see this binding. A binding is
+  /// archived only on a second miss >= 12 h after this, with no sighting in
+  /// between (`missedAt > lastSeenAt`). Null = never missed.
+  missedAt                    DateTime?             @map("missed_at")
   sourceUpdatedAt             DateTime?             @map("source_updated_at")
   provenance                  Json                  @default("{}")
   /// SHA-256 hex of the canonicalised JSON body returned by the driver
@@ -1900,6 +1912,23 @@ model IntegrationSyncCheckpoint {
   /// mode) carried. Empty = unknown (never synced, no legacy records, or
   /// too many keys); Field mappings then flags nothing.
   sourceFields                String[]            @default([]) @map("source_fields")
+  /// Presence baseline of the source fields Weavestream reads, from the last
+  /// clean traversal: { v, updatedAt, records, paths: { key: { present, objects } } }.
+  /// Key paths and counts only, never values.
+  fieldPresence               Json?               @map("field_presence")
+  /// The source stopped sending a watched field; those pages wrote nothing.
+  /// { since, paths }. Cleared by a clean traversal or an accepting run.
+  fieldHold                   Json?               @map("field_hold")
+  /// A full traversal would have archived too many bindings; nothing was
+  /// archived. { since, count, total }. Cleared without a hold or on accept.
+  removalHold                 Json?               @map("removal_hold")
+  /// The source reported a schema version Weavestream does not know; the
+  /// resource wrote and archived nothing. { since, version } (a sanitized
+  /// version label). Cleared by the next readable page or on accept.
+  versionHold                 Json?               @map("version_hold")
+  /// The source schema version an operator accepted with an accepting run
+  /// (`integration.manage`). Later runs read that version without a hold.
+  acceptedSourceVersion       String?             @map("accepted_source_version") @db.VarChar(32)
   createdAt                   DateTime            @default(now()) @map("created_at")
   updatedAt                   DateTime            @updatedAt @map("updated_at")
 

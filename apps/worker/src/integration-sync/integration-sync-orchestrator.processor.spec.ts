@@ -48,6 +48,11 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
   const integrationId = '00000000-0000-0000-0000-000000000011';
   const actorId = '00000000-0000-0000-0000-000000000012';
 
+  const sourceVersions = { recordForRun: jest.fn() };
+  beforeEach(() => {
+    sourceVersions.recordForRun.mockReset().mockResolvedValue(undefined);
+  });
+
   function handleOf(worker: IntegrationSyncOrchestratorWorker) {
     return (worker as unknown as { handle(job: { data: unknown }): Promise<unknown> }).handle.bind(worker);
   }
@@ -64,7 +69,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
       failRun: jest.fn(),
     };
     const worker = new IntegrationSyncOrchestratorWorker(
-      {} as never, {} as never, prisma as never, sync as never,
+      {} as never, {} as never, prisma as never, sync as never, sourceVersions as never,
     );
 
     await expect(handleOf(worker)({ id: 'tick-1', data: { kind: 'scheduled', integrationId } } as never)).resolves.toEqual({
@@ -74,6 +79,11 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
       integrationId, undefined, expect.any(Date), 'scheduled:tick-1',
     );
     expect(sync.beginRun).toHaveBeenCalledWith('scheduled-run');
+    // Early warning: the source version is saved once the jobs are queued.
+    expect(sourceVersions.recordForRun).toHaveBeenCalledWith('scheduled-run');
+    expect(sourceVersions.recordForRun.mock.invocationCallOrder[0]).toBeGreaterThan(
+      sync.beginRun.mock.invocationCallOrder[0]!,
+    );
   });
 
   it('binds a retry to its unique scheduled delivery instead of reusing another active run', async () => {
@@ -88,7 +98,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
       failRun: jest.fn(),
     };
     const worker = new IntegrationSyncOrchestratorWorker(
-      {} as never, {} as never, prisma as never, sync as never,
+      {} as never, {} as never, prisma as never, sync as never, sourceVersions as never,
     );
 
     await expect(handleOf(worker)({
@@ -99,6 +109,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
     );
     expect(sync.beginRun).toHaveBeenCalledWith('delivery-run');
     expect(sync.failRun).not.toHaveBeenCalled();
+    expect(sourceVersions.recordForRun).not.toHaveBeenCalled();
   });
 
   it('does not fan out a distinct occurrence that coalesced into an active scheduled run', async () => {
@@ -118,7 +129,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
       failRun: jest.fn(),
     };
     const worker = new IntegrationSyncOrchestratorWorker(
-      {} as never, {} as never, prisma as never, sync as never,
+      {} as never, {} as never, prisma as never, sync as never, sourceVersions as never,
     );
 
     await expect(handleOf(worker)({
@@ -144,7 +155,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
       failRun: jest.fn(),
     };
     const worker = new IntegrationSyncOrchestratorWorker(
-      {} as never, {} as never, prisma as never, sync as never,
+      {} as never, {} as never, prisma as never, sync as never, sourceVersions as never,
     );
 
     await expect(handleOf(worker)({
@@ -170,7 +181,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
       failRun: jest.fn(),
     };
     const worker = new IntegrationSyncOrchestratorWorker(
-      {} as never, {} as never, prisma as never, sync as never,
+      {} as never, {} as never, prisma as never, sync as never, sourceVersions as never,
     );
 
     await expect(handleOf(worker)({
@@ -191,7 +202,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
     };
     const sync = { beginRun: jest.fn(), failRun: jest.fn() };
     const worker = new IntegrationSyncOrchestratorWorker(
-      {} as never, {} as never, prisma as never, sync as never,
+      {} as never, {} as never, prisma as never, sync as never, sourceVersions as never,
     );
 
     await handleOf(worker)({ data: {
@@ -203,6 +214,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
     });
     expect(prisma.integrationSyncRun.findFirst).not.toHaveBeenCalled();
     expect(sync.beginRun).toHaveBeenCalledWith(integrationId);
+    expect(sourceVersions.recordForRun).toHaveBeenCalledWith(integrationId);
   });
 
   it('recovers a drained pre-DAG manual job through the legacy most-recent-run lookup', async () => {
@@ -217,7 +229,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
     };
     const sync = { beginRun: jest.fn(), failRun: jest.fn() };
     const worker = new IntegrationSyncOrchestratorWorker(
-      {} as never, {} as never, prisma as never, sync as never,
+      {} as never, {} as never, prisma as never, sync as never, sourceVersions as never,
     );
 
     await expect(handleOf(worker)({ data: {
@@ -243,7 +255,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
     };
     const sync = { beginRun: jest.fn(), failRun: jest.fn() };
     const worker = new IntegrationSyncOrchestratorWorker(
-      {} as never, {} as never, prisma as never, sync as never,
+      {} as never, {} as never, prisma as never, sync as never, sourceVersions as never,
     );
 
     await expect(handleOf(worker)({ data: {
@@ -262,7 +274,7 @@ describe('IntegrationSyncOrchestratorWorker persisted modes', () => {
     };
     const sync = { beginRun: jest.fn(), failRun: jest.fn() };
     const worker = new IntegrationSyncOrchestratorWorker(
-      {} as never, {} as never, prisma as never, sync as never,
+      {} as never, {} as never, prisma as never, sync as never, sourceVersions as never,
     );
 
     await expect(handleOf(worker)({ data: {

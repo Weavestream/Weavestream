@@ -161,6 +161,7 @@ export function IntegrationTabs({
   driver,
   canManageLayouts = true,
   differenceCount = null,
+  syncHoldCount = 0,
 }: {
   initialTab: string;
   integration: IntegrationDto;
@@ -170,6 +171,8 @@ export function IntegrationTabs({
   canManageLayouts?: boolean;
   /** Open differences, for the tab badge; null when unknown. */
   differenceCount?: number | null;
+  /** Open sync holds; the Run sync control offers to accept them. */
+  syncHoldCount?: number;
 }) {
   const router = useRouter();
   const sp = useSearchParams();
@@ -314,6 +317,7 @@ export function IntegrationTabs({
             integration={integration}
             mappings={mappings}
             driver={driver}
+            syncHoldCount={syncHoldCount}
           />
         )}
         {tab === 'orgs' && (
@@ -328,7 +332,12 @@ export function IntegrationTabs({
           <DifferencesTab integrationId={integration.id} mappings={mappings} sourceLabel={driver?.label ?? integration.name} />
         )}
         {tab === 'runs' && (
-          <RunsTab integration={integration} runs={runs} mappings={mappings} />
+          <RunsTab
+            integration={integration}
+            runs={runs}
+            mappings={mappings}
+            sourceLabel={driver?.label ?? integration.name}
+          />
         )}
         {tab === 'completeness' && (
           <CompletenessTab

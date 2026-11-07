@@ -98,6 +98,17 @@ export interface FetchRecordsContext extends IntegrationContext {
   readonly mode: 'incremental' | 'full';
   readonly updatedSince: string | null;
   readonly snapshotAt: string | null;
+  /**
+   * A source schema version an operator accepted earlier (stored on the
+   * sync checkpoint), or null. A driver that checks the source version
+   * accepts this one as well as the versions it knows.
+   */
+  readonly acceptedSourceVersion?: string | null;
+  /**
+   * The run accepts held source changes (`integration.manage`): a driver
+   * that checks the source version accepts any well-formed version.
+   */
+  readonly acceptAnySourceVersion?: boolean;
 }
 
 /**
@@ -205,6 +216,43 @@ export interface DriverFetchPage {
   blockedInputs?: DriverBlockedInput[];
   sourceHighWater?: string | null;
   terminal?: boolean;
+  /**
+   * Optional field-presence report for this page, from the RAW source
+   * records: for each field path Weavestream reads, how many objects at
+   * that location carried the key (`present`) and how many objects were at
+   * that location (`objects`). Key paths and counts only, never values;
+   * only paths the driver declares, so source-defined keys never appear.
+   * The runner keeps a baseline from clean traversals and holds a page
+   * whose records all lack a field that was always present (a rename or
+   * removal at the source), so a missing key is read as "unknown", never
+   * as "empty".
+   */
+  observedFields?: DriverObservedField[];
+  /**
+   * Records the driver synced with one or more values replaced by
+   * `[withheld]` because they looked like credentials. Record id and key
+   * paths only, never the value. The runner shows each one as a run
+   * warning; the record itself is written as usual.
+   */
+  redactions?: DriverRedaction[];
+}
+
+export interface DriverRedaction {
+  /** Namespaced external id of the source record (`org:resource:id`). */
+  externalId: string;
+  /** How many values were withheld in the record. */
+  count: number;
+  /** Where values were withheld: key names and indexes only. */
+  fieldPaths: string[];
+}
+
+export interface DriverObservedField {
+  /** Field path: dot-separated keys, `[]` for array items (`addresses[].assignment`). */
+  path: string;
+  /** Record variant the location belongs to (`device`, `site`), when records have shapes. */
+  variant?: string;
+  present: number;
+  objects: number;
 }
 
 export interface LegacyDriverFetchPage extends Omit<DriverFetchPage, 'records'> {
@@ -231,6 +279,33 @@ export class DriverResourceUnavailableError extends Error {
     super(message);
     this.name = 'DriverResourceUnavailableError';
   }
+}
+
+/**
+ * The source reported a schema version the driver does not know, and no
+ * operator accepted it. The runner writes and archives nothing for the
+ * resource, records a version hold on its checkpoint, and ends the resource
+ * as paused. `message` is operator text and must not carry source values
+ * other than the sanitized `sourceVersion`.
+ */
+export class DriverSourceVersionHoldError extends Error {
+  readonly code = 'DriverSourceVersionHoldError' as const;
+  constructor(
+    /** Sanitized version label (or `unrecognized`), at most 32 characters. */
+    readonly sourceVersion: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'DriverSourceVersionHoldError';
+  }
+}
+
+/** What `IntegrationDriver.readSourceVersion` reports. */
+export interface DriverSourceVersion {
+  /** Server release (Breeze `/health` `version`), or null when unknown. */
+  serverVersion: string | null;
+  /** API schema version (Breeze `schemaVersion`), or null when unknown. */
+  schemaVersion: string | null;
 }
 
 export class DriverRateLimitError extends Error {
@@ -292,6 +367,14 @@ export interface IntegrationDriver {
    * unreachable host / wrong tenant.
    */
   testConnection(ctx: IntegrationContext): Promise<{ ok: true; details?: string }>;
+
+  /**
+   * Optional early warning: the version the source reports, read once per
+   * sync run and saved on the run. Must not throw for an unreachable or
+   * unexpected source: return null for what it cannot read. Labels are
+   * sanitized again by the caller; never return response bodies.
+   */
+  readSourceVersion?(ctx: IntegrationContext): Promise<DriverSourceVersion>;
 
   /** List external organisations / tenants the credentials can see. */
   listSourceOrgs(ctx: IntegrationContext): Promise<SourceOrgDto[]>;

@@ -191,3 +191,127 @@ it('shows warnings for a resumed incomplete run whose other counters are zero', 
   expect(screen.queryByText('succeeded')).not.toBeInTheDocument();
   expect(screen.getAllByText(/1 incomplete/).length).toBeGreaterThan(0);
 });
+
+it('shows records a full sync did not see without marking the run as warnings', () => {
+  const totals = {
+    fetched: 5, created: 0, updated: 0, unchanged: 5, claimed: 0, archived: 0,
+    skippedAmbiguous: 0, skippedManual: 0, skippedArchived: 0,
+    stale: 0, restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0,
+    incomplete: 0, notSeen: 2,
+  };
+  const run = { id: 'run-missed', mode: 'full', kind: 'scheduled', status: 'succeeded', dryRun: false,
+    createdAt: '2026-07-14T00:00:00.000Z', startedAt: null, totals };
+  render(<RunsTab integration={{ id: 'integration-1', resources: [] } as never} mappings={[]} runs={[run] as never} />);
+  expect(screen.getAllByText(/2 not seen/).length).toBeGreaterThan(0);
+  expect(screen.getAllByText('succeeded').length).toBeGreaterThan(0);
+});
+
+it('shows a run with withheld values as warnings and labels the redaction warning', async () => {
+  const totals = {
+    fetched: 4, created: 4, updated: 0, unchanged: 0, claimed: 0, archived: 0,
+    skippedAmbiguous: 0, skippedManual: 0, skippedArchived: 0,
+    stale: 0, restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0,
+    incomplete: 0, notSeen: 0, redacted: 2, paused: 0,
+  };
+  const run = { id: 'run-redacted', mode: 'full', kind: 'manual', status: 'succeeded', dryRun: false,
+    createdAt: '2026-07-14T00:00:00.000Z', startedAt: null, totals };
+  apiFetch.mockResolvedValueOnce({ ok: true, data: {
+    run,
+    companyResults: [{
+      id: 'result-1', integrationCompanyMappingId: 'mapping-1', companyId: 'company-1',
+      companyName: 'Acme', status: 'succeeded', totals, error: null,
+      conflicts: [{
+        kind: 'secret_redacted', externalId: 'org-1:scripts:s1',
+        message: 'Weavestream withheld 1 value that looked like credentials (content). The rest of the record was synced.',
+      }],
+    }],
+  }});
+  render(<RunsTab integration={{ id: 'integration-1', resources: [] } as never} mappings={[]} runs={[run] as never} />);
+  expect(screen.getAllByText('warnings').length).toBeGreaterThan(0);
+  expect(screen.getAllByText(/2 with values withheld/).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole('button', { name: 'View run details' }));
+  expect(await screen.findByText(/The rest of the record was synced/)).toBeInTheDocument();
+  expect(screen.queryByText('secret blocked')).not.toBeInTheDocument();
+});
+
+it('shows a run the source paused as paused, not succeeded', () => {
+  const totals = {
+    fetched: 0, created: 0, updated: 0, unchanged: 0, claimed: 0, archived: 0,
+    skippedAmbiguous: 0, skippedManual: 0, skippedArchived: 0,
+    stale: 0, restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0,
+    incomplete: 0, notSeen: 0, redacted: 0, paused: 1,
+  };
+  const run = { id: 'run-paused', mode: 'full', kind: 'scheduled', status: 'succeeded', dryRun: false,
+    createdAt: '2026-07-14T00:00:00.000Z', startedAt: null, totals };
+  render(<RunsTab integration={{ id: 'integration-1', resources: [] } as never} mappings={[]} runs={[run] as never} />);
+  expect(screen.getAllByText('paused').length).toBeGreaterThan(0);
+  expect(screen.queryByText('succeeded')).not.toBeInTheDocument();
+  expect(screen.getAllByText(/1 paused/).length).toBeGreaterThan(0);
+});
+
+describe('source version (early warning)', () => {
+  const run = (overrides: Record<string, unknown> = {}) => ({
+    id: 'run-v', mode: 'incremental', kind: 'scheduled', status: 'succeeded', dryRun: false,
+    createdAt: '2026-11-07T00:00:00.000Z', startedAt: null, totals: null, error: null,
+    sourceServerVersion: '0.126.0', sourceSchemaVersion: '1', sourceVersionChange: null,
+    ...overrides,
+  });
+
+  it('shows the source release and schema version in the run details', async () => {
+    apiFetch.mockResolvedValueOnce({ ok: true, data: { run: run(), companyResults: [] } });
+    render(<RunsTab integration={{ id: 'integration-1', name: 'Breeze', resources: [] } as never}
+      mappings={[]} runs={[run()] as never} sourceLabel="Breeze RMM" />);
+    expect(screen.queryByText('new version')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View run details' }));
+    expect(await screen.findByText('source version: 0.126.0')).toBeInTheDocument();
+    expect(screen.getByText('API schema version: 1')).toBeInTheDocument();
+    expect(screen.queryByText(/version changed from/)).not.toBeInTheDocument();
+  });
+
+  it('marks a run whose source release changed and names both versions in the details', async () => {
+    const changed = run({ sourceVersionChange: { from: '0.125.0', to: '0.126.0' } });
+    apiFetch.mockResolvedValueOnce({ ok: true, data: { run: changed, companyResults: [] } });
+    render(<RunsTab integration={{ id: 'integration-1', name: 'Breeze', resources: [] } as never}
+      mappings={[]} runs={[changed] as never} sourceLabel="Breeze RMM" />);
+    expect(screen.getByText('new version').parentElement).toHaveAttribute(
+      'title', 'Breeze RMM version changed from 0.125.0 to 0.126.0 since the previous run.',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'View run details' }));
+    expect(await screen.findByText(
+      'Breeze RMM version changed from 0.125.0 to 0.126.0 since the previous run.',
+    )).toBeInTheDocument();
+  });
+
+  it('shows nothing about versions for a run without them', async () => {
+    const plain = run({ sourceServerVersion: null, sourceSchemaVersion: null });
+    apiFetch.mockResolvedValueOnce({ ok: true, data: { run: plain, companyResults: [] } });
+    render(<RunsTab integration={{ id: 'integration-1', name: 'Breeze', resources: [] } as never}
+      mappings={[]} runs={[plain] as never} />);
+    fireEvent.click(screen.getByRole('button', { name: 'View run details' }));
+    expect(await screen.findByText(/kind: scheduled/)).toBeInTheDocument();
+    expect(screen.queryByText(/source version|API schema version/)).not.toBeInTheDocument();
+  });
+
+  it('marks the change on the phone card too', () => {
+    mobile = true;
+    const changed = run({ sourceVersionChange: { from: '0.125.0', to: '0.126.0' } });
+    render(<RunsTab integration={{ id: 'integration-1', name: 'Breeze', resources: [] } as never}
+      mappings={[]} runs={[changed] as never} sourceLabel="Breeze RMM" />);
+    expect(screen.getByText('new version')).toBeInTheDocument();
+  });
+});
+
+it('shows a run with a mass-removal hold as warnings, not as a routine first miss', () => {
+  const totals = {
+    fetched: 6, created: 0, updated: 0, unchanged: 6, claimed: 0, archived: 0,
+    skippedAmbiguous: 0, skippedManual: 0, skippedArchived: 0,
+    stale: 0, restored: 0, blocked: 0, secretBlocked: 0, missingDependency: 0, errors: 0,
+    incomplete: 0, notSeen: 4, redacted: 0, paused: 0, held: 4,
+  };
+  const run = { id: 'run-held', mode: 'full', kind: 'scheduled', status: 'succeeded', dryRun: false,
+    createdAt: '2026-07-14T00:00:00.000Z', startedAt: null, totals };
+  render(<RunsTab integration={{ id: 'integration-1', resources: [] } as never} mappings={[]} runs={[run] as never} />);
+  expect(screen.getAllByText('warnings').length).toBeGreaterThan(0);
+  expect(screen.queryByText('succeeded')).not.toBeInTheDocument();
+  expect(screen.getAllByText(/4 held for review/).length).toBeGreaterThan(0);
+});

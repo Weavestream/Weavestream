@@ -35,20 +35,20 @@
   }
 }
 
-/* Theme-aware wordmark logo. Both variants are rendered by `AppLogo`
- * so SSR can pick the correct one purely via CSS — no hydration flash.
- * `<html data-theme>` is always set to 'light' or 'dark' by the root
- * layout, with 'dark' as the default. */
-.app-logo-wordmark--light {
+/* Theme-aware logo (wordmark and mark). Both variants are rendered by
+ * `AppLogo` so SSR can pick the correct one purely via CSS — no
+ * hydration flash. `<html data-theme>` is always set to 'light' or
+ * 'dark' by the root layout, with 'dark' as the default. */
+.app-logo--light {
   display: none;
 }
-.app-logo-wordmark--dark {
+.app-logo--dark {
   display: inline-block;
 }
-[data-theme='light'] .app-logo-wordmark--light {
+[data-theme='light'] .app-logo--light {
   display: inline-block;
 }
-[data-theme='light'] .app-logo-wordmark--dark {
+[data-theme='light'] .app-logo--dark {
   display: none;
 }
 

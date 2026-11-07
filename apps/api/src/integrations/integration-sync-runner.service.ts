@@ -28,8 +28,11 @@ import { IntegrationDriverRegistry } from './drivers/integration-driver.registry
 import {
   DriverAuthError,
   DriverResourceUnavailableError,
+  DriverSourceVersionHoldError,
   type DriverFetchPage,
+  type DriverRedaction,
   type DriverBlockedInput,
+  type DriverObservedField,
   type DriverRecord,
   type FetchRecordsContext,
   type LegacyDriverRecord,
@@ -57,6 +60,23 @@ import {
   integrationTargetAuditAfter,
 } from '../audit/audit-actions.js';
 import { RECONSTRUCTION_RUNTIME_LIMITS } from './reconstruction/reconstruction-limits.js';
+import {
+  PRESENCE_BASELINE_MIN_RECORDS,
+  accumulatePresence,
+  buildFieldPresence,
+  fieldDriftMessage,
+  findFieldDrift,
+  presenceKey,
+  mergeFieldHold,
+  parseFieldHold,
+  parseFieldPresence,
+  parseRemovalHold,
+  parseVersionHold,
+  removalHoldMessage,
+  validateObservedFields,
+  watchedPaths,
+  type PresenceCount,
+} from './sync-holds.js';
 
 export { RECONSTRUCTION_RUNTIME_LIMITS } from './reconstruction/reconstruction-limits.js';
 
@@ -71,6 +91,14 @@ export interface MappingRunInput {
   /** Triggered-by user id for audit attribution; null on scheduled runs. */
   actorId: string | null;
   mode?: 'incremental' | 'full';
+  /**
+   * The run accepts held source changes (read from the run row, set only by
+   * an operator with `integration.manage`): field drift does not hold
+   * pages, the mass-removal threshold is skipped (the two-miss rule stays),
+   * the presence baseline is rebuilt, and both holds clear. Ignored on dry
+   * runs.
+   */
+  acceptSourceChanges?: boolean;
 }
 
 export interface MappingRunOutcome {
@@ -93,6 +121,10 @@ export interface ValidatedDriverFetchPage {
   blockedInputs: DriverBlockedInput[];
   sourceHighWater: string | null;
   terminal: boolean;
+  /** The driver's field-presence report; null when absent or not well formed. */
+  observedFields: DriverObservedField[] | null;
+  /** Records synced with values withheld; malformed entries are dropped. */
+  redactions: DriverRedaction[];
 }
 
 export function validateDriverFetchPage(
@@ -136,38 +168,34 @@ export function validateDriverFetchPage(
   if (page.sourceHighWater && page.sourceHighWater > snapshotAt) {
     throw new BadRequestException('Driver page sourceHighWater cannot exceed snapshotAt.');
   }
-  const blockedInputs = page.blockedInputs ?? [];
-  if (
-    !Array.isArray(blockedInputs) ||
-    blockedInputs.length > RECONSTRUCTION_RUNTIME_LIMITS.gapsPerPage
-  ) {
-    throw new BadRequestException('Driver blockedInputs must contain at most 1000 entries.');
+  const rawBlockedInputs = page.blockedInputs ?? [];
+  if (!Array.isArray(rawBlockedInputs)) {
+    throw new BadRequestException('Driver blockedInputs must be a list.');
   }
-  for (const blocked of blockedInputs) {
-    if (
-      !blocked ||
-      blocked.message.length < 1 ||
-      blocked.message.length > 512 ||
-      (blocked.externalId !== null && blocked.externalId.length > 1_024)
-    ) {
-      throw new BadRequestException('Driver blocked input metadata is invalid or unbounded.');
-    }
-    const at = state.traversalStartedAt;
-    const parsed = integrationReconstructionGapInputSchema.safeParse({
-      companyId: '00000000-0000-0000-0000-000000000000',
-      integrationCompanyMappingId: '00000000-0000-0000-0000-000000000000',
-      resourceId: '00000000-0000-0000-0000-000000000000',
-      externalId: blocked.externalId,
-      kind: blocked.kind,
-      message: blocked.message,
-      details: blocked.details ?? {},
-      firstSeenAt: at,
-      lastSeenAt: at,
-      resolvedAt: null,
+  // A gap notice that is malformed or not sanitized costs that notice, not
+  // the page: it is replaced by a generic gap that keeps the traversal
+  // non-authoritative, so nothing is archived because of it. Past the page
+  // bound, the rest is folded into one overflow gap the same way.
+  const limit = RECONSTRUCTION_RUNTIME_LIMITS.gapsPerPage;
+  const blockedInputs: DriverBlockedInput[] = [];
+  for (const blocked of rawBlockedInputs.slice(0, limit - 1)) {
+    blockedInputs.push(isSanitizedBlockedInput(blocked, state.traversalStartedAt) ? blocked : {
+      kind: 'validation',
+      externalId: null,
+      message: 'The integration reported a record it could not sync, in a form Weavestream could not read.',
+      details: { reasonCode: 'invalid_blocked_input' },
     });
-    if (!parsed.success) {
-      throw new BadRequestException('Driver blocked input metadata is not sanitized.');
-    }
+  }
+  if (rawBlockedInputs.length > limit - 1) {
+    blockedInputs.push({
+      kind: 'validation',
+      externalId: null,
+      message: 'Additional bounded gap observations require operator review.',
+      details: {
+        reasonCode: 'gap_observation_overflow',
+        candidateCount: Math.min(rawBlockedInputs.length - (limit - 1), 1_000_000),
+      },
+    });
   }
   return {
     records: page.records,
@@ -178,7 +206,76 @@ export function validateDriverFetchPage(
     blockedInputs,
     sourceHighWater: page.sourceHighWater ?? null,
     terminal,
+    observedFields: validateObservedFields(page.observedFields),
+    redactions: validateRedactions(page.redactions),
   };
+}
+
+function isSanitizedBlockedInput(blocked: DriverBlockedInput, at: string): boolean {
+  if (
+    !blocked ||
+    typeof blocked.message !== 'string' ||
+    blocked.message.length < 1 ||
+    blocked.message.length > 512 ||
+    (blocked.externalId !== null && (typeof blocked.externalId !== 'string' || blocked.externalId.length > 1_024))
+  ) {
+    return false;
+  }
+  return integrationReconstructionGapInputSchema.safeParse({
+    companyId: '00000000-0000-0000-0000-000000000000',
+    integrationCompanyMappingId: '00000000-0000-0000-0000-000000000000',
+    resourceId: '00000000-0000-0000-0000-000000000000',
+    externalId: blocked.externalId,
+    kind: blocked.kind,
+    message: blocked.message,
+    details: blocked.details ?? {},
+    firstSeenAt: at,
+    lastSeenAt: at,
+    resolvedAt: null,
+  }).success;
+}
+
+const MAX_REDACTIONS_PER_PAGE = 1_000;
+const MAX_REDACTION_PATHS = 20;
+const REDACTION_PATH_PATTERN = /^[A-Za-z0-9_$.[\]()…-]{1,200}$/u;
+
+/**
+ * The driver's redaction report, bounded. A path that is not a plain key
+ * path, or that the scan flags, is dropped (the count stays). An entry
+ * without a usable id is dropped; the record was still written.
+ */
+function validateRedactions(raw: unknown): DriverRedaction[] {
+  if (!Array.isArray(raw)) return [];
+  const output: DriverRedaction[] = [];
+  for (const entry of raw.slice(0, MAX_REDACTIONS_PER_PAGE)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const { externalId, count, fieldPaths } = entry as Partial<DriverRedaction>;
+    if (
+      typeof externalId !== 'string' || externalId.length < 1 || externalId.length > 512 ||
+      scanSensitiveMaterial(externalId) !== 'safe'
+    ) continue;
+    const paths = Array.isArray(fieldPaths)
+      ? fieldPaths
+        .filter((path): path is string =>
+          typeof path === 'string' && REDACTION_PATH_PATTERN.test(path) && scanSensitiveMaterial(path) === 'safe')
+        .slice(0, MAX_REDACTION_PATHS)
+      : [];
+    const safeCount = typeof count === 'number' && Number.isSafeInteger(count) && count > 0
+      ? Math.min(count, 1_000_000)
+      : Math.max(paths.length, 1);
+    output.push({ externalId, count: safeCount, fieldPaths: paths });
+  }
+  return output;
+}
+
+/** Run-warning text for one redacted record: id, count, key paths. Never a value. */
+export function redactionWarningMessage(redaction: DriverRedaction): string {
+  const shown = redaction.fieldPaths.slice(0, 3).join(', ');
+  const more = redaction.fieldPaths.length > 3 ? ` and ${redaction.fieldPaths.length - 3} more` : '';
+  const where = shown ? ` (${shown}${more})` : '';
+  const values = redaction.count === 1 ? '1 value' : `${redaction.count} values`;
+  return `Weavestream withheld ${values} that looked like credentials${where}. The rest of the record was synced.`
+    .slice(0, 500);
 }
 
 function assertIsoDate(value: string, field: string): void {
@@ -295,6 +392,22 @@ export class IntegrationSyncRunnerService {
         },
       },
     });
+    // An accepted source version belongs to the mapping and resource, not to
+    // one mode. A mode with no checkpoint when the version was accepted
+    // (for example the first incremental run after an accepting full run)
+    // reads it from a sibling checkpoint, so it does not pause again.
+    const acceptedSourceVersion = checkpoint?.acceptedSourceVersion
+      ?? (await this.prisma.integrationSyncCheckpoint.findFirst({
+        where: {
+          companyId: mapping.companyId,
+          integrationCompanyMappingId: mapping.id,
+          resourceId: resource.id,
+          acceptedSourceVersion: { not: null },
+        },
+        orderBy: { updatedAt: 'desc' },
+        select: { acceptedSourceVersion: true },
+      }))?.acceptedSourceVersion
+      ?? null;
     const driver = this.drivers.get(mapping.integration.driver);
     const claimUnboundMatches = driver.descriptor?.resources?.some(
       (candidate) =>
@@ -326,6 +439,7 @@ export class IntegrationSyncRunnerService {
       externalOrgId: mapping.externalOrgId,
     });
     const traversalStartedAt = new Date().toISOString();
+    const acceptSourceChanges = input.acceptSourceChanges === true && !input.dryRun;
     const fetchCtx: FetchRecordsContext = {
       config: loaded.config,
       secret: loaded.secret,
@@ -351,6 +465,8 @@ export class IntegrationSyncRunnerService {
         checkpoint?.cursor !== null && checkpoint?.cursor !== undefined && checkpoint.snapshotAt
           ? checkpoint.snapshotAt.toISOString()
           : null,
+      acceptedSourceVersion,
+      acceptAnySourceVersion: acceptSourceChanges,
     };
 
     let cursor = checkpoint?.cursor ?? null;
@@ -377,6 +493,23 @@ export class IntegrationSyncRunnerService {
     // has the whole set; a resumed one leaves the stored keys as they are.
     const sourceFieldKeys = new Set<string>();
     const traversalStartedFresh = cursor === null;
+    // Field presence (see sync-holds.ts): the baseline on this checkpoint
+    // decides which fields are watched, and this traversal's totals rebuild
+    // it when the traversal is clean. Only drivers that report
+    // `observedFields` take part; for the others nothing is watched.
+    const sourceLabel = driver.descriptor?.label ?? mapping.integration.driver;
+    const resourceLabel =
+      declared?.find((candidate) => candidate.key === resource.resourceKey)?.label ??
+      resource.resourceKey;
+    const watched = acceptSourceChanges
+      ? []
+      : watchedPaths(parseFieldPresence(checkpoint?.fieldPresence));
+    const presenceTotals = new Map<string, PresenceCount>();
+    let presenceComplete = true;
+    let presenceRecords = 0;
+    let fieldDriftSeen = false;
+    let fieldHold = parseFieldHold(checkpoint?.fieldHold);
+    const driftWarned = new Set<string>();
     let pages = 0;
     // Per-field legacy projection drops accumulate across the traversal and
     // surface as ONE authority-neutral gap observation per page flush
@@ -406,6 +539,17 @@ export class IntegrationSyncRunnerService {
               externalId: '',
               message: `Skipped resource "${resource.resourceKey}": ${error.message}`.slice(0, 500),
             });
+            return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
+          }
+          // The source reported a schema version Weavestream does not know:
+          // pause. Nothing from this response is read, written, or archived.
+          if (error instanceof DriverSourceVersionHoldError) {
+            if (!input.dryRun) {
+              await this.holdForSourceVersion(mapping, resource.id, mode, checkpoint, error.sourceVersion);
+            }
+            totals.paused = 1;
+            conflicts.length = Math.min(conflicts.length, MAX_RUN_CONFLICTS - 1);
+            conflicts.push({ kind: 'validation_error', externalId: '', message: error.message.slice(0, 500) });
             return { status: 'succeeded', totals, conflicts, error: null, companyId: mapping.companyId, resourceKey: resource.resourceKey };
           }
           throw error;
@@ -438,6 +582,13 @@ export class IntegrationSyncRunnerService {
         }
 
         collectSourceFieldKeys(sourceFieldKeys, page.records);
+        if (!page.observedFields || !accumulatePresence(presenceTotals, page.observedFields)) {
+          presenceComplete = false;
+        }
+        presenceRecords += page.records.length;
+        const fieldDrift = findFieldDrift(watched, page.observedFields);
+        const holdPage = fieldDrift.length > 0;
+        if (holdPage) fieldDriftSeen = true;
 
         const pageTotals = emptyTotals();
         const pageConflicts: SyncRunConflict[] = [];
@@ -474,6 +625,24 @@ export class IntegrationSyncRunnerService {
               observedAt,
             });
           }
+          // Field drift: the source stopped sending a field that was always
+          // present. Write nothing from this page (no record, binding, gap,
+          // or "seen" refresh), so a renamed key never reads as an empty
+          // value, and keep the traversal non-authoritative so no stale
+          // sweep runs. The checkpoint still advances, with a field hold.
+          if (holdPage) {
+            pageAuthoritative = false;
+            pageTotals.fetched += page.records.length;
+            pageTotals.blocked += page.records.length;
+            const newDrift = fieldDrift.filter((path) => !driftWarned.has(presenceKey(path)));
+            if (newDrift.length > 0) {
+              pageConflicts.push({
+                kind: 'validation_error',
+                externalId: '',
+                message: fieldDriftMessage(sourceLabel, resourceLabel, newDrift),
+              });
+            }
+          }
           const pageGaps: Array<{
             externalId: string | null;
             syncRecordId: string | null;
@@ -489,7 +658,7 @@ export class IntegrationSyncRunnerService {
             }
             else droppedGapCount += 1;
           };
-          for (const blocked of page.blockedInputs) {
+          for (const blocked of holdPage ? [] : page.blockedInputs) {
             if (
               blocked.kind === 'synchronization_error' &&
               blocked.details?.retryable === true
@@ -511,7 +680,17 @@ export class IntegrationSyncRunnerService {
               );
             }
           }
-          for (const record of page.records) {
+          // Values withheld in place: the records are written below as usual;
+          // each one is a run warning (id, count, key paths, never a value).
+          for (const redaction of holdPage ? [] : page.redactions) {
+            pageTotals.redacted += 1;
+            pageConflicts.push({
+              kind: 'secret_redacted',
+              externalId: redaction.externalId,
+              message: redactionWarningMessage(redaction),
+            });
+          }
+          for (const record of holdPage ? [] : page.records) {
             pageTotals.fetched += 1;
             let reconstruction: ReconstructionInput | null;
             const safeRecord = record.reconstructionInput === undefined
@@ -748,6 +927,30 @@ export class IntegrationSyncRunnerService {
               observedAt,
             }, pageGaps);
             const authoritativeThroughPage = traversalAuthoritative && pageAuthoritative;
+            const holdData: CheckpointHoldData = {};
+            // A readable page: the source version is known or accepted.
+            if (checkpoint?.versionHold != null) holdData.versionHold = Prisma.DbNull;
+            if (acceptSourceChanges) {
+              // Remember the accepted version on every mode of this scope,
+              // so later runs read it without a hold.
+              holdData.acceptedSourceVersion = page.schemaVersion.slice(0, 32);
+              holdData.versionHold = Prisma.DbNull;
+              if (pages === 1) {
+                await tx.integrationSyncCheckpoint.updateMany({
+                  where: {
+                    companyId: mapping.companyId,
+                    integrationCompanyMappingId: mapping.id,
+                    resourceId: resource.id,
+                    mode: { not: mode },
+                  },
+                  data: { acceptedSourceVersion: holdData.acceptedSourceVersion, versionHold: Prisma.DbNull },
+                });
+              }
+            }
+            if (holdPage) {
+              fieldHold = mergeFieldHold(fieldHold, fieldDrift, observedAt);
+              holdData.fieldHold = fieldHold as unknown as Prisma.InputJsonValue;
+            }
             if (page.terminal && authoritativeThroughPage) {
               await this.provenance.resolveAbsentGaps(tx, {
                 companyId: mapping.companyId,
@@ -764,9 +967,30 @@ export class IntegrationSyncRunnerService {
                   targetKind: resource.targetKind,
                   snapshotAt: observedAt,
                   auditActorId: input.actorId!,
+                  acceptSourceChanges,
                 });
                 pageTotals.stale += reconciled.stale;
                 pageTotals.archived += reconciled.archived;
+                pageTotals.notSeen += reconciled.notSeen;
+                if (reconciled.held) {
+                  // Mass-removal hold: nothing was archived. Keep the first
+                  // `since` so the banner says how long it has waited.
+                  // `held` gives the run a warning badge; `notSeen` alone
+                  // is a routine first miss and does not.
+                  pageTotals.held += reconciled.held.count;
+                  holdData.removalHold = {
+                    since: parseRemovalHold(checkpoint?.removalHold)?.since ?? observedAt.toISOString(),
+                    count: reconciled.held.count,
+                    total: reconciled.held.total,
+                  };
+                  pageConflicts.push({
+                    kind: 'validation_error',
+                    externalId: '',
+                    message: removalHoldMessage(sourceLabel, resourceLabel, reconciled.held),
+                  });
+                } else if (checkpoint?.removalHold != null) {
+                  holdData.removalHold = Prisma.DbNull;
+                }
               }
               // The capability scorecard only applies to dossier drivers
               // (Breeze). Asset-projection drivers clear any previously
@@ -794,6 +1018,35 @@ export class IntegrationSyncRunnerService {
             const sourceFields = page.terminal && authoritativeThroughPage && traversalStartedFresh
               ? { sourceFields: storedSourceFields(sourceFieldKeys) }
               : {};
+            if (page.terminal) {
+              // A clean traversal: seen from its first page, every page
+              // reported presence, and no page drifted.
+              const cleanPresence = traversalStartedFresh && presenceComplete && !fieldDriftSeen;
+              const baseline = cleanPresence
+                ? buildFieldPresence(presenceTotals, presenceRecords, observedAt) as unknown as Prisma.InputJsonValue
+                : Prisma.DbNull;
+              if (acceptSourceChanges) {
+                // Accepted: rebuild the baseline (or drop it when this
+                // traversal cannot rebuild it, so the next clean run does)
+                // and clear the field hold on every mode of this scope, so
+                // the other mode's older baseline does not hold again.
+                await tx.integrationSyncCheckpoint.updateMany({
+                  where: {
+                    companyId: mapping.companyId,
+                    integrationCompanyMappingId: mapping.id,
+                    resourceId: resource.id,
+                    mode: { not: mode },
+                  },
+                  data: { fieldPresence: baseline, fieldHold: Prisma.DbNull },
+                });
+                holdData.fieldPresence = baseline;
+                holdData.fieldHold = Prisma.DbNull;
+              } else if (cleanPresence && presenceRecords >= PRESENCE_BASELINE_MIN_RECORDS) {
+                holdData.fieldPresence = baseline;
+                // The source sends the held fields again.
+                if (checkpoint?.fieldHold != null) holdData.fieldHold = Prisma.DbNull;
+              }
+            }
             await tx.integrationSyncCheckpoint.upsert({
               where: {
                 integrationCompanyMappingId_resourceId_mode: {
@@ -814,6 +1067,7 @@ export class IntegrationSyncRunnerService {
                 lastFullCompletedAt: page.terminal && authoritativeThroughPage && mode === 'full'
                   ? new Date() : null,
                 ...sourceFields,
+                ...holdData,
               },
               update: {
                 cursor: page.terminal ? null : page.cursor,
@@ -826,6 +1080,7 @@ export class IntegrationSyncRunnerService {
                   ...(mode === 'full' ? { lastFullCompletedAt: new Date() } : {}),
                 } : {}),
                 ...sourceFields,
+                ...holdData,
               },
             });
           }
@@ -842,6 +1097,7 @@ export class IntegrationSyncRunnerService {
         }
         traversalAuthoritative = traversalAuthoritative && pageAuthoritative;
         mergePageOutcome(totals, conflicts, pageTotals, pageConflicts);
+        for (const path of fieldDrift) driftWarned.add(presenceKey(path));
         if (page.terminal) {
           // The walk finished, but some records carried a gap (unreadable,
           // withheld, or a link target that is not synced). The resource still
@@ -874,6 +1130,43 @@ export class IntegrationSyncRunnerService {
       conflicts.push({ kind: 'driver_error', externalId: '', message: message.slice(0, 500) });
       return { status: 'failed', totals, conflicts, error: message.slice(0, 4_000), companyId: mapping.companyId, resourceKey: resource.resourceKey };
     }
+  }
+
+  /**
+   * Record a version hold on this scope's checkpoint. The cursor is dropped,
+   * so the walk restarts from its first page once the version is known or
+   * accepted (pages under two versions are never mixed). Nothing else on
+   * the checkpoint changes: no high-water, no completion, no baseline.
+   */
+  private async holdForSourceVersion(
+    mapping: { id: string; companyId: string },
+    resourceId: string,
+    mode: 'incremental' | 'full',
+    checkpoint: { versionHold: Prisma.JsonValue | null } | null,
+    version: string,
+  ): Promise<void> {
+    const versionHold = {
+      since: parseVersionHold(checkpoint?.versionHold)?.since ?? new Date().toISOString(),
+      version: version.slice(0, 32),
+    };
+    await this.prisma.integrationSyncCheckpoint.upsert({
+      where: {
+        integrationCompanyMappingId_resourceId_mode: {
+          integrationCompanyMappingId: mapping.id,
+          resourceId,
+          mode,
+        },
+      },
+      create: {
+        companyId: mapping.companyId,
+        integrationCompanyMappingId: mapping.id,
+        resourceId,
+        mode,
+        cursor: null,
+        versionHold,
+      },
+      update: { cursor: null, schemaVersion: null, versionHold },
+    });
   }
 
   /**
@@ -1536,6 +1829,18 @@ function migrationProvenance(
 
 const MAX_RUN_CONFLICTS = RECONSTRUCTION_RUNTIME_LIMITS.conflictsPerRun;
 
+type JsonColumn = Prisma.InputJsonValue | Prisma.NullTypes.DbNull;
+
+/** Hold and presence columns a page writes on its checkpoint (only the ones that change). */
+interface CheckpointHoldData {
+  fieldPresence?: JsonColumn;
+  fieldHold?: JsonColumn;
+  removalHold?: JsonColumn;
+  versionHold?: JsonColumn;
+  acceptedSourceVersion?: string;
+}
+
+
 class DryRunPageRollback extends Error {}
 
 function mergePageOutcome(
@@ -1547,7 +1852,7 @@ function mergePageOutcome(
   for (const key of [
     'fetched', 'created', 'updated', 'unchanged', 'claimed', 'archived',
     'skippedAmbiguous', 'skippedManual', 'skippedArchived', 'stale', 'restored',
-    'blocked', 'secretBlocked', 'missingDependency', 'errors', 'incomplete',
+    'blocked', 'secretBlocked', 'missingDependency', 'errors', 'incomplete', 'notSeen', 'redacted', 'paused', 'held',
   ] as const) {
     totals[key] += pageTotals[key];
   }
@@ -1573,6 +1878,10 @@ function emptyTotals(): SyncRunTotals {
     missingDependency: 0,
     errors: 0,
     incomplete: 0,
+    notSeen: 0,
+    redacted: 0,
+    paused: 0,
+    held: 0,
   };
 }
 
