@@ -13,6 +13,8 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.13.1] - 2026-11-07
+
 ### Added
 
 - **Breeze: the Breeze version on each sync run.** Each run saves the Breeze release (from `GET /health`) and the partner API schema version. Open a run on the **Runs** tab to see them. A run whose Breeze release differs from the previous run shows a **new version** tag and names both versions. **Test connection** names both versions too. A failed version read never fails or slows the sync. See [Breeze: Breeze version on each run](/integrations/breeze/#breeze-version-on-each-run).
@@ -36,6 +38,18 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 - **Breeze: a disabled resource no longer skips Device relationships.** Device relationships depends only on sites, devices, virtual machines, and network equipment, not on every other Breeze resource. ([#111](https://github.com/Weavestream/Weavestream/issues/111))
 - **Breeze: one withheld or unreadable record no longer fails the run.** The resource finishes, its dependents run, and the Runs tab shows **warnings** with the records that were not written. Last-known-good data is kept and nothing is marked stale, as before.
 - **Breeze: plain names and script text are no longer read as credentials.** Weavestream no longer withholds a value because it contains a word such as "password", or because a name reads like a passphrase. It withholds only credential-named fields with a value, credential assignments, and values with a known credential shape. An empty credential field (for example an empty S3 destination form) shows as empty. ([#112](https://github.com/Weavestream/Weavestream/issues/112))
+
+### Security
+
+- **Breeze credential values are withheld in place.** Breeze removes credential fields before it exports a record. Weavestream also replaces a value that looks like a credential with `[withheld]` before it writes the record. Before, Weavestream withheld the full record. Withheld values are never stored, logged, or shown in run warnings.
+- **Accepting source changes needs `integration.manage`.** **Accept changes from Breeze RMM** archives held removals and accepts a new schema version or a missing field. It runs as a full sync, cannot be a dry run, and is audited as `integration.sync.accept_source_changes`.
+- **The Breeze version read sends no credentials.** Each sync run reads `GET /health` on the configured Breeze URL without the API key, through the same outbound request checks as other integration calls.
+
+### Upgrade notes
+
+- Update the **API, web, and worker together**. Migrations `0092_integration_sync_holds`, `0093_integration_source_version_hold`, and `0094_integration_sync_run_source_version` apply automatically. They only add columns. No new environment variables are required.
+- Nothing is archived on the first full sync after the upgrade. Records a full sync does not see are archived only when a second full sync, at least 12 hours later, also misses them.
+- Breeze records that were withheld as secrets sync on the next run, with only the matched values withheld, and do not create duplicates. Breeze backup articles change once, because the empty **Restore capabilities** section is removed.
 
 ## [1.13.0] - 2026-11-05
 
