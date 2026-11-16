@@ -3,7 +3,7 @@
 # Multi-stage: deps → build → runner. Runner is distroless-style minimal
 # Node 24 Alpine (pinned by digest) with a non-root user.
 # ───────────────────────────────────────────────────────────────────────
-FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS base
+FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS base
 # Only runtime packages here. Sharp ships prebuilt musl binaries that
 # pnpm hydrates from its store (@img/sharp-linuxmusl-*). Intentionally
 # NOT installing vips-dev / build-base / python3: their presence makes
@@ -44,7 +44,7 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
     CI=true pnpm install --frozen-lockfile --prod
 
 # ───── runner ─────
-FROM node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53 AS runner
+FROM node:24.22.3-alpine3.24@sha256:116b800c3754b440ee0aa3ed2f20f5bf3d99a554bfd9adeea09ea8017f6e85f5 AS runner
 # Sharp's prebuilt binary bundles its own libvips, so no system `vips`
 # package is needed at runtime — just libc6-compat + openssl + tini.
 RUN apk add --no-cache libc6-compat openssl tini su-exec curl \
