@@ -13,9 +13,27 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+## [1.13.2] - 2026-11-16
+
+### Added
+
+- **Save articles without publishing.** Open the arrow next to **Publish** and select **Save draft** to save a new or existing article and stay in the editor. New articles saved this way show **not published** on the article and **draft** in the article list. They stay hidden from client users until **Publish** applies the chosen **Visible to clients** setting. A draft on an already published article still shares its text with other users, including clients when the article is visible to them.
+- **Discard a saved article draft.** On a published article, **Discard draft** in the same menu removes the draft and restores the published version. To remove an article that has never been published, archive it instead; its draft is kept if you restore it later.
+
 ### Changed
 
 - **Sidebar item counts are on by default for new users.** New accounts see the counts next to sidebar entries. Existing accounts keep their current setting. To change it, go to **Your profile → Appearance**.
+
+### Fixed
+
+- **Cancel keeps saved article drafts.** **Cancel** only discards unsaved changes; a draft saved manually or by autosave stays available. Saves run in order, edits made during a save keep their **unsaved** marker, and the editor prevents further edits while a save that leaves the page completes.
+- **Backup schedule actions fit on laptop screens.** Removed the **Timezone** and **Notify** columns so **Run now**, **Edit**, and **Delete** stay in view. The timezone remains in the cron tooltip and mobile card, and notification recipients remain in the **Edit** dialog.
+- **Backup schedule validation errors are visible.** A name is required before saving or opening the MFA prompt. Validation errors appear under the affected field, other errors appear at the top of the dialog, and a failed save scrolls the first error into view instead of appearing to hang.
+- **Claude Code and other local MCP apps can sign in with a changing callback port.** With **Any MCP app**, apps described by a client metadata document can now use any port on an allowed HTTP loopback callback, fixing `invalid_redirect_uri` during sign-in. The callback host and path must still match; **Claude and ChatGPT only** continues to refuse loopback callbacks.
+
+### Upgrade notes
+
+- Migration `0095_user_show_item_counts_default_on` applies automatically and changes the sidebar item count default for new accounts only. Existing preferences are preserved.
 
 ## [1.13.1] - 2026-11-07
 
@@ -1102,7 +1120,8 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.11.0...HEAD
+[Unreleased]: https://github.com/Weavestream/Weavestream/compare/v1.13.2...HEAD
+[1.13.2]: https://github.com/Weavestream/Weavestream/releases/tag/v1.13.2
 [1.11.0]: https://github.com/Weavestream/Weavestream/releases/tag/v1.11.0
 [1.10.5]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.5
 [1.10.4]: https://github.com/Weavestream/Weavestream/releases/tag/v1.10.4
