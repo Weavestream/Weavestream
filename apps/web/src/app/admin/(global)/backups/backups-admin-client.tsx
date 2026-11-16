@@ -1,13 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   BackupConfig,
   BackupConfigInput,
   BackupRunDto,
   BackupRunStatus,
 } from '@weavestream/shared';
-import { problemMessage } from '@weavestream/shared';
+import { problemFieldErrors, problemMessage } from '@weavestream/shared';
 import { apiFetch } from '../../../../lib/api';
 import { FormattedDateTime } from '../../../../lib/timezone-context';
 import { downloadWithStepUp } from '../../../../lib/step-up';
@@ -16,6 +16,7 @@ import {
   Checkbox,
   DataTable,
   Dialog,
+  ErrorBanner,
   Field,
   Icon,
   Input,
@@ -620,6 +621,16 @@ type EditState =
   | { mode: 'create'; draft: DraftState; error: string | null }
   | { mode: 'edit'; id: string; draft: DraftState; error: string | null };
 
+// Draft fields that render a `Field` able to show an API validation
+// issue. The payload keys match the draft keys one to one.
+const FIELD_KEYS = ['name', 'cron', 'timezone', 'retention', 'notifyEmails'] as const;
+type FieldKey = (typeof FIELD_KEYS)[number];
+type FieldErrors = Partial<Record<FieldKey, string>>;
+
+function isFieldKey(key: string): key is FieldKey {
+  return (FIELD_KEYS as readonly string[]).includes(key);
+}
+
 function ScheduleDialog({
   state,
   onCancel,
@@ -631,13 +642,47 @@ function ScheduleDialog({
 }) {
   const [draft, setDraft] = useState<DraftState>(state.draft);
   const [error, setError] = useState<string | null>(state.error);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
+  const [nameTouched, setNameTouched] = useState(false);
+  // Bumped on every failed save so the effect below scrolls the first
+  // error into view once per attempt — not again while the user edits
+  // a field and its error clears.
+  const [failedSaves, setFailedSaves] = useState(0);
   const [pending, setPending] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // The API needs a name, and the save is step-up gated: catch the
+  // empty name here so the user is never sent through MFA for a request
+  // that can only fail.
+  const nameMissing = draft.name.trim() === '';
+  const nameError =
+    fieldErrors.name ?? (nameTouched && nameMissing ? 'Name is required' : undefined);
+
+  useEffect(() => {
+    if (failedSaves === 0) return;
+    // The dialog body scrolls; an error below the fold reads as a hang.
+    bodyRef.current
+      ?.querySelector('[role="alert"]')
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [failedSaves]);
+
+  function clearFieldError(key: string) {
+    if (!isFieldKey(key)) return;
+    setFieldErrors((prev) => {
+      if (!(key in prev)) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  }
 
   function update<K extends keyof DraftState>(key: K, value: DraftState[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
+    clearFieldError(key);
   }
 
   function selectPreset(id: string) {
+    clearFieldError('cron');
     const preset = CRON_PRESETS.find((p) => p.id === id);
     if (preset) {
       setDraft((prev) => ({
@@ -652,6 +697,7 @@ function ScheduleDialog({
 
   async function save() {
     setError(null);
+    setFieldErrors({});
     setPending(true);
     const payload = toPayload(draft);
     const path =
@@ -664,7 +710,22 @@ function ScheduleDialog({
     });
     setPending(false);
     if (!res.ok || !res.data) {
-      setError(problemMessage(res.problem) ?? 'Could not save schedule.');
+      // Issues on a field this dialog shows go under that field; the
+      // banner carries only what has nowhere else to go.
+      const byField: FieldErrors = {};
+      const unplaced: string[] = [];
+      for (const [key, message] of Object.entries(problemFieldErrors(res.problem))) {
+        if (isFieldKey(key)) byField[key] = message;
+        else unplaced.push(message);
+      }
+      setFieldErrors(byField);
+      setError(
+        unplaced[0] ??
+          (Object.keys(byField).length > 0
+            ? null
+            : (problemMessage(res.problem) ?? 'Could not save schedule.')),
+      );
+      setFailedSaves((n) => n + 1);
       return;
     }
     await onSaved();
@@ -681,7 +742,7 @@ function ScheduleDialog({
           <Btn kind="ghost" onClick={onCancel} disabled={pending}>
             Cancel
           </Btn>
-          <Btn kind="primary" onClick={save} disabled={pending}>
+          <Btn kind="primary" onClick={save} disabled={pending || nameMissing}>
             {pending
               ? 'Saving…'
               : state.mode === 'create'
@@ -691,12 +752,17 @@ function ScheduleDialog({
         </>
       }
     >
-      <div style={{ display: 'grid', gap: 12 }}>
-        <Field label="Name">
+      <div ref={bodyRef} style={{ display: 'grid', gap: 12 }}>
+        {error && <ErrorBanner title={error} />}
+
+        <Field label="Name" error={nameError}>
           <Input
             value={draft.name}
             onChange={(e) => update('name', e.target.value)}
+            onBlur={() => setNameTouched(true)}
             placeholder="e.g. Nightly database export"
+            aria-invalid={nameError ? true : undefined}
+            required
             autoFocus
           />
         </Field>
@@ -718,6 +784,7 @@ function ScheduleDialog({
         <Field
           label="Cron pattern"
           help="Five-field pattern: minute hour day-of-month month day-of-week."
+          error={fieldErrors.cron}
         >
           <Input
             value={draft.cron}
@@ -732,6 +799,7 @@ function ScheduleDialog({
         <Field
           label="Timezone"
           help="IANA timezone name (e.g. Etc/UTC, America/New_York). Empty = Etc/UTC."
+          error={fieldErrors.timezone}
         >
           <Input
             value={draft.timezone}
@@ -743,6 +811,7 @@ function ScheduleDialog({
         <Field
           label="Retention"
           help="`Keep last N` is a floor that always retains the N most-recent successful runs (useful for testing or multiple manual triggers in one day). On top of that, GFS keeps one run per day / week / month for the windows below. The most recent successful run is always kept regardless of these numbers."
+          error={fieldErrors.retention}
         >
           <div
             style={{
@@ -779,6 +848,7 @@ function ScheduleDialog({
         <Field
           label="Notification recipients"
           help="One or more email addresses — separate with commas, semicolons, or new lines. Leave empty to skip notifications."
+          error={fieldErrors.notifyEmails}
         >
           <Input
             value={draft.notifyEmails}
@@ -816,21 +886,6 @@ function ScheduleDialog({
           of your external backup routine — the in-app schedule covers the
           database only.
         </div>
-
-        {error && (
-          <div
-            style={{
-              padding: '8px 12px',
-              background: 'var(--danger-bg)',
-              color: 'var(--danger)',
-              border: '1px solid var(--danger-line)',
-              borderRadius: 6,
-              fontSize: 13,
-            }}
-          >
-            {error}
-          </div>
-        )}
       </div>
     </Dialog>
   );

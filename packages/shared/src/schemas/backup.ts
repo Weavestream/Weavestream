@@ -140,7 +140,7 @@ export type BackupConfigInput = z.infer<typeof backupConfigInputSchema>;
 
 export const backupConfigPatchSchema = z
   .object({
-    name: z.string().trim().min(1).max(120).optional(),
+    name: z.string().trim().min(1, 'Name is required').max(120).optional(),
     enabled: z.boolean().optional(),
     cron: cronSchema.optional(),
     timezone: timezoneSchema,

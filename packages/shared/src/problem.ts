@@ -44,3 +44,32 @@ export function problemMessage(problem: unknown): string | null {
   }
   return null;
 }
+
+/**
+ * Per-field messages off a `ZodBody` validation problem, so a form can
+ * show each one under the field it belongs to instead of one message
+ * somewhere else in the form. Keys are the top-level field of each
+ * issue's dotted `path` (`retention.daily` → `retention`); the first
+ * issue for a field wins. Issues with no path, or a blank message, are
+ * skipped — read those through `problemMessage`.
+ *
+ * Built through a `Map` so a path such as `__proto__` or `constructor`
+ * becomes an ordinary own key, never a prototype lookup or write.
+ */
+export function problemFieldErrors(problem: unknown): Record<string, string> {
+  const byField = new Map<string, string>();
+  const issues =
+    problem && typeof problem === 'object'
+      ? (problem as { issues?: unknown }).issues
+      : undefined;
+  if (Array.isArray(issues)) {
+    for (const issue of issues) {
+      if (!issue || typeof issue !== 'object') continue;
+      const { path, message } = issue as { path?: unknown; message?: unknown };
+      if (typeof path !== 'string' || typeof message !== 'string') continue;
+      const field = path.split('.')[0];
+      if (field && message.trim() && !byField.has(field)) byField.set(field, message);
+    }
+  }
+  return Object.fromEntries(byField);
+}

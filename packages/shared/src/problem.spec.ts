@@ -1,4 +1,4 @@
-import { problemMessage } from './problem';
+import { problemFieldErrors, problemMessage } from './problem';
 
 describe('problemMessage', () => {
   it('prefers detail over message and title', () => {
@@ -69,5 +69,61 @@ describe('problemMessage', () => {
     for (const v of [null, undefined, 'a string', 42, true]) {
       expect(problemMessage(v)).toBeNull();
     }
+  });
+});
+
+describe('problemFieldErrors', () => {
+  it('keys each issue by the top-level field of its path', () => {
+    expect(
+      problemFieldErrors({
+        detail: 'ValidationError',
+        issues: [
+          { path: 'name', message: 'Name is required' },
+          { path: 'retention.daily', message: 'Too big' },
+        ],
+      }),
+    ).toEqual({ name: 'Name is required', retention: 'Too big' });
+  });
+
+  it('keeps the first issue for a field', () => {
+    expect(
+      problemFieldErrors({
+        issues: [
+          { path: 'cron', message: 'first' },
+          { path: 'cron', message: 'second' },
+        ],
+      }),
+    ).toEqual({ cron: 'first' });
+  });
+
+  it('skips issues with no path, a blank message, or the wrong shape', () => {
+    expect(
+      problemFieldErrors({
+        issues: [
+          { path: '', message: 'form-level' },
+          { path: 'name', message: '   ' },
+          { path: 3, message: 'bad path' },
+          null,
+          'nope',
+        ],
+      }),
+    ).toEqual({});
+  });
+
+  it('returns an empty object when there are no issues', () => {
+    expect(problemFieldErrors(null)).toEqual({});
+    expect(problemFieldErrors({ detail: 'Conflict' })).toEqual({});
+    expect(problemFieldErrors({ issues: 'nope' })).toEqual({});
+  });
+
+  it('stores prototype-like paths as plain own keys', () => {
+    const out = problemFieldErrors({
+      issues: [
+        { path: '__proto__', message: 'a' },
+        { path: 'constructor', message: 'b' },
+      ],
+    });
+    expect(Object.getPrototypeOf(out)).toBe(Object.prototype);
+    expect(Object.keys(out)).toEqual(['__proto__', 'constructor']);
   });
 });
