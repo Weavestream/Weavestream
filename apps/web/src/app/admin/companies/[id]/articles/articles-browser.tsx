@@ -492,6 +492,11 @@ function articleColumns({
             >
               {a.title}
             </Link>
+            {a.hasDraft && (
+              <Tag tone="warn" style={{ fontSize: 10, flexShrink: 0 }}>
+                draft
+              </Tag>
+            )}
             {!a.visibleToClients && (
               <Tag tone="outline" style={{ fontSize: 10, flexShrink: 0 }}>
                 internal
@@ -634,8 +639,9 @@ function ArticleMobileBody({
         <Icon.chevron size={12} style={{ color: 'var(--dim)' }} />
       </Link>
 
-      {(!row.visibleToClients || row.archivedAt) && (
+      {(row.hasDraft || !row.visibleToClients || row.archivedAt) && (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {row.hasDraft && <Tag tone="warn">draft</Tag>}
           {!row.visibleToClients && <Tag tone="outline">internal</Tag>}
           {row.archivedAt && <Tag tone="default">archived</Tag>}
         </div>

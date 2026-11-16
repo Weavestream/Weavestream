@@ -184,8 +184,9 @@ export const articleActorRefSchema = actorRefSchema;
  *
  * `excerpt` carries the serve-time coalesce `aiSummary ?? derivedExcerpt`
  * — same wire name as before; clients don't care which source filled
- * it. List rows hard-code `hasDraft: false` and `isStarred: false`
- * (unchanged — cheap listing).
+ * it. List rows hard-code `isStarred: false` (cheap listing); `hasDraft`
+ * is resolved for the whole page in one query (always `false` for
+ * client users).
  */
 export const articleSummarySchema = z.object({
   id: z.guid(),
@@ -212,10 +213,11 @@ export const articleSummarySchema = z.object({
   /** True if the signed-in user has starred this article. */
   isStarred: z.boolean(),
   /**
-   * True if there is an in-progress autosave draft for this article.
-   * Drives the editor's Cancel-with-revert path and the "draft in
-   * progress" badge in the history panel. Only meaningful on detail
-   * loads.
+   * True if there is an in-progress draft (autosave or Save draft)
+   * for this article. Drives the editor's Cancel-with-revert path, the
+   * "draft in progress" badge in the history panel, and the "draft"
+   * pill in the article list. Always `false` on list rows for client
+   * users.
    */
   hasDraft: z.boolean(),
 });

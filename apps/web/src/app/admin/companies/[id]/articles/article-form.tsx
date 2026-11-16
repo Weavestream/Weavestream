@@ -26,6 +26,7 @@ import {
   OverflowMenu,
   Panel,
   Sheet,
+  SplitBtn,
   Tag,
   useToast,
 } from '../../../../../components/ui';
@@ -54,6 +55,14 @@ import { useArticleArchive } from './article-actions';
  * `PATCH /articles/:id { draft: true }`; clicking Save promotes that
  * draft to a published version, Cancel discards it and reverts the
  * article row to the last published version.
+ *
+ * Only **Publish** publishes. "Save draft" (in Publish's dropdown) is
+ * the manual version of one autosave tick, so the draft path works
+ * with autosave off too. In Create mode it creates the article with a
+ * draft v1 (`POST { draft: true }`) — never published — and reopens it
+ * in the editor. Cancel never discards a saved draft; "Discard draft"
+ * in the same dropdown does, and only when a published version exists
+ * to revert to.
  */
 type Mode = 'create' | 'edit';
 
@@ -117,14 +126,44 @@ export function ArticleForm({
   // upgrade to the relative label so hydration stays deterministic.
   const [savedLabelMounted, setSavedLabelMounted] = useState(false);
   useEffect(() => setSavedLabelMounted(true), []);
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirtyState] = useState(false);
+  // `dirtyRef` mirrors `dirty` synchronously so code that resumes after
+  // an `await` (Cancel waiting for a save) reads the current value, not
+  // the one its closure captured.
+  const dirtyRef = useRef(false);
+  const setDirty = useCallback((next: boolean) => {
+    dirtyRef.current = next;
+    setDirtyState(next);
+  }, []);
+  // Bumped on every edit. A save records the value it sent and clears
+  // `dirty` only if no edit happened while the request was in flight —
+  // otherwise the newer edits would be treated as saved.
+  const editSeq = useRef(0);
+  // Saves run one at a time through this queue, so an older autosave
+  // can never reach the server after a newer save, and Cancel / the
+  // discard actions can wait for every outstanding save by awaiting
+  // the tail. The tail never rejects.
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  // True from the moment a save that leaves the page (any save of a new
+  // article, or Publish) is requested until it fails. The form is inert
+  // meanwhile, so nothing typed during the request is silently dropped
+  // by the navigation that follows.
+  const [formLocked, setFormLocked] = useState(false);
+  // Autosave stands down while Cancel or a discard confirm is in
+  // progress, so the timer cannot save the edits being discarded.
+  const [autosaveHeld, setAutosaveHeld] = useState(false);
   // Tracks whether the server is currently holding an in-progress
   // autosave draft for this article. Seeded from the detail load and
   // flipped by autosave success / publish / discard. Drives the
   // Cancel dialog (must call the discard endpoint when true) and the
   // "Discard draft" affordance in the topbar.
   const [hasServerDraft, setHasServerDraft] = useState<boolean>(article?.hasDraft ?? false);
-  const [confirmDiscardOpen, setConfirmDiscardOpen] = useState(false);
+  // False for a never-published article (its only version is a draft).
+  // Draft writes cannot change it; Publish navigates away.
+  const isPublished = mode === 'edit' && (article?.isPublished ?? true);
+  // Which confirm is open: losing unsaved local edits on Cancel, or
+  // deleting the saved draft via "Discard draft".
+  const [confirmDiscard, setConfirmDiscard] = useState<'unsaved' | 'draft' | null>(null);
   const [discarding, setDiscarding] = useState(false);
   // Format switches are deliberate, potentially-lossy operations: the
   // user should review the converted body and click Save explicitly
@@ -212,7 +251,7 @@ export function ArticleForm({
     // see the response — the basis is unknowable until the page data
     // refreshes, so stop claiming one.
     revisionRef.current = null;
-  }, []);
+  }, [setDirty]);
   useChatPageContext({
     companyId,
     articleId: article?.id ?? null,
@@ -232,9 +271,10 @@ export function ArticleForm({
     if (!autosaveEnabled) return;
     if (!dirty) return;
     if (formatSwitchPending) return;
+    if (autosaveHeld) return;
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
-      submit('autosave');
+      void submit('autosave');
     }, 4000);
     return () => {
       if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
@@ -251,6 +291,7 @@ export function ArticleForm({
     formatSwitchPending,
     mode,
     autosaveEnabled,
+    autosaveHeld,
   ]);
 
   // Browsers nudge the user with a generic "unsaved changes" prompt
@@ -262,14 +303,16 @@ export function ArticleForm({
   // and an autosaved-but-unreviewed body becoming the live article.
   useEffect(() => {
     if (mode !== 'edit') return;
-    if (!dirty && !hasServerDraft) return;
+    // A saved draft is kept on leave (see Cancel), so only unsaved
+    // local edits are at risk.
+    if (!dirty) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       e.returnValue = '';
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [dirty, hasServerDraft, mode]);
+  }, [dirty, mode]);
 
   function canAutosaveBody(): boolean {
     if (editorMode === 'markdown' && !markdownSource.trim()) return false;
@@ -283,6 +326,7 @@ export function ArticleForm({
    * resume its usual 4 s debounce.
    */
   function markDirty() {
+    editSeq.current += 1;
     setDirty(true);
     setFormatSwitchPending(false);
   }
@@ -295,9 +339,9 @@ export function ArticleForm({
    *   - PATCH: send `null` to explicitly unfile the article.
    * Returns `null` when the user is in Markdown mode with no body —
    * autosave skips and publish surfaces a validation error. The
-   * caller appends the optional `draft: true` flag for autosave
-   * PATCHes (omitted otherwise so the server treats it as an
-   * explicit Save).
+   * caller appends the optional `draft: true` flag for autosave and
+   * Save-draft PATCHes (omitted otherwise so the server treats it as
+   * an explicit Save).
    */
   function buildBody(forMode: Mode) {
     const base = {
@@ -312,67 +356,132 @@ export function ArticleForm({
     return { ...base, editorMode: 'markdown' as const, markdownSource };
   }
 
-  async function submit(kind: 'publish' | 'autosave') {
+  /**
+   * - `publish`: Publish — a new published version (or promotes the
+   *   draft). The only kind that publishes.
+   * - `draft`: the user's "Save draft" — same server path as autosave,
+   *   but user-initiated, so it reports validation errors and stays in
+   *   the editor with a toast.
+   * - `autosave`: the debounce timer — silent on validation failures.
+   */
+  function submit(kind: 'publish' | 'draft' | 'autosave'): Promise<boolean> {
+    // The body is this render's state, so the edit count is taken now
+    // too — not when the queued request finally runs.
+    const sentSeq = editSeq.current;
+    const leavesPage = mode === 'create' || kind === 'publish';
+    if (leavesPage) setFormLocked(true);
+    const run = saveQueue.current.then(() => runSubmit(kind, sentSeq));
+    saveQueue.current = run.then(
+      () => undefined,
+      // A failed save already reported itself; the queue only orders
+      // requests and must keep running.
+      () => undefined,
+    );
+    if (leavesPage) {
+      void run.then(
+        (navigated) => {
+          if (!navigated) setFormLocked(false);
+        },
+        () => setFormLocked(false),
+      );
+    }
+    return run;
+  }
+
+  /** Let a save in flight settle before Cancel or a discard acts. */
+  async function settleInflight() {
+    if (autoSaveTimer.current) {
+      clearTimeout(autoSaveTimer.current);
+      autoSaveTimer.current = null;
+    }
+    // Waits for every queued save, not just the latest one.
+    await saveQueue.current;
+  }
+
+  /** Runs one queued save. Resolves `true` when it navigated away. */
+  async function runSubmit(
+    kind: 'publish' | 'draft' | 'autosave',
+    sentSeq: number,
+  ): Promise<boolean> {
+    const manual = kind !== 'autosave';
     setError(null);
     const t = title.trim();
     if (!t) {
       setError('Title is required.');
-      return;
+      return false;
     }
     if (editorMode === 'markdown' && !markdownSource.trim()) {
-      if (kind === 'publish') {
+      if (manual) {
         setError('Add some Markdown content before saving.');
       }
-      return;
+      return false;
     }
     if (mode === 'create') {
       const body = buildBody('create');
       if (!body) {
-        if (kind === 'publish') {
+        if (manual) {
           setError('Add some content before publishing.');
         }
-        return;
+        return false;
       }
       setSaving(true);
       const res = await apiFetch<{ id: string }>(`/companies/${companyId}/articles`, {
         method: 'POST',
-        body: JSON.stringify(body),
+        // `draft: true` makes v1 a draft: nothing is published.
+        body: JSON.stringify(kind === 'draft' ? { ...body, draft: true } : body),
       });
-      setSaving(false);
       if (!res.ok || !res.data) {
+        setSaving(false);
         setError(problemMessage(res.problem) ?? 'Create failed');
-        return;
+        return false;
       }
-      toast.push('Article created', 'ok');
-      router.push(`/admin/companies/${companyId}/articles/${res.data.id}`);
+      // Success navigates away: stay "saving" (and locked) until the
+      // page changes, so nothing can be typed into a form being left.
+      if (kind === 'draft') {
+        // No draft row can exist before the article does, so Save draft
+        // creates it and reopens it in the editor; later Save draft
+        // clicks there take the regular draft PATCH path.
+        toast.push('Draft saved — not published', 'ok');
+        router.push(`/admin/companies/${companyId}/articles/${res.data.id}/edit`);
+      } else {
+        toast.push('Article published', 'ok');
+        router.push(`/admin/companies/${companyId}/articles/${res.data.id}`);
+      }
       router.refresh();
-      return;
+      return true;
     }
 
-    if (!article) return;
+    if (!article) return false;
+    // A draft write with nothing changed is a server no-op (no draft
+    // row), so a "Draft saved" toast would claim a save that did not
+    // happen. Say so instead of sending it.
+    if (kind === 'draft' && !dirty) {
+      toast.push('No changes to save as a draft', 'ok');
+      return false;
+    }
     if (kind === 'autosave' && !canAutosaveBody()) {
-      return;
+      return false;
     }
     const payload = buildBody('edit');
     if (!payload) {
-      return;
+      return false;
     }
     // Tell the API to coalesce into the rolling draft instead of
     // producing a new published version. Explicit Save omits the
     // flag so the server's `update(draft=false)` path runs.
-    const body = kind === 'autosave' ? { ...payload, draft: true } : payload;
-    if (kind === 'publish') setSaving(true);
-    const res = await apiFetch<{ revision?: number }>(
+    const body = kind === 'publish' ? payload : { ...payload, draft: true };
+    if (manual) setSaving(true);
+    const res = await apiFetch<{ revision?: number; hasDraft?: boolean }>(
       `/companies/${companyId}/articles/${article.id}`,
       {
         method: 'PATCH',
         body: JSON.stringify(body),
       },
     );
-    if (kind === 'publish') setSaving(false);
+    if (manual) setSaving(false);
     if (!res.ok) {
       setError(problemMessage(res.problem) ?? 'Save failed');
-      return;
+      return false;
     }
     // Track the bumped revision so the chat snapshot's basis claim
     // stays honest across autosaves (WS-030).
@@ -380,17 +489,26 @@ export function ArticleForm({
       revisionRef.current = res.data.revision;
     }
     setLastSavedAt(new Date());
-    setDirty(false);
-    setFormatSwitchPending(false);
+    // Edits made while the request was in flight are not in this save.
+    if (editSeq.current === sentSeq) {
+      setDirty(false);
+      setFormatSwitchPending(false);
+    }
     // Server-side draft state mirrors what the API just did with
-    // this PATCH: autosaves leave a draft row in place; an explicit
-    // Save promotes/clears it.
-    setHasServerDraft(kind === 'autosave');
+    // this PATCH: draft writes leave a draft row in place; an explicit
+    // Save promotes/clears it. Prefer the server's answer — a no-op
+    // draft write on a clean article creates no draft row.
+    setHasServerDraft(res.data?.hasDraft ?? kind !== 'publish');
+    if (kind === 'draft') {
+      toast.push(isPublished ? 'Draft saved' : 'Draft saved — not published', 'ok');
+    }
     if (kind === 'publish') {
-      toast.push('Article saved', 'ok');
+      toast.push('Article published', 'ok');
       router.push(`/admin/companies/${companyId}/articles/${article.id}`);
       router.refresh();
+      return true;
     }
+    return false;
   }
 
   function onDocChange(next: unknown) {
@@ -430,6 +548,7 @@ export function ArticleForm({
       return;
     }
     setEditorMode(next);
+    editSeq.current += 1;
     setDirty(true);
     if (mode === 'edit') {
       setFormatSwitchPending(true);
@@ -439,7 +558,7 @@ export function ArticleForm({
   // Status label tracks both the autosave setting (so operators know
   // whether their work is being silently persisted) and the actual
   // last-saved timestamp. Three states matter:
-  //   - editing a fresh form (no saves yet) → "draft · unsaved"
+  //   - editing a fresh form (no saves yet) → "not saved yet"
   //   - autosave off → "saved Xs ago" (factual; no auto label)
   //   - autosave on → "auto-saved Xs ago" (signals continuous persistence)
   const savedAgo = lastSavedAt
@@ -448,7 +567,7 @@ export function ArticleForm({
       : formatDateTime(lastSavedAt, tz)
     : '';
   const autosaveLabel = !lastSavedAt
-    ? 'draft · unsaved'
+    ? 'not saved yet'
     : autosaveEnabled && mode === 'edit'
       ? `auto-saved ${savedAgo}`
       : `saved ${savedAgo}`;
@@ -549,45 +668,57 @@ export function ArticleForm({
    * Cancel/Discard click handler. The button shows "Discard" in
    * Create mode and "Cancel" in Edit mode, but both go through here.
    *
-   * If the form is clean AND there is no server-side draft, navigate
-   * straight away — there's nothing to lose. Otherwise open the
-   * confirmation dialog and let the operator decide.
+   * Cancel only ever drops *unsaved* local edits: a saved draft stays
+   * (it was saved on purpose, or by autosave) and is removed only by
+   * "Discard draft". A clean form leaves straight away.
    */
-  function handleCancelClick() {
-    if (!dirty && !hasServerDraft) {
+  async function handleCancelClick() {
+    // Hold autosave first, then let any save in flight land: edits it
+    // carries were made before Cancel and become part of the saved
+    // draft, which Cancel keeps. Only what is still unsaved after that
+    // is offered for discard.
+    setAutosaveHeld(true);
+    await settleInflight();
+    if (!dirtyRef.current) {
       navigateAway();
       return;
     }
-    setConfirmDiscardOpen(true);
+    setConfirmDiscard('unsaved');
+  }
+
+  function closeDiscardConfirm() {
+    setConfirmDiscard(null);
+    setAutosaveHeld(false);
   }
 
   /**
-   * "Discard" inside the confirm dialog. When the server is holding
-   * an autosave draft, we hit `DELETE /articles/:id/draft` first so
-   * the live row reverts to the last published version before the
-   * read view re-renders; otherwise the user lands on the
-   * autosaved-but-unreviewed body, defeating the whole point of the
-   * dialog.
+   * Confirm-dialog action. `unsaved` just leaves. `draft` calls
+   * `DELETE /articles/:id/draft` first so the live row reverts to the
+   * last published version before the read view re-renders. Only
+   * offered when a published version exists — a never-published
+   * article has nothing to revert to (Archive removes it).
    */
   async function performDiscard() {
+    const discardDraft = confirmDiscard === 'draft';
     setDiscarding(true);
-    if (mode === 'edit' && article && hasServerDraft) {
+    // A draft write landing after the DELETE would re-create the draft.
+    await settleInflight();
+    if (discardDraft && article) {
       const res = await apiFetch(`/companies/${companyId}/articles/${article.id}/draft`, {
         method: 'DELETE',
       });
       if (!res.ok) {
         setDiscarding(false);
+        closeDiscardConfirm();
         setError(problemMessage(res.problem) ?? 'Could not discard draft.');
         return;
       }
+      setHasServerDraft(false);
+      toast.push('Draft discarded — reverted to the published version.', 'ok');
     }
     setDirty(false);
-    setHasServerDraft(false);
-    setConfirmDiscardOpen(false);
+    setConfirmDiscard(null);
     setDiscarding(false);
-    if (hasServerDraft) {
-      toast.push('Draft discarded — reverted to last saved version.', 'ok');
-    }
     navigateAway();
   }
 
@@ -619,19 +750,58 @@ export function ArticleForm({
               {autosaveLabel}
             </span>
             {dirty && <Tag tone="warn">unsaved</Tag>}
-            {hasServerDraft && !dirty && <Tag tone="warn">draft</Tag>}
-            <Btn kind="outline" size="md" disabled={saving} onClick={handleCancelClick}>
+            {mode === 'edit' && !isPublished && !dirty && <Tag tone="warn">not published</Tag>}
+            {hasServerDraft && isPublished && !dirty && <Tag tone="warn">draft</Tag>}
+            <Btn
+              kind="outline"
+              size="md"
+              disabled={saving || formLocked}
+              onClick={() => void handleCancelClick()}
+            >
               {mode === 'create' ? 'Discard' : 'Cancel'}
             </Btn>
-            <Btn
-              kind="primary"
-              size="md"
+            {/* Only Publish publishes, so it is the one primary action and
+                is never labelled "Save". The draft actions sit behind its
+                chevron rather than competing for a header slot. */}
+            <SplitBtn
               icon={Icon.check}
-              loading={saving}
-              onClick={() => submit('publish')}
+              loading={saving || formLocked}
+              onClick={() => void submit('publish')}
+              menuLabel="Draft options"
+              menu={(close) => (
+                <>
+                  <MenuItem
+                    icon={Icon.edit}
+                    disabled={saving}
+                    onClick={() => {
+                      close();
+                      void submit('draft');
+                    }}
+                  >
+                    Save draft
+                  </MenuItem>
+                  {hasServerDraft && isPublished && (
+                    <>
+                      <MenuDivider />
+                      <MenuItem
+                        icon={Icon.x}
+                        tone="danger"
+                        disabled={saving}
+                        onClick={() => {
+                          close();
+                          setAutosaveHeld(true);
+                          setConfirmDiscard('draft');
+                        }}
+                      >
+                        Discard draft
+                      </MenuItem>
+                    </>
+                  )}
+                </>
+              )}
             >
-              {mode === 'create' ? 'Publish' : 'Save'}
-            </Btn>
+              Publish
+            </SplitBtn>
             {/* The menu is the only route to the properties rail below
                 1240, so it cannot be gated on edit mode: a *new* article
                 is exactly when Folder and Visibility matter, and on a
@@ -716,6 +886,9 @@ export function ArticleForm({
       )}
 
       <div
+        // Read-only while a save that leaves the page is under way.
+        inert={formLocked}
+        aria-busy={formLocked || undefined}
         style={{
           flex: 1,
           minHeight: 0,
@@ -882,6 +1055,7 @@ export function ArticleForm({
             height="min(80vh, 640px)"
           >
             <div
+              inert={formLocked}
               style={{
                 padding: 16,
                 overflow: 'auto',
@@ -944,27 +1118,29 @@ export function ArticleForm({
       </Dialog>
 
       <Dialog
-        open={confirmDiscardOpen}
+        open={confirmDiscard !== null}
         onClose={() => {
-          if (!discarding) setConfirmDiscardOpen(false);
+          if (!discarding) closeDiscardConfirm();
         }}
-        title={hasServerDraft ? 'Discard autosaved draft?' : 'Discard unsaved changes?'}
+        title={confirmDiscard === 'draft' ? 'Discard draft?' : 'Discard unsaved changes?'}
         width={460}
         footer={
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <Btn kind="outline" onClick={() => setConfirmDiscardOpen(false)} disabled={discarding}>
+            <Btn kind="outline" onClick={closeDiscardConfirm} disabled={discarding}>
               Keep editing
             </Btn>
             <Btn kind="danger" onClick={performDiscard} loading={discarding}>
-              Discard
+              {confirmDiscard === 'draft' ? 'Discard draft' : 'Discard changes'}
             </Btn>
           </div>
         }
       >
         <p style={{ margin: 0, lineHeight: 1.5, color: 'var(--text)' }}>
-          {hasServerDraft
-            ? 'This article has unsaved autosave changes on the server. Discarding will delete them and revert the article to the last published version.'
-            : 'You have unsaved changes. Discarding will lose them.'}
+          {confirmDiscard === 'draft'
+            ? 'This deletes the saved draft and reverts the article to its published version. Any unsaved changes are lost too.'
+            : hasServerDraft
+              ? 'Your changes since the last draft save will be lost. The saved draft is kept.'
+              : 'You have unsaved changes. Discarding will lose them.'}
         </p>
       </Dialog>
     </>

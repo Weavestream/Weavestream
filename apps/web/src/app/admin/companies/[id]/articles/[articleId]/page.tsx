@@ -121,7 +121,10 @@ export default async function ArticleReadPage({
               padding: '40px 40px 80px',
             }}
           >
-            {(!article.visibleToClients || article.archivedAt) && (
+            {(!article.isPublished ||
+              article.hasDraft ||
+              !article.visibleToClients ||
+              article.archivedAt) && (
               <div
                 style={{
                   display: 'flex',
@@ -131,6 +134,10 @@ export default async function ArticleReadPage({
                   margin: '0 0 10px',
                 }}
               >
+                {/* Only Publish publishes: say plainly when readers are
+                    looking at unpublished text. */}
+                {!article.isPublished && <Tag tone="warn">not published</Tag>}
+                {article.isPublished && article.hasDraft && <Tag tone="warn">draft</Tag>}
                 {!article.visibleToClients && <Tag tone="outline">internal</Tag>}
                 {article.archivedAt && <Tag tone="warn">archived</Tag>}
               </div>

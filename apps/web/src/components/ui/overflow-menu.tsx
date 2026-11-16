@@ -34,11 +34,17 @@ import { Icon, type IconComponent } from './icon';
  * `trigger` swaps the "…" square for inline text — a count that opens
  * the list behind it (the company overview's "2 sites"). The popover,
  * keyboard model, and scroll cap are unchanged.
+ *
+ * `triggerIcon` + `triggerStyle` re-skin the square trigger while it
+ * keeps its `aria-label` — `SplitBtn` uses them for its chevron half.
  */
 export function OverflowMenu({
   label = 'More actions',
   attention,
   trigger,
+  triggerIcon,
+  triggerStyle,
+  disabled,
   align = 'end',
   children,
 }: {
@@ -48,6 +54,12 @@ export function OverflowMenu({
   attention?: 'warn' | 'danger';
   /** Inline text trigger in place of the "…" button. */
   trigger?: ReactNode;
+  /** Icon in place of the "…" glyph; the trigger keeps `label` as its name. */
+  triggerIcon?: ReactNode;
+  /** Style merged over the square trigger's own (ignored with `trigger`). */
+  triggerStyle?: CSSProperties;
+  /** Disables the trigger; the menu cannot open. */
+  disabled?: boolean;
   /**
    * Which trigger edge the popover lines up with. `end` suits the
    * right-hand action cluster; `start` suits an inline trigger in
@@ -192,6 +204,7 @@ export function OverflowMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={popoverId}
+        disabled={disabled}
         onClick={() => {
           updatePosition();
           setOpen((v) => !v);
@@ -232,10 +245,11 @@ export function OverflowMenu({
                 color: 'var(--text-2)',
                 cursor: 'pointer',
                 flexShrink: 0,
+                ...triggerStyle,
               }
         }
       >
-        {trigger ?? <Icon.dots size={13} />}
+        {trigger ?? triggerIcon ?? <Icon.dots size={13} />}
         {attention && (
           <span
             role="img"

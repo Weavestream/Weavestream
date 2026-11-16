@@ -4,7 +4,9 @@
 <!-- aliases: new article | knowledge base article | documentation page | markdown article | rich text article | change article format -->
 <!-- requires: article.write -->
 
-Open a company’s **Articles** area and select **New article**. Enter a title, select a folder or leave it at the root, choose the format, write the content, and select **Save**.
+Open a company’s **Articles** area and select **New article**. Enter a title, select a folder or leave it at the root, choose the format, write the content, and select **Publish**.
+
+Only **Publish** publishes. To save without publishing, open the arrow next to **Publish** and select **Save draft**; you stay in the editor. A new article saved this way is a draft that has never been published: it shows **not published** on the article and **draft** in the article list until you select **Publish**. On a published article, a saved draft shows **draft**; **Publish** turns it into a new version, and **Discard draft** (in the same menu) deletes it and reverts to the published version. **Cancel** never deletes a saved draft — it only drops changes you have not saved. To remove a never-published article, archive it. Clients never see a never-published article: **Visible to clients** takes effect when you select **Publish**. A draft on a published article is different: other users, and clients when the article is visible to clients, can see the draft text. **Settings → Articles → Autosave** saves drafts automatically while you edit an existing article.
 
 Each article uses one of two formats:
 

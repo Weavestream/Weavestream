@@ -1,5 +1,8 @@
 import { BadRequestException } from '@nestjs/common';
+import type { Request } from 'express';
+import { createArticleSchema } from '@weavestream/shared';
 import { ArticlesController } from './articles.controller.js';
+import { ZodBody } from '../common/zod-validation.pipe.js';
 import type { ArticlesService } from './articles.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 
@@ -68,5 +71,35 @@ describe('ArticlesController list folderId validation', () => {
       COMPANY,
       expect.objectContaining({ folderId: undefined }),
     );
+  });
+});
+
+describe('ArticlesController create draft flag (#117)', () => {
+  const REQ = { headers: {}, ip: '127.0.0.1' } as unknown as Request;
+  const BODY = { title: 'Draft', editorMode: 'markdown', markdownSource: '# hi' } as const;
+
+  it('passes draft: true through to the service as an option', async () => {
+    const svc = { create: jest.fn().mockResolvedValue({}) } as unknown as jest.Mocked<ArticlesService>;
+    const ctrl = new ArticlesController(svc);
+    await ctrl.create(ACTOR, COMPANY, BODY, { draft: true }, REQ);
+    expect(svc.create).toHaveBeenCalledWith(ACTOR, COMPANY, BODY, expect.anything(), {
+      draft: true,
+    });
+  });
+
+  it('creates a published article when the flag is absent', async () => {
+    const svc = { create: jest.fn().mockResolvedValue({}) } as unknown as jest.Mocked<ArticlesService>;
+    const ctrl = new ArticlesController(svc);
+    await ctrl.create(ACTOR, COMPANY, BODY, {}, REQ);
+    expect(svc.create).toHaveBeenCalledWith(ACTOR, COMPANY, BODY, expect.anything(), {
+      draft: false,
+    });
+  });
+
+  it('keeps the flag out of the shared create DTO', () => {
+    // The shared schema is also parsed by the integration and chat create
+    // paths; the flag must only reach the service through the route.
+    const dto = new ZodBody(createArticleSchema).transform({ ...BODY, draft: true });
+    expect(dto).not.toHaveProperty('draft');
   });
 });

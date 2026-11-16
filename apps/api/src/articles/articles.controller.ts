@@ -15,6 +15,7 @@ import {
   Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import { z } from 'zod';
 import {
   articleSlugSchema,
   createArticleSchema,
@@ -29,6 +30,15 @@ import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.j
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { ZodBody, ZodParam } from '../common/zod-validation.pipe.js';
 import { requestMetaOf as meta } from '../common/request-meta.js';
+
+/**
+ * `POST` body flag for the editor's "Save draft" on a new article. Kept
+ * out of the shared `createArticleSchema` on purpose: that schema is also
+ * parsed by the integration and chat create paths, which must keep
+ * creating published articles. Non-strict, so it ignores the body
+ * fields `createArticleSchema` validates.
+ */
+const createArticleFlagsSchema = z.object({ draft: z.boolean().optional() });
 
 @Controller({ path: 'companies/:companyId/articles', version: '1' })
 export class ArticlesController {
@@ -96,9 +106,12 @@ export class ArticlesController {
     @CurrentUser() actor: AuthedUser,
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Body(new ZodBody(createArticleSchema)) dto: CreateArticleInput,
+    @Body(new ZodBody(createArticleFlagsSchema)) flags: z.infer<typeof createArticleFlagsSchema>,
     @Req() req: Request,
   ) {
-    return this.articles.create(actor, companyId, dto, meta(req));
+    return this.articles.create(actor, companyId, dto, meta(req), {
+      draft: flags.draft === true,
+    });
   }
 
   @Patch(':id')

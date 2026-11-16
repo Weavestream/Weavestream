@@ -28,8 +28,9 @@ import type {
  * Read-only mode kicks in when the article is archived or the user
  * lacks write access — the Restore button is hidden and a tooltip
  * explains why. The "Draft in progress" badge only renders when the
- * caller passes `hasDraft=true` (drafts are dropped on archive, so
- * this combination is impossible for archived articles).
+ * caller passes `hasDraft=true`. Archive drops a draft that sits on a
+ * published version; a never-published article keeps its only draft
+ * (and then lists no versions).
  */
 export function HistoryPanel({
   open,
@@ -393,7 +394,7 @@ export function HistoryPanel({
       >
         <p style={{ margin: 0, lineHeight: 1.5, color: 'var(--text)' }}>
           {hasDraft
-            ? 'Any in-progress autosave draft will be discarded, then version '
+            ? 'The saved draft will be discarded, then version '
             : 'Version '}
           <strong>v{confirmRestore}</strong> will be re-applied to the
           article as a new published version. The current content stays

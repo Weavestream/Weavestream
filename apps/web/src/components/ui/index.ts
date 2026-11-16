@@ -44,6 +44,7 @@ export { Dialog } from './dialog';
 export { Sheet, type SheetSide } from './sheet';
 export { StarButton, StarGlyph, useStarToggle } from './star-button';
 export { OverflowMenu, MenuItem, MenuDivider } from './overflow-menu';
+export { SplitBtn } from './split-btn';
 export { UserPicker, type UserPickerValue } from './user-picker';
 export { CompanyPicker, type CompanyPickerValue } from './company-picker';
 export { ErrorBanner } from './error-banner';

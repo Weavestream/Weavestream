@@ -174,6 +174,13 @@ export interface SerializedArticle {
    * accurate value, and it always loads a detail before opening.
    */
   hasDraft: boolean;
+  /**
+   * False while the article has never been published: its only
+   * version row is a draft (created with "Save draft"). The editor
+   * uses it to keep Cancel from calling the draft-discard endpoint,
+   * which has no published version to revert to.
+   */
+  isPublished: boolean;
   /** Safe, tenant-scoped reconstruction provenance for this exact article. */
   provenance: IntegrationTargetProvenance[];
 }
@@ -204,7 +211,7 @@ export interface SerializedArticleSummary {
   updatedAt: Date;
   /** Always false on list rows — cheap listing, see SerializedArticle. */
   isStarred: boolean;
-  /** Always false on list rows — cheap listing, see SerializedArticle. */
+  /** Resolved per page by `markDrafts`; always false for client users. */
   hasDraft: boolean;
 }
 
@@ -311,6 +318,7 @@ export class ArticlesService {
     const hasMore = rows.length > limit;
     const slice = hasMore ? rows.slice(0, limit) : rows;
     const items = slice.map((r) => this.serializeSummary(r));
+    await this.markDrafts(actor, companyId, items);
     await this.hydrateActors(items);
     return {
       items,
@@ -355,7 +363,7 @@ export class ArticlesService {
     }
     const out = this.serialize(row, actor.role);
     out.isStarred = await this.stars.isStarred(actor.id, 'article', id);
-    out.hasDraft = await this.resolveHasDraft(companyId, id);
+    Object.assign(out, await this.resolveDraftState(companyId, id));
     await this.hydrateActors([out]);
     out.provenance = await readTargetProvenance(this.prisma, {
       companyId,
@@ -379,7 +387,7 @@ export class ArticlesService {
     }
     const out = this.serialize(row, actor.role);
     out.isStarred = await this.stars.isStarred(actor.id, 'article', row.id);
-    out.hasDraft = await this.resolveHasDraft(companyId, row.id);
+    Object.assign(out, await this.resolveDraftState(companyId, row.id));
     await this.hydrateActors([out]);
     out.provenance = await readTargetProvenance(this.prisma, {
       companyId,
@@ -408,8 +416,16 @@ export class ArticlesService {
        * unchanged.
        */
       id?: string;
+      /**
+       * "Save draft" on a new article: version 1 is written as the
+       * article's draft (`isDraft: true`) instead of a published
+       * version, so nothing is published until an explicit Publish
+       * promotes it. Only the web create route sets this.
+       */
+      draft?: boolean;
     },
   ): Promise<SerializedArticle> {
+    const asDraft = opts?.draft === true;
     // HTTP requests run through `createArticleSchema` (Zod) which
     // rewrites legacy bodies without `editorMode` to Tiptap. Direct
     // in-process calls (e.g. tests, CLI) may still omit it — match that
@@ -431,16 +447,26 @@ export class ArticlesService {
     // decision stamps `aiSummaryAt` and (post-commit) drives the
     // enqueue. Re-reading after commit would race an off→on settings
     // flip and enqueue a row this write stamped settled.
-    const summaryPending = await this.aiSettings.isAutoSummariesEnabled();
+    // A draft is never summarised (same rule as draft updates): the
+    // summary is generated when Publish promotes the draft.
+    const summaryPending = asDraft
+      ? false
+      : await this.aiSettings.isAutoSummariesEnabled();
 
     const body = this.projectArticleBody(normalized, normalized.excerpt);
+    // The article row's `visibleToClients` is the gate every client read
+    // path checks (list, detail, search trigger, relations, uploads, AI
+    // tools). A never-published draft keeps it false so clients cannot
+    // see it; the author's choice is stored on the draft row and applied
+    // by Publish (see `update`).
+    const intendedVisible = normalized.visibleToClients ?? true;
     const data = {
       ...(opts?.id ? { id: opts.id } : {}),
       companyId,
       folderId: normalized.folderId ?? null,
       title: normalized.title,
       slug,
-      visibleToClients: normalized.visibleToClients ?? true,
+      visibleToClients: asDraft ? false : intendedVisible,
       createdBy: actor.id,
       updatedBy: actor.id,
       ...body,
@@ -464,11 +490,12 @@ export class ArticlesService {
           articleId: row.id,
           companyId,
           version: 1,
-          isDraft: false,
+          isDraft: asDraft,
           ...this.versionRowBodyFromArticle(row),
+          visibleToClients: intendedVisible,
           changedFields: [...VERSIONED_FIELDS],
           changedBy: actor.id,
-          changeReason: 'initial version',
+          changeReason: asDraft ? 'initial draft' : 'initial version',
         },
       });
       return row;
@@ -483,7 +510,7 @@ export class ArticlesService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: this.auditFields(created),
+      after: { ...this.auditFields(created), ...(asDraft ? { kind: 'draft' } : {}) },
     });
     // Post-commit only, from the captured gate decision.
     if (summaryPending) {
@@ -491,9 +518,12 @@ export class ArticlesService {
     }
 
     const out = this.serialize(created, actor.role);
-    // No autosave path on create — the brand-new article cannot have
-    // a draft row.
-    out.hasDraft = false;
+    // Version 1 is either the published version or (Save draft) the
+    // article's only, never-published draft.
+    out.hasDraft = asDraft;
+    out.isPublished = !asDraft;
+    // Staff see the visibility the article will have once published.
+    out.visibleToClients = intendedVisible;
     await this.hydrateActors([out]);
     return out;
   }
@@ -637,6 +667,38 @@ export class ArticlesService {
     // plain `update` would only accept `{ id }`. See assets.service
     // for the same idiom.
     const txResult = await this.prisma.$transaction(async (tx) => {
+      // Serialize writers of this article before reading its publish
+      // state: Publish runs through this same method, so a draft write
+      // queued behind it sees the published row and cannot re-hide it.
+      // Tenant scope rides the WHERE (raw SQL skips the middleware).
+      const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT id FROM articles
+        WHERE id = ${id}::uuid AND company_id = ${companyId}::uuid
+        FOR UPDATE
+      `);
+      if (locked.length === 0) throw new NotFoundException();
+
+      // Never-published article ("Save draft" on create): the live row's
+      // `visibleToClients` is the client gate and stays false until
+      // Publish; the author's intended value lives on the draft row.
+      const pendingDraft = await tx.articleVersion.findFirst({
+        where: { articleId: id, companyId, isDraft: true },
+        select: { visibleToClients: true },
+      });
+      const unpublished =
+        pendingDraft !== null &&
+        (await tx.articleVersion.count({
+          where: { articleId: id, companyId, isDraft: false },
+        })) === 0;
+      const intendedVisible = unpublished
+        ? (input.visibleToClients ?? pendingDraft.visibleToClients)
+        : undefined;
+      if (unpublished) {
+        // Draft writes keep the unpublished article hidden from clients;
+        // Publish applies the intended visibility.
+        data.visibleToClients = isDraftWrite ? false : intendedVisible;
+      }
+
       const guarded = opts?.expectedRevision !== undefined;
       const writeResult = await tx.article.updateMany({
         where: {
@@ -673,11 +735,24 @@ export class ArticlesService {
       // path which always saves explicitly) reports no field change yet
       // must still promote/clear that draft. Skipping it here is what
       // left an article stuck showing "draft in progress" after saving.
+      // On an unpublished article a draft write never moves the live
+      // visibility (pinned false), so a visibility-only edit shows up
+      // only as a change of the intended value on the draft row.
+      const intentChanged =
+        unpublished &&
+        isDraftWrite &&
+        existingDraft !== null &&
+        existingDraft.visibleToClients !== intendedVisible;
+      if (intentChanged) changedFields.push('visibleToClients');
+
       if (changedFields.length === 0 && !(existingDraft && !isDraftWrite)) {
         return { updated, versionKind: null as 'draft' | 'publish' | null };
       }
 
-      const versionBody = this.versionRowBodyFromArticle(updated);
+      const versionBody = {
+        ...this.versionRowBodyFromArticle(updated),
+        ...(unpublished ? { visibleToClients: intendedVisible! } : {}),
+      };
 
       if (isDraftWrite) {
         // Autosave path: coalesce successive PATCHes into a single
@@ -739,7 +814,9 @@ export class ArticlesService {
               changedFields,
             ),
             changedBy: actor.id,
-            changeReason: null,
+            // Publishing a never-published article promotes its v1
+            // draft; label it like any other first version.
+            changeReason: existingDraft.version === 1 ? 'initial version' : null,
           },
         });
       } else {
@@ -776,7 +853,7 @@ export class ArticlesService {
     // No-op silent return — preserves pre-versioning behavior.
     if (versionKind === null) {
       const out = this.serialize(updated, actor.role);
-      out.hasDraft = await this.resolveHasDraft(companyId, id);
+      Object.assign(out, await this.resolveDraftState(companyId, id));
       await this.hydrateActors([out]);
       return out;
     }
@@ -841,7 +918,7 @@ export class ArticlesService {
       },
     });
     const out = this.serialize(updated, actor.role);
-    out.hasDraft = versionKind === 'draft';
+    Object.assign(out, await this.resolveDraftState(companyId, id));
     await this.hydrateActors([out]);
     return out;
   }
@@ -1281,7 +1358,7 @@ export class ArticlesService {
       after: { folderId: updated.folderId },
     });
     const out = this.serialize(updated, actor.role);
-    out.hasDraft = await this.resolveHasDraft(companyId, id);
+    Object.assign(out, await this.resolveDraftState(companyId, id));
     await this.hydrateActors([out]);
     return out;
   }
@@ -1329,16 +1406,19 @@ export class ArticlesService {
               lastPublished.content ?? lastPublished.markdownSource,
             );
           }
-          // If no published row exists (pathological — migration
-          // backfilled v1 for every article), leave the article row
-          // alone and just drop the draft.
-          // `deleteMany` keeps tenant scoping (see `update()` for the
-          // same idiom — `delete`'s where is unique-only so it can't
-          // carry `companyId`).
-          await tx.articleVersion.deleteMany({
-            where: { id: draft.id, companyId },
-          });
-          discardedDraftVersion = draft.version;
+          // No published row means the article was never published
+          // ("Save draft" on a new article): the draft IS the article,
+          // so it is kept and comes back on Restore. Only a draft on
+          // top of a published version is dropped.
+          if (lastPublished) {
+            // `deleteMany` keeps tenant scoping (see `update()` for the
+            // same idiom — `delete`'s where is unique-only so it can't
+            // carry `companyId`).
+            await tx.articleVersion.deleteMany({
+              where: { id: draft.id, companyId },
+            });
+            discardedDraftVersion = draft.version;
+          }
         }
 
         await tx.article.updateMany({
@@ -1374,7 +1454,7 @@ export class ArticlesService {
       },
     });
     const out = this.serialize(updated, actor.role);
-    out.hasDraft = false;
+    Object.assign(out, await this.resolveDraftState(companyId, id));
     await this.hydrateActors([out]);
     return out;
   }
@@ -1409,9 +1489,8 @@ export class ArticlesService {
       after: { archivedAt: null },
     });
     const out = this.serialize(updated, actor.role);
-    // Archive always discards the draft, so a restored article cannot
-    // have one. Avoid the EXISTS query.
-    out.hasDraft = false;
+    // Archive keeps the draft of a never-published article, so ask.
+    Object.assign(out, await this.resolveDraftState(companyId, id));
     await this.hydrateActors([out]);
     return out;
   }
@@ -1582,13 +1661,12 @@ export class ArticlesService {
           orderBy: { version: 'desc' },
         });
         if (!lastPublished) {
-          // Should be impossible: every article has v=1 backfilled by
-          // migration 0046 and `create()` writes v=1 in the same tx
-          // as the article row. If we see this in production it means
-          // the schema invariant broke; refuse to drop the draft
-          // rather than orphan the article body.
+          // A never-published article ("Save draft" on create): the
+          // draft is its only version, so there is nothing to revert
+          // to. Refuse rather than leave an article with no versions;
+          // the editor never offers this, and Archive removes it.
           throw new BadRequestException(
-            'Cannot discard draft: no published version exists.',
+            'This article has never been published, so there is no version to revert to. Archive it to remove it.',
           );
         }
 
@@ -2007,19 +2085,73 @@ export class ArticlesService {
   }
 
   /**
-   * `EXISTS` query for "does an in-progress draft exist for this
-   * article?". Cheap — uses the partial unique index. The detail
-   * endpoints surface this as `hasDraft` so the editor can prompt the
-   * user with the right Cancel behavior.
+   * Set `hasDraft` on a page of list rows with ONE query, so the list
+   * can show a "draft" pill without a per-row lookup. Scoped by
+   * `companyId` like every other version read; the partial unique
+   * index (one draft per article) keeps it small. Client users keep
+   * `false`: a draft is internal editing state, not something the
+   * portal list needs to advertise.
    */
-  private async resolveHasDraft(
+  private async markDrafts(
+    actor: AuthedUser,
+    companyId: string,
+    items: SerializedArticleSummary[],
+  ): Promise<void> {
+    if (actor.role === 'CLIENT_USER' || items.length === 0) return;
+    const drafts = await this.prisma.articleVersion.findMany({
+      where: {
+        companyId,
+        isDraft: true,
+        articleId: { in: items.map((i) => i.id) },
+      },
+      select: { articleId: true, visibleToClients: true },
+    });
+    if (drafts.length === 0) return;
+    // Which drafted rows were ever published — the rest are pinned
+    // hidden, so show staff their intended visibility (as detail does).
+    const published = await this.prisma.articleVersion.findMany({
+      where: {
+        companyId,
+        isDraft: false,
+        articleId: { in: drafts.map((d) => d.articleId) },
+      },
+      select: { articleId: true },
+      distinct: ['articleId'],
+    });
+    const wasPublished = new Set(published.map((p) => p.articleId));
+    const draftById = new Map(drafts.map((d) => [d.articleId, d]));
+    for (const item of items) {
+      const draft = draftById.get(item.id);
+      if (!draft) continue;
+      item.hasDraft = true;
+      if (!wasPublished.has(item.id)) item.visibleToClients = draft.visibleToClients;
+    }
+  }
+
+  /**
+   * Draft state for one article in one query: `hasDraft` (an
+   * in-progress draft row exists) and `isPublished` (a published row
+   * exists). Detail and mutation responses surface both so the editor
+   * picks the right Cancel behaviour.
+   */
+  private async resolveDraftState(
     companyId: string,
     articleId: string,
-  ): Promise<boolean> {
-    const count = await this.prisma.articleVersion.count({
-      where: { articleId, companyId, isDraft: true },
+  ): Promise<{ hasDraft: boolean; isPublished: boolean; visibleToClients?: boolean }> {
+    const rows = await this.prisma.articleVersion.findMany({
+      where: { articleId, companyId },
+      select: { isDraft: true, visibleToClients: true },
     });
-    return count > 0;
+    const draft = rows.find((r) => r.isDraft);
+    const isPublished = rows.some((r) => !r.isDraft);
+    return {
+      hasDraft: draft !== undefined,
+      isPublished,
+      // A never-published article's live row is pinned to hidden (the
+      // client gate); report the visibility it will get on Publish.
+      // Client users never reach such a row, so this only shows staff.
+      ...(!isPublished && draft ? { visibleToClients: draft.visibleToClients } : {}),
+    };
   }
 
   /**
@@ -2224,6 +2356,7 @@ export class ArticlesService {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       isStarred: false,
+      // Filled in for the page by `markDrafts` (one query per page).
       hasDraft: false,
     };
   }
@@ -2259,11 +2392,10 @@ export class ArticlesService {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       isStarred: false, // populated separately for detail
-      // List responses leave `hasDraft` at its default `false` so we
-      // can keep listing cheap. Detail / mutation responses overwrite
-      // this with the real value via `resolveHasDraft` or knowledge
-      // local to the tx.
+      // Defaults; detail / mutation responses overwrite both with the
+      // real values via `resolveDraftState` or knowledge local to the tx.
       hasDraft: false,
+      isPublished: true,
       provenance: [],
     };
   }

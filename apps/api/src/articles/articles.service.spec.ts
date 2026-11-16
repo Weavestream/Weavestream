@@ -58,6 +58,7 @@ function makeStubs(initial: {
     if (where.companyId && where.companyId !== row.companyId) return false;
     if (where.slug && where.slug !== row.slug) return false;
     if (where.archivedAt === null && row.archivedAt !== null) return false;
+    if (where.visibleToClients === true && !row.visibleToClients) return false;
     if (
       where.NOT &&
       typeof where.NOT === 'object' &&
@@ -335,7 +336,7 @@ function makeStubs(initial: {
       },
       async findMany(args: {
         where?: {
-          articleId?: string;
+          articleId?: string | { in: string[] };
           companyId?: string;
           isDraft?: boolean;
           visibleToClients?: boolean;
@@ -345,7 +346,9 @@ function makeStubs(initial: {
       }): Promise<Array<Partial<ArticleVersionRow>>> {
         const where = args.where ?? {};
         let matches = versions.filter((v) => {
-          if (where.articleId && v.articleId !== where.articleId) return false;
+          if (typeof where.articleId === 'object') {
+            if (!where.articleId.in.includes(v.articleId)) return false;
+          } else if (where.articleId && v.articleId !== where.articleId) return false;
           if (where.companyId && v.companyId !== where.companyId) return false;
           if (where.isDraft !== undefined && v.isDraft !== where.isDraft) return false;
           if (
@@ -497,6 +500,14 @@ function makeStubs(initial: {
       },
     },
      
+    // `update()` row-locks the article (`SELECT … FOR UPDATE`) before it
+    // reads the publish state. Match on the two bound values (id,
+    // company_id) like the real query; no lock semantics are needed in
+    // this single-threaded fake.
+    async $queryRaw(query: Prisma.Sql): Promise<Array<{ id: string }>> {
+      const [id, companyId] = query.values as string[];
+      return articles.some((a) => a.id === id && a.companyId === companyId) ? [{ id: id! }] : [];
+    },
     async $transaction<T>(fn: (tx: any) => Promise<T>): Promise<T> {
       return fn(prisma);
     },
@@ -2130,6 +2141,21 @@ describe('AI summary lifecycle (Phase 4)', () => {
     }
   });
 
+  it('list marks rows that hold a draft, for staff only (#117)', async () => {
+    const { svc, articles } = harness(false);
+    seedRow(articles, { id: 'art-a', slug: 'a', title: 'A' });
+    seedRow(articles, { id: 'art-b', slug: 'b', title: 'B' });
+    // A draft write on A leaves the rolling draft row in place.
+    await svc.update(actor(), 'c-1', 'art-a', { title: 'A edited', draft: true }, meta());
+
+    const staff = await svc.list(actor(), 'c-1');
+    expect(staff.items.find((i) => i.id === 'art-a')!.hasDraft).toBe(true);
+    expect(staff.items.find((i) => i.id === 'art-b')!.hasDraft).toBe(false);
+
+    const client = await svc.list(actor({ role: 'CLIENT_USER' }), 'c-1');
+    expect(client.items.every((i) => !i.hasDraft)).toBe(true);
+  });
+
   it('detail serves the coalesce too — one rule on every read path', async () => {
     const { svc, articles } = harness(false);
     const row = seedRow(articles, { aiSummary: 'AI summary' });
@@ -2202,5 +2228,205 @@ describe('AI summary lifecycle — integration writer (Phase 4)', () => {
     )!;
     expect(row.aiSummaryAt).toBeInstanceOf(Date);
     expect(queues.enqueueArticleSummary).not.toHaveBeenCalled();
+  });
+});
+
+describe('never-published drafts — "Save draft" on a new article (#117)', () => {
+  function setup() {
+    const stubs = makeStubs();
+    const enqueue = jest.fn(async () => 'job-1');
+    const svc = new ArticlesService(
+      stubs.prisma as any,
+      stubs.audit as any,
+      stubs.stars as any,
+      stubs.uploads as any,
+      stubs.relations as any,
+      { isAutoSummariesEnabled: async () => true } as never,
+      { enqueueArticleSummary: enqueue } as never,
+    );
+    return { ...stubs, svc, enqueue };
+  }
+
+  async function createDraft(svc: ArticlesService) {
+    return svc.create(
+      actor(),
+      'c-1',
+      { title: 'Work in progress', content: doc('first pass') } as never,
+      meta(),
+      { draft: true },
+    );
+  }
+
+  it('writes v1 as a draft: nothing published, no summary', async () => {
+    const { svc, versions, enqueue, audit } = setup();
+    const created = await createDraft(svc);
+
+    expect(created.hasDraft).toBe(true);
+    expect(created.isPublished).toBe(false);
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({ version: 1, isDraft: true, changeReason: 'initial draft' });
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ after: expect.objectContaining({ kind: 'draft' }) }),
+    );
+
+    const detail = await svc.getById(actor(), 'c-1', created.id);
+    expect(detail).toMatchObject({ hasDraft: true, isPublished: false });
+    const { items } = await svc.list(actor(), 'c-1');
+    expect(items.find((i) => i.id === created.id)!.hasDraft).toBe(true);
+    // History lists published versions only.
+    expect(await svc.listVersions(actor(), 'c-1', created.id)).toEqual([]);
+  });
+
+  it('a later Save draft keeps it unpublished in the same v1 row', async () => {
+    const { svc, versions } = setup();
+    const created = await createDraft(svc);
+
+    const out = await svc.update(
+      actor(),
+      'c-1',
+      created.id,
+      { title: 'Work in progress 2', draft: true },
+      meta(),
+    );
+    expect(out).toMatchObject({ hasDraft: true, isPublished: false });
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({ isDraft: true, title: 'Work in progress 2' });
+  });
+
+  it('Publish promotes the draft to the initial published version', async () => {
+    const { svc, versions, enqueue } = setup();
+    const created = await createDraft(svc);
+
+    // No field changes: publishing an untouched draft must still promote it.
+    const out = await svc.update(
+      actor(),
+      'c-1',
+      created.id,
+      { title: 'Work in progress', content: doc('first pass') } as never,
+      meta(),
+    );
+    expect(out).toMatchObject({ hasDraft: false, isPublished: true });
+    expect(versions).toHaveLength(1);
+    expect(versions[0]).toMatchObject({ version: 1, isDraft: false, changeReason: 'initial version' });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to discard the only version of a never-published article', async () => {
+    const { svc, versions } = setup();
+    const created = await createDraft(svc);
+
+    await expect(svc.discardDraft(actor(), 'c-1', created.id, meta())).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(versions).toHaveLength(1);
+  });
+
+  it('archive keeps the draft, and restore brings it back unpublished', async () => {
+    const { svc, versions } = setup();
+    const created = await createDraft(svc);
+
+    const archived = await svc.archive(actor(), 'c-1', created.id, meta());
+    expect(archived).toMatchObject({ hasDraft: true, isPublished: false });
+    expect(versions).toHaveLength(1);
+
+    const restored = await svc.restore(actor(), 'c-1', created.id, meta());
+    expect(restored).toMatchObject({ hasDraft: true, isPublished: false });
+  });
+
+  it('hides a never-published draft from client users until Publish', async () => {
+    const { svc, articles, versions } = setup();
+    const created = await createDraft(svc); // "Visible to clients" defaults on
+    const client = actor({ role: 'CLIENT_USER' });
+
+    // The live row is the client gate: pinned hidden. The intent is kept
+    // on the draft row and reported to staff.
+    expect(articles.find((a) => a.id === created.id)!.visibleToClients).toBe(false);
+    expect(versions[0]!.visibleToClients).toBe(true);
+    expect(created.visibleToClients).toBe(true);
+    expect((await svc.getById(actor(), 'c-1', created.id)).visibleToClients).toBe(true);
+    const staffRow = (await svc.list(actor(), 'c-1')).items.find((i) => i.id === created.id)!;
+    expect(staffRow).toMatchObject({ hasDraft: true, visibleToClients: true });
+
+    expect((await svc.list(client, 'c-1')).items.map((i) => i.id)).not.toContain(created.id);
+    await expect(svc.getById(client, 'c-1', created.id)).rejects.toBeInstanceOf(NotFoundException);
+
+    // Save draft keeps it hidden.
+    await svc.update(actor(), 'c-1', created.id, { title: 'Still drafting', draft: true }, meta());
+    expect(articles.find((a) => a.id === created.id)!.visibleToClients).toBe(false);
+    expect((await svc.list(client, 'c-1')).items.map((i) => i.id)).not.toContain(created.id);
+
+    // Publish applies the intended visibility.
+    await svc.update(actor(), 'c-1', created.id, { title: 'Ready' }, meta());
+    expect(articles.find((a) => a.id === created.id)!.visibleToClients).toBe(true);
+    expect((await svc.list(client, 'c-1')).items.map((i) => i.id)).toContain(created.id);
+  });
+
+  it('a visibility-only Save draft records the new intent on the draft row', async () => {
+    const { svc, articles, versions } = setup();
+    const created = await createDraft(svc);
+
+    const out = await svc.update(
+      actor(),
+      'c-1',
+      created.id,
+      { visibleToClients: false, draft: true },
+      meta(),
+    );
+    expect(out).toMatchObject({ hasDraft: true, isPublished: false, visibleToClients: false });
+    expect(versions).toHaveLength(1);
+    expect(versions[0]!.visibleToClients).toBe(false);
+    expect(articles.find((a) => a.id === created.id)!.visibleToClients).toBe(false);
+
+    // Publishing without a visibility field keeps the recorded intent.
+    await svc.update(actor(), 'c-1', created.id, { title: 'Internal only' }, meta());
+    expect(articles.find((a) => a.id === created.id)!.visibleToClients).toBe(false);
+    expect(versions[0]).toMatchObject({ isDraft: false, visibleToClients: false });
+  });
+
+  it('a draft write queued behind a Publish does not re-hide the article', async () => {
+    const { svc, articles, prisma } = setup();
+    const created = await createDraft(svc);
+
+    // Reproduce the race: the draft write has already read the article,
+    // then a Publish commits before its transaction starts. The publish
+    // state must be read under the row lock, inside the transaction.
+    const realTx = prisma.$transaction.bind(prisma);
+    let raced = false;
+    (prisma as { $transaction: typeof realTx }).$transaction = async (fn) => {
+      if (!raced) {
+        raced = true;
+        await svc.update(actor(), 'c-1', created.id, { title: 'Published' }, meta());
+      }
+      return realTx(fn);
+    };
+
+    await svc.update(actor(), 'c-1', created.id, { title: 'Late draft', draft: true }, meta());
+    expect(articles.find((a) => a.id === created.id)!.visibleToClients).toBe(true);
+    const client = actor({ role: 'CLIENT_USER' });
+    expect((await svc.list(client, 'c-1')).items.map((i) => i.id)).toContain(created.id);
+  });
+
+  it('locks the article row, scoped to the company, before reading publish state', async () => {
+    const { svc, prisma } = setup();
+    const created = await createDraft(svc);
+    const spy = jest.spyOn(prisma, '$queryRaw');
+
+    await svc.update(actor(), 'c-1', created.id, { title: 'x', draft: true }, meta());
+    const sql = spy.mock.calls[0]![0] as Prisma.Sql;
+    expect(sql.sql).toMatch(/FOR UPDATE/);
+    expect(sql.values).toEqual([created.id, 'c-1']);
+  });
+
+  it('a normal create is still published', async () => {
+    const { svc, versions } = setup();
+    const created = await svc.create(
+      actor(),
+      'c-1',
+      { title: 'Live now', content: doc('done') } as never,
+      meta(),
+    );
+    expect(created).toMatchObject({ hasDraft: false, isPublished: true });
+    expect(versions[0]).toMatchObject({ isDraft: false, changeReason: 'initial version' });
   });
 });

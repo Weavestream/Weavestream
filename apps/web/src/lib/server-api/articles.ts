@@ -21,9 +21,12 @@ export async function listFolderTree(
 }
 
 // The shared detail omits `provenance` on purpose (see `articleDetailSchema`);
-// the web reader renders it, so the web type adds it back.
+// the web reader renders it, so the web type adds it back. `isPublished`
+// (false while the only version is a "Save draft" draft) is read only by
+// the web editor and header, so it lives here too.
 export type ArticleDetail = SharedArticleDetail & {
   provenance: IntegrationTargetProvenance[];
+  isPublished: boolean;
 };
 
 export type ArticlePage = { items: ArticleSummary[]; nextCursor: string | null };
