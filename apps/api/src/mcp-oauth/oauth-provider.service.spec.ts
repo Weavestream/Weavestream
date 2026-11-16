@@ -1,5 +1,6 @@
+import type { Provider } from 'oidc-provider';
 import { setDefaultFetchForTests, setDefaultResolveForTests } from '../common/egress/safe-fetch.js';
-import { CLIENT_FETCH_USER_AGENT, guardedFetch, withoutCookies } from './oauth-provider.service.js';
+import { CLIENT_FETCH_USER_AGENT, guardedFetch, OAuthProviderService, withoutCookies } from './oauth-provider.service.js';
 
 describe('withoutCookies', () => {
   const names = new Set(['ws_oauth_session', 'ws_oauth_session.sig']);
@@ -65,5 +66,56 @@ describe('guardedFetch', () => {
       /not an allowed client host/,
     );
     expect(sent).toBeUndefined();
+  });
+});
+
+describe('loopback redirects on the provider', () => {
+  // No database: building a client touches only the library's schema.
+  const oauth = new OAuthProviderService(
+    { values: { APP_URL: 'https://ws.example.test', COOKIE_SIGNING_KEY: 'k'.repeat(48) } } as never,
+    {} as never,
+    { mcpRemoteEnabled: async () => true, mcpClientPolicy: async () => 'any' } as never,
+    {} as never,
+  );
+  beforeAll(() => oauth.onModuleInit());
+  // The library's types leave out the constructor's metadata argument.
+  const buildClient = (metadata: Record<string, unknown>) =>
+    new (oauth.provider.Client as unknown as new (m: Record<string, unknown>) => InstanceType<Provider['Client']>)(
+      metadata,
+    );
+
+  // Claude Code's client metadata document, as published (issue #126).
+  const claudeCode = {
+    client_id: 'https://claude.ai/oauth/claude-code-client-metadata',
+    client_name: 'Claude Code',
+    redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
+    grant_types: ['authorization_code', 'refresh_token'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+  };
+
+  it('accepts any port on a loopback redirect of a metadata document that names no type', () => {
+    const client = buildClient(claudeCode);
+    expect(client.applicationType).toBe('native');
+    expect(client.redirectUriAllowed('http://localhost:50357/callback')).toBe(true);
+    expect(client.redirectUriAllowed('http://127.0.0.1:8765/callback')).toBe(true);
+    expect(client.redirectUriAllowed('http://localhost:50357/other')).toBe(false);
+    expect(client.redirectUriAllowed('http://evil.example:50357/callback')).toBe(false);
+  });
+
+  it('keeps exact matching for an https-only client', () => {
+    const client = buildClient({
+      ...claudeCode,
+      client_id: 'https://claude.ai/oauth/mcp-client-metadata',
+      redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+    });
+    expect(client.applicationType).toBe('web');
+    expect(client.redirectUriAllowed('https://claude.ai/api/mcp/auth_callback')).toBe(true);
+    expect(client.redirectUriAllowed('https://claude.ai:8443/api/mcp/auth_callback')).toBe(false);
+  });
+
+  it('never keeps the trigger property a client sends', () => {
+    const client = buildClient({ ...claudeCode, weavestream_loopback_rule: 'x' });
+    expect(client.metadata()).not.toHaveProperty('weavestream_loopback_rule');
   });
 });

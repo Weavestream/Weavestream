@@ -35,6 +35,9 @@ const GPT_JWKS = 'https://chatgpt.com/oauth/jwks.json';
 // Another app with its own client metadata document, on a custom port.
 const AGENT = 'https://agent.example:8443/oauth/client.json';
 const AGENT_CB = 'https://agent.example:8443/oauth/callback';
+// Claude Code's published document: port-less loopback redirects, no
+// `application_type`; the app listens on a random port (issue #126).
+const CLAUDE_CODE = 'https://claude.ai/oauth/claude-code-client-metadata';
 // A document host that sends headers and then never finishes the body.
 const STALL = 'https://stall.example/oauth/client.json';
 
@@ -105,6 +108,15 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
       response_types: ['code'],
     },
     [GPT_JWKS]: { keys: [{ ...gptKey.publicKey.export({ format: 'jwk' }), kid: 'k1', alg: 'RS256', use: 'sig' }] },
+    [CLAUDE_CODE]: {
+      client_id: CLAUDE_CODE,
+      client_name: 'Claude Code',
+      client_uri: 'https://claude.ai',
+      redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+    },
     [AGENT]: {
       client_id: AGENT,
       client_name: 'Agent',
@@ -674,6 +686,12 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
       expect(flow.res.status).toBe(400);
       expect(fetched).not.toContain(AGENT);
     });
+
+    it('refuses Claude Code: its loopback redirects are not allowed in this mode', async () => {
+      const flow = await authorize(new Browser(), CLAUDE_CODE, 'http://localhost:50357/callback');
+      expect(flow.res.status).toBe(400);
+      expect(flow.uid).toBe('');
+    });
   });
 
   describe('client policy: any MCP app', () => {
@@ -708,6 +726,29 @@ describeIfDb('remote MCP OAuth flow (DB integration)', () => {
       const tokens = await exchange(flow, code);
       expect(tokens.status).toBe(200);
       expect(await usable(tokens.json.access_token!)).toBe(true);
+    });
+
+    it('connects Claude Code by its metadata document, on a random loopback port', async () => {
+      const redirectUri = 'http://localhost:50357/callback';
+      const browser = new Browser();
+      const flow = await authorize(browser, CLAUDE_CODE, redirectUri);
+      expect(flow.uid).not.toBe('');
+      const details = await consentDetails(browser, flow);
+      expect(details.json).toMatchObject({
+        clientVerified: true,
+        clientHost: 'claude.ai',
+        clientName: 'Claude Code',
+        redirectHost: 'localhost',
+        redirectLoopback: true,
+      });
+      const approved = await approve(browser, flow);
+      expect(approved.callback!.origin + approved.callback!.pathname).toBe(redirectUri);
+      const tokens = await exchange(flow, approved.callback!.searchParams.get('code')!);
+      expect(tokens.status).toBe(200);
+      expect(await usable(tokens.json.access_token!)).toBe(true);
+      // Still no path other than the registered one, and no other host.
+      expect((await authorize(new Browser(), CLAUDE_CODE, 'http://localhost:50357/other')).res.status).toBe(400);
+      expect((await authorize(new Browser(), CLAUDE_CODE, 'http://192.168.1.20:50357/callback')).res.status).toBe(400);
     });
 
     it('registers a public client and connects it end to end, on a new loopback port', async () => {

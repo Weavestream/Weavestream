@@ -3,7 +3,7 @@ import { checkDcrMetadata } from './dcr-metadata.js';
 const LOOPBACK = 'http://127.0.0.1:54321/callback';
 
 describe('checkDcrMetadata', () => {
-  it('accepts a public native client on a loopback redirect and registers it as native', () => {
+  it('accepts a public native client on a loopback redirect', () => {
     const r = checkDcrMetadata({
       client_name: 'Claude Code',
       redirect_uris: [LOOPBACK],
@@ -13,13 +13,8 @@ describe('checkDcrMetadata', () => {
     });
     expect(r).toEqual({
       ok: true,
-      metadata: expect.objectContaining({ client_name: 'Claude Code', application_type: 'native' }),
+      metadata: expect.objectContaining({ client_name: 'Claude Code', redirect_uris: [LOOPBACK] }),
     });
-  });
-
-  it('turns a web client with a loopback redirect into a native one', () => {
-    const r = checkDcrMetadata({ redirect_uris: [LOOPBACK], application_type: 'web' });
-    expect(r.ok && r.metadata.application_type).toBe('native');
   });
 
   it('accepts a minimal https web client and leaves its type alone', () => {

@@ -129,6 +129,23 @@ export function isLoopbackRedirect(uri: string): boolean {
 }
 
 /**
+ * Make a client with a loopback redirect `native`, so the library accepts any
+ * port on that redirect at authorization time (RFC 8252 §7.3): a local app
+ * listens on whatever port is free. Applies to every client, whether it
+ * registered itself or is described by a client metadata document (Claude
+ * Code's document lists port-less loopback redirects and no
+ * `application_type`). Whether loopback redirects are allowed at all is still
+ * the client policy's call (`areAllowedRedirects`). Changes `metadata` in
+ * place; leaves anything malformed for the library's own validation.
+ */
+export function markLoopbackClientNative(metadata: { redirect_uris?: unknown; application_type?: unknown }): void {
+  const uris = metadata.redirect_uris;
+  if (Array.isArray(uris) && uris.some((uri) => typeof uri === 'string' && isLoopbackRedirect(uri))) {
+    metadata.application_type = 'native';
+  }
+}
+
+/**
  * A client is verified when its id is an https URL: its metadata document was
  * fetched from that host. An app that registered itself has an opaque id the
  * server issued, and nothing about it is checked. Never throws.

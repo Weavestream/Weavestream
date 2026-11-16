@@ -13,6 +13,7 @@ import {
   connectionAllowed,
   FETCH_HOSTS,
   isAllowedClientId,
+  markLoopbackClientNative,
   MCP_SCOPE,
   mcpResourceUrl,
   OAUTH_COOKIE_NAMES,
@@ -38,6 +39,13 @@ const OIDC_ONLY_METADATA = [
   'subject_types_supported',
   'userinfo_endpoint',
 ];
+
+/**
+ * The client metadata property that runs the loopback rule
+ * (`markLoopbackClientNative`) through the library's `extraClientMetadata`
+ * validator. Not a real metadata field: it is removed from every client.
+ */
+const LOOPBACK_RULE_TRIGGER = 'weavestream_loopback_rule';
 
 /** The authorization endpoint and its resume step (`/auth/<uid>`). */
 const AUTHORIZATION_ROUTE = /^\/auth(\/[^/]+)?$/;
@@ -216,6 +224,20 @@ export class OAuthProviderService implements OnModuleInit {
         idTokenSigningAlgValues: ['ES256'],
         // ChatGPT signs its client assertions with RS256.
         clientAuthSigningAlgValues: ['RS256', 'PS256', 'ES256'],
+      },
+      // The library has no hook between reading a client's metadata and
+      // validating it, except this one: the validator runs once per listed
+      // property, before the redirect checks, for every client (registered,
+      // stored, or from a metadata document, including a cached one). The
+      // listed property is only the trigger and is never kept, so a client
+      // cannot store anything new through it.
+      extraClientMetadata: {
+        properties: [LOOPBACK_RULE_TRIGGER],
+        validator: (_ctx, key, _value, metadata) => {
+          if (key !== LOOPBACK_RULE_TRIGGER) return;
+          delete metadata[key];
+          markLoopbackClientNative(metadata);
+        },
       },
       clientAuthMethods: ['none', 'private_key_jwt'],
       responseTypes: ['code'],

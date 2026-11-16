@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { isAnyModeRedirect, isLoopbackRedirect } from './mcp-oauth.constants.js';
+import { isAnyModeRedirect } from './mcp-oauth.constants.js';
 
 /**
  * What a dynamic client registration (RFC 7591) may ask for, in mode `any`:
@@ -45,9 +45,8 @@ export type DcrCheck =
 
 /**
  * Check a registration request. On success, the returned metadata is what the
- * library registers: a client with a loopback redirect is registered as
- * `native`, which turns on the library's own rule that accepts any port on a
- * loopback redirect at authorization time (RFC 8252 §7.3).
+ * library registers. A client with a loopback redirect is made `native` by
+ * the provider for every client (`markLoopbackClientNative`), not here.
  */
 export function checkDcrMetadata(body: unknown): DcrCheck {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
@@ -65,7 +64,5 @@ export function checkDcrMetadata(body: unknown): DcrCheck {
       error_description: parsed.error.issues[0]?.message ?? 'invalid client metadata',
     };
   }
-  const metadata: Record<string, unknown> = { ...(body as Record<string, unknown>) };
-  if (parsed.data.redirect_uris.some(isLoopbackRedirect)) metadata.application_type = 'native';
-  return { ok: true, metadata };
+  return { ok: true, metadata: { ...(body as Record<string, unknown>) } };
 }

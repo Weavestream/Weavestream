@@ -6,6 +6,7 @@ import {
   isFirstPartyConnection,
   isLoopbackRedirect,
   isVerifiedClientId,
+  markLoopbackClientNative,
 } from './mcp-oauth.constants.js';
 
 describe('isAllowedClientId', () => {
@@ -115,6 +116,37 @@ describe('client helpers', () => {
     expect(isLoopbackRedirect('http://localhost/cb')).toBe(true);
     expect(isLoopbackRedirect('https://localhost/cb')).toBe(false);
     expect(isLoopbackRedirect('https://claude.ai/cb')).toBe(false);
+  });
+
+  it('makes a client with a loopback redirect native, including a document that names no type', () => {
+    // Claude Code's client metadata document, as published.
+    const claudeCode: Record<string, unknown> = {
+      client_id: 'https://claude.ai/oauth/claude-code-client-metadata',
+      redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
+    };
+    markLoopbackClientNative(claudeCode);
+    expect(claudeCode.application_type).toBe('native');
+
+    const webWithLoopback: Record<string, unknown> = {
+      redirect_uris: ['https://a.example/cb', 'http://[::1]:9/cb'],
+      application_type: 'web',
+    };
+    markLoopbackClientNative(webWithLoopback);
+    expect(webWithLoopback.application_type).toBe('native');
+  });
+
+  it('leaves https-only and malformed clients alone', () => {
+    for (const metadata of [
+      { redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] },
+      { redirect_uris: ['https://localhost/cb'] },
+      { redirect_uris: ['http://192.168.1.20/cb'] },
+      { redirect_uris: 'http://127.0.0.1/cb' },
+      { redirect_uris: [42] },
+      {},
+    ] as Record<string, unknown>[]) {
+      markLoopbackClientNative(metadata);
+      expect(metadata.application_type).toBeUndefined();
+    }
   });
 
   it('allows other apps\' connections only in mode any', () => {
