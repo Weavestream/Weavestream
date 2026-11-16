@@ -290,30 +290,6 @@ function SchedulesTab({
       ),
     },
     {
-      id: 'timezone',
-      header: 'Timezone',
-      width: 160,
-      render: (c) => c.timezone ?? 'Etc/UTC',
-    },
-    {
-      id: 'recipients',
-      header: 'Notify',
-      width: 200,
-      render: (c) =>
-        c.notifyEmails.length === 0 ? (
-          <span style={{ color: 'var(--muted)' }}>—</span>
-        ) : c.notifyEmails.length === 1 ? (
-          c.notifyEmails[0]
-        ) : (
-          <span title={c.notifyEmails.join(', ')}>
-            {c.notifyEmails[0]}{' '}
-            <span style={{ color: 'var(--muted)' }}>
-              +{c.notifyEmails.length - 1}
-            </span>
-          </span>
-        ),
-    },
-    {
       id: 'lastRun',
       header: 'Last run',
       width: 150,
