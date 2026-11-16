@@ -214,11 +214,11 @@ model User {
   uiAccent                  UiAccent             @default(LIME) @map("ui_accent")
   // Sidebar item counts (assets per layout, domains, passwords, subnets)
   // and the folder/tag totals in the passwords vault rail.
-  // Off by default and for every existing row: the counts are ambient
-  // density rather than something a user navigates by, so they are opt-in.
+  // On by default for new users (migration 0095). Rows created before
+  // that keep their stored value, so most earlier users have it off.
   // Warning badges are NOT covered by this — an anomaly must stay visible
   // whatever the density setting.
-  showItemCounts            Boolean              @default(false) @map("show_item_counts")
+  showItemCounts            Boolean              @default(true) @map("show_item_counts")
   createdAt                 DateTime             @default(now()) @map("created_at")
   updatedAt                 DateTime             @updatedAt @map("updated_at")
   lastLoginAt               DateTime?            @map("last_login_at")

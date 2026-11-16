@@ -94,7 +94,7 @@ export function AppearanceSheet({
         ? {
             ...old,
             preferences: {
-              showItemCounts: old.preferences?.showItemCounts ?? false,
+              showItemCounts: old.preferences?.showItemCounts ?? true,
               uiTheme: prefs.uiTheme,
               uiAccent: prefs.uiAccent,
             },

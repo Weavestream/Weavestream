@@ -66,7 +66,7 @@ export function ArticlesBrowser({
   canManage: boolean;
   /**
    * The account's "Show item counts in the sidebar" preference, same
-   * switch the passwords rail reads. Off by default.
+   * switch the passwords rail reads. On by default for new users.
    */
   showCounts: boolean;
 }) {

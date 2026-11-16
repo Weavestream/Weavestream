@@ -13,6 +13,10 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Changed
+
+- **Sidebar item counts are on by default for new users.** New accounts see the counts next to sidebar entries. Existing accounts keep their current setting. To change it, go to **Your profile → Appearance**.
+
 ## [1.13.1] - 2026-11-07
 
 ### Added

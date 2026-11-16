@@ -92,7 +92,7 @@ export function Sidebar({
   workspace,
   sections,
   activeId,
-  showCounts = false,
+  showCounts = true,
   variant = 'fixed',
   onNavigate,
   className,
@@ -101,9 +101,8 @@ export function Sidebar({
   sections: SidebarSection[];
   activeId?: string;
   /**
-   * Render each nav item's `count`. Off by default — the totals are
-   * ambient density, not something anyone navigates by — and turned on
-   * per user under Appearance in their profile.
+   * Render each nav item's `count`. On by default, and turned off per
+   * user under Appearance in their profile.
    *
    * Scoped to `count` alone. `badge` is a warning signal (expiring
    * domains, stale passwords, subnet conflicts) and renders either way:

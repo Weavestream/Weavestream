@@ -53,9 +53,8 @@ interface BrowserProps {
   generatorDefaults: PasswordGeneratorDefaults;
   /**
    * The account's "Show item counts in the sidebar" preference, which
-   * governs the totals beside folders and tags in the rail. Off by
-   * default: the tree is a place, and the list one click away is the
-   * truth. It also spares us an own-versus-subtree answer to get wrong.
+   * governs the totals beside folders and tags in the rail. On by
+   * default for new users.
    */
   showCounts: boolean;
 }
