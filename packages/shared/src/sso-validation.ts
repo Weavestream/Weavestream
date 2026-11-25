@@ -1,8 +1,10 @@
 /**
  * The ONE set of validation rules for OIDC single sign-on configuration.
  *
- * It is used by the environment loader (`SSO_*` variables, in `env.ts`). Pure
- * and isomorphic (no Node APIs).
+ * It is used by the environment loader (`SSO_*` variables, in `env.ts`) and
+ * by the Admin > Settings > Single sign-on API (`SsoSettingsService`), so the
+ * two ways of configuring SSO can never accept different things. Pure and
+ * isomorphic (no Node APIs), so the settings form can reuse it for hints.
  */
 
 /**

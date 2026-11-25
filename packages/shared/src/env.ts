@@ -161,10 +161,12 @@ export const envSchema = z.object({
   // default 15 min balances that against re-prompting on every action.
   STEP_UP_TTL_SEC: intFromString(60, 3600).default(900),
 
-  // OIDC single sign-on (Microsoft Entra ID first). Off unless SSO_OIDC_ISSUER
-  // is set. Cross-field rules (client id/secret required, a multi-tenant
-  // issuer refused) are enforced by `ssoEnvProblems` in `loadEnv`, using
-  // `validateSsoSettings`.
+  // OIDC single sign-on (Microsoft Entra ID first). When SSO_OIDC_ISSUER is
+  // set the environment configures SSO entirely and the Admin > Settings >
+  // Single sign-on tab is read-only; when it is unset, that tab (database) is
+  // used instead. Cross-field rules (client id/secret required, a
+  // multi-tenant issuer refused) are enforced by `ssoEnvProblems` in
+  // `loadEnv`, using the same `validateSsoSettings` the tab uses.
   //
   // Issuer for Entra: https://login.microsoftonline.com/<tenant-id>/v2.0
   SSO_OIDC_ISSUER: optionalTrimmed,
@@ -396,7 +398,9 @@ const BASE64_KEY_FIELDS: Record<string, number> = (() => {
   return map;
 })();
 
-// The validation rules live in `sso-validation.ts`.
+// The validation rules live in `sso-validation.ts`, shared with the
+// Admin > Settings > Single sign-on API so both configuration routes accept
+// exactly the same things.
 export { isMultiTenantIssuer };
 
 const SSO_ENV_KEY: Record<SsoSettingsField, string> = {
