@@ -114,6 +114,7 @@ If you are asked to set up or enter a two-factor code right after a Microsoft si
 **Entra sends no `amr` claim.** Entra v2 ID tokens normally carry no `amr`, so Weavestream cannot see that MFA happened even when it did. You have two options:
 
 - **Keep the Weavestream two-factor prompt.** Nothing to change. The safest choice.
+- **Assume the provider requires MFA.** Turn on **Trust the provider's multi-factor sign-in** and **Assume the provider always requires MFA** (or set `SSO_TRUST_IDP_MFA=true` and `SSO_ASSUME_IDP_MFA=true`), **and** make sure a Conditional Access policy requires MFA for this application. Weavestream cannot check the policy: if it is missing, Weavestream skips its own two-factor code for every SSO sign-in.
 
 ## 9. Optionally turn off password sign-in
 

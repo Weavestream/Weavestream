@@ -99,6 +99,7 @@ See [Managing Passwords](/guides/managing-passwords/#setting-a-global-password-a
 | **Link accounts by email** | First SSO sign-in connects to the active user with the same verified email. Super admins are never linked this way. |
 | **Create accounts automatically** | Someone with no match gets an Operator account with no access until an admin grants it. |
 | **Trust the provider's multi-factor sign-in** | A session whose ID token says `mfa` skips Weavestream's own two-factor code. |
+| **Assume the provider always requires MFA** | Needs the option above. Counts every SSO sign-in as multi-factor even when the provider sends no `amr` claim (Microsoft Entra does not). Only turn it on when a provider policy such as Conditional Access requires MFA for this app; Weavestream cannot check that. |
 | **Allow password sign-in** | Turn off to require SSO for everyone except super admins (break-glass). Refused (409) until at least one active super admin has linked their account at this provider. |
 
 The tab also shows the **Callback URL** to register at the provider (with a copy button; whether it is registered cannot be checked from here), a **Test connection** button that checks the provider's discovery document, issuer match and signing keys without signing anyone in, and a short setup checklist. The test only contacts public internet addresses; private, loopback and link-local addresses are refused.
