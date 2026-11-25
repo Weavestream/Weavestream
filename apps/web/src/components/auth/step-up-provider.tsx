@@ -1,15 +1,9 @@
 'use client';
 
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { StepUpFactor } from '@weavestream/shared';
 import { problemMessage } from '@weavestream/shared';
-import { Btn, Dialog, Field, Input } from '../ui';
+import { Btn, btnStyle, Dialog, Field, Input } from '../ui';
 import { apiFetch } from '../../lib/api';
 import { registerStepUpOpener } from '../../lib/step-up';
 
@@ -64,6 +58,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
   const cancel = useCallback(() => settle(false), [settle]);
 
   const isMfa = prompt?.factor === 'mfa';
+  const isSso = prompt?.factor === 'sso';
   // Trim MFA/backup codes — users paste them with stray spaces/dashes
   // (the API normalises backup codes anyway). Send password factors
   // VERBATIM: leading/trailing spaces are significant in a password, and
@@ -71,7 +66,7 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
   const submitValue = isMfa ? code.trim() : code;
 
   const submit = useCallback(async () => {
-    if (submitValue.length === 0 || busy) return;
+    if (isSso || submitValue.length === 0 || busy) return;
     setBusy(true);
     setErr(null);
     const res = await apiFetch<{ ok: true }>('/auth/step-up/verify', {
@@ -83,13 +78,12 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
       setErr(
         res.status === 429
           ? 'Too many attempts. Wait a moment and try again.'
-          : (problemMessage(res.problem) ??
-              'Verification failed. Check the code and try again.'),
+          : (problemMessage(res.problem) ?? 'Verification failed. Check the code and try again.'),
       );
       return;
     }
     settle(true);
-  }, [submitValue, busy, settle]);
+  }, [isSso, submitValue, busy, settle]);
 
   return (
     <>
@@ -105,14 +99,28 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
               <Btn size="sm" onClick={cancel} disabled={busy}>
                 Cancel
               </Btn>
-              <Btn
-                size="sm"
-                kind="primary"
-                onClick={() => void submit()}
-                disabled={busy || submitValue.length === 0}
-              >
-                Confirm
-              </Btn>
+              {isSso ? (
+                // Full page navigation: the identity provider round-trip
+                // leaves the app and returns to the landing page. A Next
+                // <Link> would client-route to an API path, so a plain
+                // anchor is deliberate.
+                // eslint-disable-next-line @next/next/no-html-link-for-pages
+                <a
+                  href="/api/v1/auth/sso/step-up"
+                  style={btnStyle({ kind: 'primary', size: 'sm' })}
+                >
+                  Continue to identity provider
+                </a>
+              ) : (
+                <Btn
+                  size="sm"
+                  kind="primary"
+                  onClick={() => void submit()}
+                  disabled={busy || submitValue.length === 0}
+                >
+                  Confirm
+                </Btn>
+              )}
             </div>
           }
         >
@@ -126,27 +134,26 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
             style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
           >
             <p style={{ margin: 0, fontSize: 13, color: 'var(--muted)' }}>
-              {isMfa
-                ? 'This action is sensitive. Enter a code from your authenticator app (or a backup code) to continue.'
-                : 'This action is sensitive. Re-enter your password to continue.'}
+              {isSso
+                ? 'This action is sensitive. Confirm it is you with your identity provider to continue. You will be sent to sign in again and brought back here.'
+                : isMfa
+                  ? 'This action is sensitive. Enter a code from your authenticator app (or a backup code) to continue.'
+                  : 'This action is sensitive. Re-enter your password to continue.'}
             </p>
-            <Field
-              label={isMfa ? 'Authentication code' : 'Password'}
-              labelVariant="plain"
-            >
-              <Input
-                type={isMfa ? 'text' : 'password'}
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                autoFocus
-                autoComplete={isMfa ? 'one-time-code' : 'current-password'}
-                inputMode={isMfa ? 'numeric' : undefined}
-                aria-label={isMfa ? 'Authentication code' : 'Password'}
-              />
-            </Field>
-            {err && (
-              <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>
+            {!isSso && (
+              <Field label={isMfa ? 'Authentication code' : 'Password'} labelVariant="plain">
+                <Input
+                  type={isMfa ? 'text' : 'password'}
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  autoFocus
+                  autoComplete={isMfa ? 'one-time-code' : 'current-password'}
+                  inputMode={isMfa ? 'numeric' : undefined}
+                  aria-label={isMfa ? 'Authentication code' : 'Password'}
+                />
+              </Field>
             )}
+            {err && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</div>}
           </div>
         </Dialog>
       )}

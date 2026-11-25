@@ -4,6 +4,7 @@ import {
   RATE_LIMIT_DIGEST_PREFIX,
   RateLimitedError,
   isApiUnavailableDigest,
+  mfaRedirectFor,
   parseRateLimitDigest,
   unwrapApiResponse,
   unwrapMeResponse,
@@ -141,5 +142,23 @@ describe('isApiUnavailableDigest', () => {
     expect(isApiUnavailableDigest('WS_API_UNAVAILABLE')).toBe(true);
     expect(isApiUnavailableDigest('WS_RATE_LIMITED:42')).toBe(false);
     expect(isApiUnavailableDigest(undefined)).toBe(false);
+  });
+});
+
+describe('mfaRedirectFor', () => {
+  it('sends an unfinished-challenge session to the challenge page', () => {
+    expect(mfaRedirectFor({ status: 403, problem: { code: 'mfa_challenge_required' } })).toBe('/mfa/challenge');
+  });
+  it('sends a not-yet-enrolled session to setup', () => {
+    expect(mfaRedirectFor({ status: 403, problem: { code: 'mfa_enrollment_required' } })).toBe('/mfa/setup');
+  });
+  it.each([
+    [{ status: 401, problem: { code: 'mfa_challenge_required' } }],
+    [{ status: 403, problem: { code: 'something_else' } }],
+    [{ status: 403, problem: undefined }],
+    [{ status: 403, problem: 'mfa_challenge_required' }],
+    [{ status: 200 }],
+  ])('returns null for %j (a genuinely signed-out or unrelated response)', (r) => {
+    expect(mfaRedirectFor(r)).toBeNull();
   });
 });
