@@ -116,6 +116,7 @@ const DEFAULT_SSO_SETTINGS: SsoSettings = {
   linkByEmail: false,
   autoProvision: false,
   trustIdpMfa: false,
+  assumeIdpMfa: false,
   localLoginEnabled: true,
   callbackUrl: '',
   updatedAt: null,

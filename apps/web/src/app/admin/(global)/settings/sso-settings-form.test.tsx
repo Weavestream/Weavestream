@@ -26,6 +26,7 @@ const BASE: SsoSettings = {
   linkByEmail: false,
   autoProvision: false,
   trustIdpMfa: false,
+  assumeIdpMfa: false,
   localLoginEnabled: true,
   callbackUrl: CALLBACK,
   updatedAt: null,
@@ -301,6 +302,30 @@ describe('Microsoft Entra helper and local-login warning', () => {
     expect(screen.queryByText(/Everyone except super admins/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText(/Allow password sign-in/));
     expect(screen.getByText(/Everyone except super admins/)).toBeInTheDocument();
+  });
+
+  it('keeps the assume-MFA option disabled until trust is ticked, and warns when it is on', () => {
+    renderForm(CONFIGURED);
+    const assume = screen.getByLabelText(/Assume the provider always requires MFA/);
+    expect(assume).toBeDisabled();
+    fireEvent.click(screen.getByLabelText(/Trust the provider/));
+    expect(assume).toBeEnabled();
+    expect(screen.queryByText(/Weavestream cannot check it/)).not.toBeInTheDocument();
+    fireEvent.click(assume);
+    expect(screen.getByText(/Weavestream cannot check it/)).toBeInTheDocument();
+  });
+
+  it('sends assumeIdpMfa true only with trust, and clears it when trust is unticked', async () => {
+    renderForm(CONFIGURED);
+    fireEvent.click(screen.getByLabelText(/Trust the provider/));
+    fireEvent.click(screen.getByLabelText(/Assume the provider always requires MFA/));
+    await click('Save single sign-on settings');
+    expect(lastBody()).toMatchObject({ trustIdpMfa: true, assumeIdpMfa: true });
+
+    fireEvent.click(screen.getByLabelText(/Trust the provider/));
+    expect(screen.getByLabelText(/Assume the provider always requires MFA/)).not.toBeChecked();
+    await click('Save single sign-on settings');
+    expect(lastBody()).toMatchObject({ trustIdpMfa: false, assumeIdpMfa: false });
   });
 
   it('saves the switches as sent', async () => {

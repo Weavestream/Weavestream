@@ -53,6 +53,7 @@ export function SsoSettingsForm({ initial }: { initial: SsoSettings }) {
   const [linkByEmail, setLinkByEmail] = useState(initial.linkByEmail);
   const [autoProvision, setAutoProvision] = useState(initial.autoProvision);
   const [trustIdpMfa, setTrustIdpMfa] = useState(initial.trustIdpMfa);
+  const [assumeIdpMfa, setAssumeIdpMfa] = useState(initial.assumeIdpMfa);
   const [localLoginEnabled, setLocalLoginEnabled] = useState(initial.localLoginEnabled);
   const [entraTenant, setEntraTenant] = useState('');
   const [problems, setProblems] = useState<string[]>([]);
@@ -72,6 +73,7 @@ export function SsoSettingsForm({ initial }: { initial: SsoSettings }) {
     linkByEmail !== b.linkByEmail ||
     autoProvision !== b.autoProvision ||
     trustIdpMfa !== b.trustIdpMfa ||
+    assumeIdpMfa !== b.assumeIdpMfa ||
     localLoginEnabled !== b.localLoginEnabled ||
     secret.length > 0 ||
     clearing;
@@ -117,6 +119,8 @@ export function SsoSettingsForm({ initial }: { initial: SsoSettings }) {
       linkByEmail,
       autoProvision,
       trustIdpMfa,
+      // Never sent on while trust is off (the API refuses that combination).
+      assumeIdpMfa: trustIdpMfa && assumeIdpMfa,
       localLoginEnabled,
     };
     if (secret) payload.clientSecret = secret;
@@ -184,6 +188,7 @@ export function SsoSettingsForm({ initial }: { initial: SsoSettings }) {
     setLinkByEmail(r.linkByEmail);
     setAutoProvision(r.autoProvision);
     setTrustIdpMfa(r.trustIdpMfa);
+    setAssumeIdpMfa(r.assumeIdpMfa);
     setLocalLoginEnabled(r.localLoginEnabled);
     setProblems([]);
     setError(null);
@@ -397,9 +402,24 @@ export function SsoSettingsForm({ initial }: { initial: SsoSettings }) {
           label="Trust the provider's multi-factor sign-in"
           hint="If the provider reports that the person used MFA, skip Weavestream's own two-factor code for that session. Needs the provider to send the amr claim; otherwise Weavestream still asks for its own code."
           checked={trustIdpMfa}
-          onChange={setTrustIdpMfa}
+          onChange={(v) => {
+            setTrustIdpMfa(v);
+            if (!v) setAssumeIdpMfa(false);
+          }}
           disabled={readOnly}
         />
+        <CheckboxOption
+          label="Assume the provider always requires MFA"
+          hint="Count every SSO sign-in as multi-factor, even when the provider does not report how the person signed in (Microsoft Entra does not send the amr claim). Only turn this on if your provider's policy, such as Conditional Access in Entra, requires MFA for this app. If it does not, Weavestream will skip its own two-factor code for every SSO sign-in."
+          checked={trustIdpMfa && assumeIdpMfa}
+          onChange={setAssumeIdpMfa}
+          disabled={readOnly || !trustIdpMfa}
+        />
+        {trustIdpMfa && assumeIdpMfa && !readOnly && (
+          <Tag tone="warn" style={{ alignSelf: 'flex-start' }}>
+            Only keep this on while your provider enforces MFA for this app. Weavestream cannot check it.
+          </Tag>
+        )}
         <CheckboxOption
           label="Allow password sign-in"
           hint="Turn this off to require SSO for everyone except super admins, who keep password sign-in as a break-glass way in. You can only turn it off after a super admin has signed in with SSO and linked their account."
