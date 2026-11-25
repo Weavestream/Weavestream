@@ -7,6 +7,7 @@ export * from './http-url.js';
 export * from './asset-field.js';
 export * from './asset-layout.js';
 export * from './asset.js';
+export * from './asset-version.js';
 export * from './tag.js';
 export * from './folder.js';
 export * from './article.js';
