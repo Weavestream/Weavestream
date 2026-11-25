@@ -74,6 +74,12 @@ export const AUDIT_ACTIONS = {
     emailTest: 'settings.email.test',
     aiUpdate: 'settings.ai.update',
     aiTest: 'settings.ai.test',
+    // Admin > Settings > Single sign-on (`PATCH /settings/sso`). `after`
+    // carries `{ changedFields: string[], clientSecret: 'set'|'cleared'|'unchanged' }`:
+    // field NAMES only, never a value. `ssoTest` records a connection test
+    // (`after`: host, outcome flags; never a provider response body).
+    ssoChange: 'settings.sso.change',
+    ssoTest: 'settings.sso.test',
     // Instance-wide API key switch (`PUT /settings/api-keys`). `before` and
     // `after` carry `{ apiKeysEnabled }`.
     apiKeysToggle: 'settings.api_keys.toggle',

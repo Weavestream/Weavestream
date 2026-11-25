@@ -24,5 +24,6 @@ export function fakeSsoConfig(values: Record<string, unknown> = {}): SsoConfigSe
   return {
     get: async () => resolved,
     callbackUrl: () => `${String(v.API_URL ?? 'https://wiki.example.test').replace(/\/+$/, '')}/v1/auth/sso/callback`,
+    envManaged: !!v.SSO_OIDC_ISSUER,
   } as unknown as SsoConfigService;
 }

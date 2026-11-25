@@ -99,3 +99,19 @@ describe('single sign-on audit catalog', () => {
     }
   });
 });
+
+describe('single sign-on settings audit catalog', () => {
+  it('registers the settings change and test actions with their exact names', () => {
+    const settings = auditCatalog.AUDIT_ACTIONS.settings as Record<string, string>;
+    expect({ change: settings.ssoChange, test: settings.ssoTest }).toEqual({
+      change: 'settings.sso.change',
+      test: 'settings.sso.test',
+    });
+  });
+
+  it('includes them in the complete inventory, once each', () => {
+    for (const action of ['settings.sso.change', 'settings.sso.test']) {
+      expect(auditCatalog.ALL_AUDIT_ACTIONS.filter((a) => a === action)).toHaveLength(1);
+    }
+  });
+});

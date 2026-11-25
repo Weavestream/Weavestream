@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { createRemoteJWKSet, customFetch, type JWTVerifyGetKey } from 'jose';
 import { z } from 'zod';
+import { safeFetch } from '../common/egress/safe-fetch.js';
 import { verifyIdToken, type VerifiedIdToken } from './id-token.js';
 import { SsoConfigService, SSO_CALLBACK_PATH, type SsoResolvedConfig } from './sso-config.service.js';
 
@@ -10,11 +11,24 @@ export { SSO_CALLBACK_PATH };
 export type SsoFetcher = (url: string, init: RequestInit) => Promise<Response>;
 
 /**
- * Environment-configured SSO is operator-trusted: the global `fetch`, with
- * redirects refused.
+ * Environment-configured SSO is operator-trusted (unchanged behaviour: the
+ * global `fetch`, redirects refused). A database-configured issuer is typed
+ * into a web form by an admin, so it is an SSRF input (CLAUDE.md section 3)
+ * and every request goes through `safeFetch`: public addresses only, DNS
+ * pinned, redirects not followed.
  */
-export function fetcherFor(_source: SsoResolvedConfig['source']): SsoFetcher {
-  return (url, init) => fetch(url, { ...init, redirect: 'error' });
+export function fetcherFor(source: SsoResolvedConfig['source']): SsoFetcher {
+  if (source === 'env') {
+    return (url, init) => fetch(url, { ...init, redirect: 'error' });
+  }
+  return (url, init) =>
+    safeFetch(url, {
+      ...init,
+      redirect: 'manual',
+      timeoutMs: HTTP_TIMEOUT_MS,
+      signal: null,
+      maxResponseBytes: 1_048_576,
+    });
 }
 
 export const HTTP_TIMEOUT_MS = 10_000;
@@ -42,7 +56,7 @@ const tokenResponseSchema = z.object({ id_token: z.string().min(1) });
 /**
  * Talks to the OIDC identity provider: discovery (cached), the authorization
  * URL, the code exchange and ID-token verification. Configuration comes from
- * `SsoConfigService` (the environment); every endpoint the
+ * `SsoConfigService` (environment, else the database); every endpoint the
  * provider advertises is held to https, and a database-configured issuer is
  * fetched through the SSRF guard (see `fetcherFor`).
  */

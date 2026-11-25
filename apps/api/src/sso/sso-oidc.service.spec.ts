@@ -1,4 +1,10 @@
 import type { EnvService } from '../config/env.service.js';
+import {
+  EgressBlockedError,
+  resetEgressGuardForTests,
+  setDefaultFetchForTests,
+  setDefaultResolveForTests,
+} from '../common/egress/safe-fetch.js';
 import { fakeSsoConfig } from './sso-config.fake.js';
 import { fetcherFor, SsoOidcService, SsoProviderError } from './sso-oidc.service.js';
 
@@ -219,12 +225,33 @@ describe('SsoOidcService', () => {
   });
 });
 
-describe('fetcherFor', () => {
-  it('uses the global fetch and refuses redirects', async () => {
+describe('fetcherFor (SSRF posture by config source)', () => {
+  afterEach(() => resetEgressGuardForTests());
+
+  it('env source: the global fetch, redirects refused (unchanged behaviour)', async () => {
     const spy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({}));
     await fetcherFor('env')('https://idp.example.test/x', { method: 'GET' });
     expect(spy).toHaveBeenCalledWith('https://idp.example.test/x', expect.objectContaining({ redirect: 'error' }));
     spy.mockRestore();
+  });
+
+  it('database source: goes through the egress guard and refuses private addresses', async () => {
+    const spy = jest.spyOn(globalThis, 'fetch');
+    setDefaultResolveForTests(async () => ['169.254.169.254']);
+    await expect(fetcherFor('database')('https://idp.example.test/x', { method: 'GET' })).rejects.toBeInstanceOf(
+      EgressBlockedError,
+    );
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('database source: does not follow redirects', async () => {
+    setDefaultResolveForTests(async () => ['93.184.216.34']);
+    const impl = jest.fn(async () => new Response(null, { status: 302, headers: { location: 'http://10.0.0.1/' } }));
+    setDefaultFetchForTests(impl as never);
+    const res = await fetcherFor('database')('https://idp.example.test/x', { method: 'GET' });
+    expect(res.status).toBe(302);
+    expect(impl).toHaveBeenCalledTimes(1);
   });
 });
 
