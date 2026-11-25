@@ -29,6 +29,22 @@ export const AUDIT_ACTIONS = {
     // `client_revoked` (the client revoked its token); `after.targetUserId`
     // is the owner.
     mcpConnectionRevoke: 'auth.mcp_connection.revoke',
+    // OIDC single sign-on. `ssoLoginSuccess` is the session creation
+    // (`entityType` Session; `after` carries `{ issuerHost, idpMfa,
+    // mfaPending, mfaSetupRequired }`). `ssoLoginFailure` carries a fixed
+    // `reason` code (and the issuer host), never a token, code, secret or
+    // claim set. `ssoLink` records a first sign-in tying a user to an identity
+    // (`after.via` is `email`); `ssoProvision` a user created by auto-provision;
+    // `ssoStepUp` an IdP re-authentication that opened the step-up window.
+    ssoLoginSuccess: 'auth.sso.login.success',
+    ssoLoginFailure: 'auth.sso.login.failure',
+    ssoLink: 'auth.sso.link',
+    ssoProvision: 'auth.sso.provision',
+    ssoStepUp: 'auth.sso.stepup',
+    // A signed-in user removed the link between their account and the
+    // identity provider (`DELETE /auth/sso/link`). `after` carries the issuer
+    // host and identity id, never the subject.
+    ssoUnlink: 'auth.sso.unlink',
   },
   user: {
     create: 'user.create',

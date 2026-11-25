@@ -22,6 +22,7 @@ import { McpConnectionsService } from '../../mcp-oauth/mcp-connections.service.j
 import { connectionAllowed } from '../../mcp-oauth/mcp-oauth.constants.js';
 import { resolvePasswordAccessScope } from '../../passwords/password-access-policy.js';
 import { PermissionService } from '../../rbac/permission.service.js';
+import { SsoConfigService } from '../../sso/sso-config.service.js';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
@@ -36,6 +37,7 @@ export class AuthGuard implements CanActivate {
     private readonly delegations: McpDelegationService,
     private readonly mcpConnections: McpConnectionsService,
     private readonly permissions: PermissionService,
+    private readonly ssoConfig: SsoConfigService,
   ) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
@@ -89,6 +91,26 @@ export class AuthGuard implements CanActivate {
     }
     if (!user || !user.isActive) throw new UnauthorizedException();
 
+    const authMethod = session.authMethod === 'sso' ? 'sso' : 'password';
+
+    // SSO_LOCAL_LOGIN=false: password sessions stop working for everyone but
+    // SUPER_ADMIN (break-glass), including ones issued before the flag was
+    // turned off. Same bare 401 as any dead session.
+    if (
+      authMethod === 'password' &&
+      user.role !== 'SUPER_ADMIN' &&
+      (await this.ssoConfig.get()).localLoginEnabled === false
+    ) {
+      throw new UnauthorizedException();
+    }
+
+    // A session whose single sign-on provider vouched for MFA is MFA-complete
+    // for this session only: nothing is written to the user row, so a
+    // password login for the same user still goes through the normal TOTP
+    // rules. Gated on the LIVE setting as well as the stored flag, so turning
+    // SSO_TRUST_IDP_MFA off takes effect for sessions that already exist.
+    const idpMfa = session.idpMfa === true && (await this.ssoConfig.get()).trustIdpMfa === true;
+
     req.user = {
       id: user.id,
       email: user.email,
@@ -96,9 +118,13 @@ export class AuthGuard implements CanActivate {
       globalAccess: user.globalAccess ?? null,
       platformCapabilities: user.platformCapabilities ?? [],
       sessionId: session.id,
-      mfaEnforcementCompletedAt: user.mfaEnforcementCompletedAt,
+      mfaEnforcementCompletedAt: idpMfa
+        ? (user.mfaEnforcementCompletedAt ?? session.createdAt ?? new Date())
+        : user.mfaEnforcementCompletedAt,
       passwordAccess: await this.passwordAccessFor(user, { fresh: false }),
-      mfaPending: session.mfaPending,
+      mfaPending: idpMfa ? false : session.mfaPending,
+      authMethod,
+      idpMfa,
     };
     return true;
   }
