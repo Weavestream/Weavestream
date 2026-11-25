@@ -7,6 +7,7 @@ import type {
   EmailSettings,
   IntegrationPriorityDto,
   PasswordAccessPolicy,
+  SsoSettings,
 } from '@weavestream/shared';
 import type { Settings } from '../../../../lib/server-api/settings';
 import {
@@ -16,6 +17,7 @@ import {
 } from './settings-form';
 import { EmailSettingsForm } from './email-settings-form';
 import { AiSettingsForm } from './ai-settings-form';
+import { SsoSettingsForm } from './sso-settings-form';
 import { ApiKeysSwitch, McpClientPolicyChoice, McpRemoteSwitch } from './api-keys-switch';
 import { IntegrationPriorityList } from './integration-priority-list';
 import { PasswordAccessPolicySection } from './password-access-policy-section';
@@ -48,6 +50,11 @@ const TABS: Array<{ id: TabId; label: string; help: string }> = [
     help: 'LLM provider for Ask anything: OpenAI, Anthropic, or an OpenAI-compatible server (Ollama, LMStudio, …).',
   },
   {
+    id: 'sso',
+    label: 'Single sign-on',
+    help: 'Let people sign in with Microsoft Entra ID or another OpenID Connect provider.',
+  },
+  {
     id: 'integrations',
     label: 'Integrations',
     help: 'Which integration wins when several fill one asset. Google and Microsoft apps are set up on their integration.',
@@ -64,6 +71,7 @@ export function SettingsTabs({
   settings,
   emailSettings,
   aiSettings,
+  ssoSettings,
   integrationPriority = null,
   passwordAccessPolicy = null,
   currentUserEmail,
@@ -72,6 +80,7 @@ export function SettingsTabs({
   settings: Settings;
   emailSettings: EmailSettings;
   aiSettings: AiSettings;
+  ssoSettings: SsoSettings;
   integrationPriority?: IntegrationPriorityDto | null;
   passwordAccessPolicy?: PasswordAccessPolicy | null;
   currentUserEmail: string;
@@ -170,6 +179,7 @@ export function SettingsTabs({
           />
         )}
         {tab === 'ai' && <AiSettingsForm initial={aiSettings} />}
+        {tab === 'sso' && <SsoSettingsForm initial={ssoSettings} />}
         {tab === 'integrations' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 32 }}>
             {integrationPriority && <IntegrationPriorityList initial={integrationPriority.order} />}
