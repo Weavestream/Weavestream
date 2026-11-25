@@ -204,6 +204,14 @@ export const passwordVersionSummarySchema = z.object({
   changedByName: z.string().nullable(),
   changeReason: z.string().nullable(),
   createdAt: z.string().datetime({ offset: true }),
+  /**
+   * Plain-text values captured by this version. Optional so older
+   * payloads still parse. Notes, password and TOTP are deliberately
+   * absent: they are encrypted and only ever leave via reveal.
+   */
+  name: z.string().optional(),
+  username: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
 });
 export type PasswordVersionSummary = z.infer<typeof passwordVersionSummarySchema>;
 
@@ -222,3 +230,32 @@ export const passwordFilterSchema = z.object({
     .optional(),
 });
 export type PasswordFilterInput = z.infer<typeof passwordFilterSchema>;
+
+/** Fields a user may restore individually from a historical version. */
+export const PASSWORD_RESTORE_FIELDS = [
+  'name',
+  'username',
+  'url',
+  'notes',
+  'password',
+  'totp',
+] as const;
+export type PasswordRestoreField = (typeof PASSWORD_RESTORE_FIELDS)[number];
+
+/**
+ * Body of `POST /passwords/:id/versions/:version/restore`. `fields`
+ * omitted = restore the whole version (original behaviour). Unknown
+ * names are rejected; duplicates collapse.
+ */
+export const restorePasswordVersionSchema = z
+  .object({
+    fields: z
+      .array(z.enum(PASSWORD_RESTORE_FIELDS))
+      .min(1)
+      .max(12) // pre-dedupe cap; the enum already bounds the values
+      .transform((f) => Array.from(new Set(f)))
+      .optional(),
+  })
+  .strict()
+  .default({});
+export type RestorePasswordVersionInput = z.infer<typeof restorePasswordVersionSchema>;

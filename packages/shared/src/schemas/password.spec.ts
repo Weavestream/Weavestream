@@ -1,4 +1,9 @@
-import { createPasswordSchema, updatePasswordSchema } from './password.js';
+import {
+  createPasswordSchema,
+  passwordVersionSummarySchema,
+  restorePasswordVersionSchema,
+  updatePasswordSchema,
+} from './password.js';
 
 describe('password URL validation', () => {
   const base = { name: 'Core router', password: 'hunter2' };
@@ -96,5 +101,53 @@ describe('password tags', () => {
 
   it('leaves tags undefined on create when omitted', () => {
     expect(createPasswordSchema.parse(base).tags).toBeUndefined();
+  });
+});
+
+describe('passwordVersionSummarySchema', () => {
+  const base = {
+    version: 2,
+    changedFields: ['username'],
+    changedBy: '11111111-1111-4111-8111-111111111111',
+    changedByName: 'Op',
+    changeReason: null,
+    createdAt: '2026-01-02T00:00:00.000Z',
+  };
+
+  it('stays backward compatible: the captured values are optional', () => {
+    expect(passwordVersionSummarySchema.safeParse(base).success).toBe(true);
+  });
+
+  it('accepts captured name / username / url (nullable username and url)', () => {
+    const parsed = passwordVersionSummarySchema.parse({
+      ...base,
+      name: 'Acme VPN',
+      username: null,
+      url: 'https://vpn.example.test',
+    });
+    expect(parsed.name).toBe('Acme VPN');
+    expect(parsed.username).toBeNull();
+  });
+});
+
+describe('restorePasswordVersionSchema', () => {
+  it('defaults an absent body to a whole-version restore (no fields)', () => {
+    expect(restorePasswordVersionSchema.parse(undefined)).toEqual({});
+    expect(restorePasswordVersionSchema.parse({}).fields).toBeUndefined();
+  });
+
+  it('accepts every allow-listed field and de-duplicates', () => {
+    expect(
+      restorePasswordVersionSchema.parse({
+        fields: ['username', 'username', 'url', 'name', 'notes', 'password', 'totp'],
+      }).fields,
+    ).toEqual(['username', 'url', 'name', 'notes', 'password', 'totp']);
+  });
+
+  it('rejects unknown field names, an empty list and extra keys', () => {
+    expect(restorePasswordVersionSchema.safeParse({ fields: ['color'] }).success).toBe(false);
+    expect(restorePasswordVersionSchema.safeParse({ fields: ['totpSecret'] }).success).toBe(false);
+    expect(restorePasswordVersionSchema.safeParse({ fields: [] }).success).toBe(false);
+    expect(restorePasswordVersionSchema.safeParse({ fields: ['url'], x: 1 }).success).toBe(false);
   });
 });
