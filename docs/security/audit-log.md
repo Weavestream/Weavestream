@@ -13,7 +13,7 @@ Every mutation in Weavestream writes an immutable record to the audit log. The l
 
 Every create, update, delete, archive, restore, and sensitive access operation writes an audit entry. This includes:
 
-- **Asset** create, update, archive, restore, CSV export (`asset.export`, including layout, column mode, field slugs, row count, truncation, and filter metadata)
+- **Asset** create, update, archive, restore, version restore (`asset.version.restored`, field names only), history redaction (`asset.version.redacted`, ids and counts only), version prune from the CLI (`asset.versions.pruned`, counts only), CSV export (`asset.export`, including layout, column mode, field slugs, row count, truncation, and filter metadata)
 - **Password** create, update, archive, restore, **reveal** (each decryption), version restore
 - **Article** create, update, move, archive, restore
 - **Company** create, update, archive, restore

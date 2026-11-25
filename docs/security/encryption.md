@@ -21,7 +21,7 @@ Weavestream encrypts credential data at rest using AES-256-GCM with envelope enc
 **Not encrypted at rest:**
 - Password names, usernames, URLs, tags — stored in plaintext in Postgres (protected by database access controls)
 - Article content — stored in plaintext (searchable by operators)
-- Asset field values — stored in plaintext (indexed for search)
+- Asset field values — stored in plaintext (indexed for search), including the copies in asset version history (`asset_versions`). History can be redacted per field or per version, capped, pruned and is deleted with the asset; see [Data Retention](/security/data-retention/#asset-versions). Encrypting asset values and their history at rest is a possible follow-up and is not implemented
 
 ## Encryption Algorithm
 
