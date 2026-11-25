@@ -18,6 +18,7 @@ const ROW = {
   linkByEmail: true,
   autoProvision: true,
   trustIdpMfa: true,
+  assumeIdpMfa: true,
   localLoginEnabled: false,
   updatedAt: new Date('2026-01-01T00:00:00Z'),
   updatedBy: null,
@@ -32,6 +33,7 @@ function make(opts: { env?: Record<string, unknown>; row?: Record<string, unknow
       SSO_LINK_BY_EMAIL: false,
       SSO_AUTO_PROVISION: false,
       SSO_TRUST_IDP_MFA: false,
+      SSO_ASSUME_IDP_MFA: false,
       SSO_LOCAL_LOGIN: true,
       ...opts.env,
     },
@@ -113,11 +115,26 @@ describe('SsoConfigService: environment precedence', () => {
       linkByEmail: true,
       autoProvision: true,
       trustIdpMfa: true,
+      assumeIdpMfa: true,
       localLoginEnabled: false,
     });
     expect(prisma.ssoSetting.findUnique).toHaveBeenCalledWith({ where: { id: SSO_SETTINGS_SINGLETON_ID } });
     expect(crypto.decrypt).toHaveBeenCalledTimes(1);
     expect(svc.envManaged).toBe(false);
+  });
+
+  it('assumeIdpMfa is only ever true together with trustIdpMfa (database)', async () => {
+    const off = await make({ row: { ...ROW, trustIdpMfa: false, assumeIdpMfa: true } }).svc.get();
+    expect(off).toMatchObject({ trustIdpMfa: false, assumeIdpMfa: false });
+    const on = await make({ row: { ...ROW, trustIdpMfa: true, assumeIdpMfa: true } }).svc.get();
+    expect(on).toMatchObject({ trustIdpMfa: true, assumeIdpMfa: true });
+  });
+
+  it('assumeIdpMfa is only ever true together with trustIdpMfa (environment)', async () => {
+    const inert = await make({ env: { ...ENV_SET, SSO_TRUST_IDP_MFA: false, SSO_ASSUME_IDP_MFA: true } }).svc.get();
+    expect(inert).toMatchObject({ trustIdpMfa: false, assumeIdpMfa: false });
+    const live = await make({ env: { ...ENV_SET, SSO_TRUST_IDP_MFA: true, SSO_ASSUME_IDP_MFA: true } }).svc.get();
+    expect(live).toMatchObject({ trustIdpMfa: true, assumeIdpMfa: true });
   });
 
   it('is off with the shipped defaults when there is no row', async () => {
@@ -129,6 +146,7 @@ describe('SsoConfigService: environment precedence', () => {
       linkByEmail: false,
       autoProvision: false,
       trustIdpMfa: false,
+      assumeIdpMfa: false,
       localLoginEnabled: true,
       scopes: 'openid profile email',
     });

@@ -19,6 +19,7 @@ export function fakeSsoConfig(values: Record<string, unknown> = {}): SsoConfigSe
     linkByEmail: v.SSO_LINK_BY_EMAIL === true,
     autoProvision: v.SSO_AUTO_PROVISION === true,
     trustIdpMfa: v.SSO_TRUST_IDP_MFA === true,
+    assumeIdpMfa: v.SSO_TRUST_IDP_MFA === true && v.SSO_ASSUME_IDP_MFA === true,
     localLoginEnabled: v.SSO_LOCAL_LOGIN !== false,
   };
   return {

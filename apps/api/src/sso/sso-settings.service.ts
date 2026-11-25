@@ -45,6 +45,7 @@ const TRACKED_FIELDS = [
   'linkByEmail',
   'autoProvision',
   'trustIdpMfa',
+  'assumeIdpMfa',
   'localLoginEnabled',
 ] as const;
 
@@ -81,6 +82,7 @@ export class SsoSettingsService {
         linkByEmail: c.linkByEmail,
         autoProvision: c.autoProvision,
         trustIdpMfa: c.trustIdpMfa,
+        assumeIdpMfa: c.assumeIdpMfa,
         localLoginEnabled: c.localLoginEnabled,
         callbackUrl,
         updatedAt: null,
@@ -100,6 +102,7 @@ export class SsoSettingsService {
       linkByEmail: row.linkByEmail,
       autoProvision: row.autoProvision,
       trustIdpMfa: row.trustIdpMfa,
+      assumeIdpMfa: row.assumeIdpMfa,
       localLoginEnabled: row.localLoginEnabled,
       callbackUrl,
       updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
@@ -320,6 +323,11 @@ export class SsoSettingsService {
       );
     }
     if (problems.length) throw new BadRequestException(describeProblems(problems));
+    if (next.assumeIdpMfa && !next.trustIdpMfa) {
+      throw new BadRequestException(
+        'Assuming provider MFA requires trusting the provider multi-factor sign-in. Turn that on first.',
+      );
+    }
   }
 
   /**

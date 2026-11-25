@@ -28,6 +28,7 @@ const EMPTY: Row = {
   linkByEmail: false,
   autoProvision: false,
   trustIdpMfa: false,
+  assumeIdpMfa: false,
   localLoginEnabled: true,
   updatedAt: new Date('2026-01-01T00:00:00Z'),
   updatedBy: null,
@@ -72,6 +73,7 @@ function make(opts: { row?: Row | null; envManaged?: boolean; superAdmins?: numb
       linkByEmail: false,
       autoProvision: false,
       trustIdpMfa: false,
+      assumeIdpMfa: false,
       localLoginEnabled: true,
       ...opts.envValues,
     })),
@@ -122,6 +124,22 @@ describe('SsoSettingsService.update', () => {
     await expect(m.svc.update(ACTOR, { enabled: false }, META)).rejects.toBeInstanceOf(ConflictException);
     expect(m.prisma.ssoSetting.upsert).not.toHaveBeenCalled();
     expect(m.audit.log).not.toHaveBeenCalled();
+  });
+
+  it('refuses assumeIdpMfa while trust is off (400), writing nothing', async () => {
+    const m = make({ row: COMPLETE });
+    await expect(m.svc.update(ACTOR, { assumeIdpMfa: true }, META)).rejects.toBeInstanceOf(BadRequestException);
+    expect(m.prisma.ssoSetting.upsert).not.toHaveBeenCalled();
+    expect(m.audit.log).not.toHaveBeenCalled();
+  });
+
+  it('saves trust + assume together and audits the field NAMES only', async () => {
+    const m = make({ row: COMPLETE });
+    await m.svc.update(ACTOR, { trustIdpMfa: true, assumeIdpMfa: true }, META);
+    expect(m.row()).toMatchObject({ trustIdpMfa: true, assumeIdpMfa: true });
+    const { after } = auditAfter(m) as unknown as { after: { changedFields: string[] } };
+    expect(after.changedFields).toEqual(expect.arrayContaining(['trustIdpMfa', 'assumeIdpMfa']));
+    expect(JSON.stringify(after)).not.toContain('true');
   });
 
   it('saves a complete configuration, encrypting the secret, then invalidates the cache', async () => {

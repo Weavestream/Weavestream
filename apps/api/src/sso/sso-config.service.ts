@@ -21,6 +21,7 @@ export const SSO_ENV_KEYS = [
   'SSO_LINK_BY_EMAIL',
   'SSO_AUTO_PROVISION',
   'SSO_TRUST_IDP_MFA',
+  'SSO_ASSUME_IDP_MFA',
   'SSO_LOCAL_LOGIN',
   'SSO_ALLOWED_TENANT_ID',
 ] as const;
@@ -44,6 +45,8 @@ export interface SsoResolvedConfig {
   linkByEmail: boolean;
   autoProvision: boolean;
   trustIdpMfa: boolean;
+  /** Already ANDed with `trustIdpMfa`: true only when both are on. */
+  assumeIdpMfa: boolean;
   /** Always true while SSO is off: password login can only be refused when SSO can replace it. */
   localLoginEnabled: boolean;
 }
@@ -59,6 +62,7 @@ export type SsoSettingRow = {
   linkByEmail: boolean;
   autoProvision: boolean;
   trustIdpMfa: boolean;
+  assumeIdpMfa: boolean;
   localLoginEnabled: boolean;
   updatedAt: Date;
   updatedBy: string | null;
@@ -76,6 +80,7 @@ export const SSO_SETTING_DEFAULTS = {
   linkByEmail: false,
   autoProvision: false,
   trustIdpMfa: false,
+  assumeIdpMfa: false,
   localLoginEnabled: true,
   updatedAt: null,
   updatedBy: null,
@@ -165,6 +170,7 @@ export class SsoConfigService {
       linkByEmail: v.SSO_LINK_BY_EMAIL,
       autoProvision: v.SSO_AUTO_PROVISION,
       trustIdpMfa: v.SSO_TRUST_IDP_MFA,
+      assumeIdpMfa: v.SSO_TRUST_IDP_MFA && v.SSO_ASSUME_IDP_MFA,
       localLoginEnabled: v.SSO_LOCAL_LOGIN,
     };
   }
@@ -185,6 +191,7 @@ export class SsoConfigService {
       linkByEmail: r.linkByEmail,
       autoProvision: r.autoProvision,
       trustIdpMfa: r.trustIdpMfa,
+      assumeIdpMfa: r.trustIdpMfa && r.assumeIdpMfa,
       localLoginEnabled: enabled ? r.localLoginEnabled : true,
     };
   }

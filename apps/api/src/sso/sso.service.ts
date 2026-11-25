@@ -274,7 +274,10 @@ export class SsoService {
     // accept it as MFA. Tells an admin whether a missing `mfa` is the
     // provider's doing or ours.
     const amrPresent = claims.amr.length > 0;
-    const idpMfa = (await this.ssoConfig.get()).trustIdpMfa && claims.amr.includes('mfa');
+    const cfg = await this.ssoConfig.get();
+    // assumeIdpMfa is already ANDed with trustIdpMfa by the config service, so
+    // it can never grant MFA on its own.
+    const idpMfa = cfg.trustIdpMfa && (cfg.assumeIdpMfa || claims.amr.includes('mfa'));
     const { result, sessionId, mfaChallengeRequired, mfaSetupRequired } =
       await this.auth.issueSession(user, {
         ip: meta.ip,
@@ -303,12 +306,13 @@ export class SsoService {
           idpMfa,
           amrPresent,
           idpMfaAsserted: idpMfa,
+          assumeIdpMfa: cfg.assumeIdpMfa,
           mfaPending: mfaChallengeRequired,
           mfaSetupRequired,
         },
       });
       this.logger.log(
-        `SSO login succeeded (session ${sessionId}): amrPresent=${amrPresent} idpMfaAsserted=${idpMfa} mfaPending=${mfaChallengeRequired} mfaSetupRequired=${mfaSetupRequired}`,
+        `SSO login succeeded (session ${sessionId}): amrPresent=${amrPresent} idpMfaAsserted=${idpMfa} assumeIdpMfa=${cfg.assumeIdpMfa} mfaPending=${mfaChallengeRequired} mfaSetupRequired=${mfaSetupRequired}`,
       );
     } catch (err) {
       try {

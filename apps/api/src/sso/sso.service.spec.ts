@@ -505,6 +505,43 @@ describe('SsoService', () => {
       );
     });
 
+    describe('SSO_ASSUME_IDP_MFA', () => {
+      it.each([
+        ['assume + trust, no amr at all', { SSO_TRUST_IDP_MFA: true, SSO_ASSUME_IDP_MFA: true }, [], true],
+        ['assume + trust, amr without mfa', { SSO_TRUST_IDP_MFA: true, SSO_ASSUME_IDP_MFA: true }, ['pwd'], true],
+        ['assume + trust, amr with mfa', { SSO_TRUST_IDP_MFA: true, SSO_ASSUME_IDP_MFA: true }, ['mfa'], true],
+        ['assume but trust off, no amr', { SSO_TRUST_IDP_MFA: false, SSO_ASSUME_IDP_MFA: true }, [], false],
+        ['assume but trust off, mfa amr', { SSO_TRUST_IDP_MFA: false, SSO_ASSUME_IDP_MFA: true }, ['mfa'], false],
+        ['assume off, trust on, no amr', { SSO_TRUST_IDP_MFA: true, SSO_ASSUME_IDP_MFA: false }, [], false],
+        ['assume off, trust on, mfa amr', { SSO_TRUST_IDP_MFA: true, SSO_ASSUME_IDP_MFA: false }, ['mfa'], true],
+      ])('%s', async (_n, env, amr, expected) => {
+        const m = make({ env, claims: { amr }, linked });
+        await callback(m);
+        expect(m.auth.issueSession).toHaveBeenCalledWith(
+          USER,
+          expect.objectContaining({ idpMfa: expected }),
+        );
+      });
+
+      it('audits assumeIdpMfa (the resolved config value) next to the amr diagnostics', async () => {
+        const m = make({ env: { SSO_TRUST_IDP_MFA: true, SSO_ASSUME_IDP_MFA: true }, claims: { amr: [] }, linked });
+        await callback(m);
+        const row = m.audit.log.mock.calls
+          .map((c: unknown[]) => c[0] as { action: string; after: Record<string, unknown> })
+          .find((r) => r.action === 'auth.sso.login.success')!;
+        expect(row.after).toMatchObject({ amrPresent: false, idpMfaAsserted: true, assumeIdpMfa: true });
+      });
+
+      it('audits assumeIdpMfa=false when assume is set without trust (inert)', async () => {
+        const m = make({ env: { SSO_TRUST_IDP_MFA: false, SSO_ASSUME_IDP_MFA: true }, claims: { amr: [] }, linked });
+        await callback(m);
+        const row = m.audit.log.mock.calls
+          .map((c: unknown[]) => c[0] as { action: string; after: Record<string, unknown> })
+          .find((r) => r.action === 'auth.sso.login.success')!;
+        expect(row.after).toMatchObject({ idpMfaAsserted: false, assumeIdpMfa: false });
+      });
+    });
+
     it('with SSO_TRUST_IDP_MFA on and no amr claim at all, normal TOTP rules apply', async () => {
       const m = make({ env: { SSO_TRUST_IDP_MFA: true }, claims: { amr: [] }, linked });
       await callback(m);
