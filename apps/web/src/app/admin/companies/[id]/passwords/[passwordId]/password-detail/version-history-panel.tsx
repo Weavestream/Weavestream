@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { problemMessage } from '@weavestream/shared';
-import type { PasswordVersionSummary } from '@weavestream/shared';
+import type { PasswordRestoreField, PasswordVersionSummary } from '@weavestream/shared';
 import { copyToClipboard } from '@weavestream/shared/browser';
 import { apiFetch } from '../../../../../../../lib/api';
 import { FormattedShortDateTime } from '../../../../../../../lib/timezone-context';
@@ -32,17 +32,18 @@ export function VersionHistoryPanel({
   const toast = useToast();
   const [busy, setBusy] = useState<number | null>(null);
 
-  async function restore(version: number) {
-    if (
-      !window.confirm(
-        `Restore version #${version} as a new version on top of history?\n\nThis is forward-only — a new version will be appended, the current version is kept in history.`,
-      )
-    )
-      return;
+  async function restore(version: number, fields?: PasswordRestoreField[]) {
+    const label = fields && fields.length === 1 ? RESTORABLE_LABEL[fields[0] as RestorableField] : null;
+    const message = label
+      ? `Restore the ${label} from version #${version} as a new version on top of history?\n\nOnly the ${label} changes; every other field keeps its current value. This is forward-only — a new version will be appended, the current version is kept in history.`
+      : `Restore version #${version} as a new version on top of history?\n\nThis is forward-only — a new version will be appended, the current version is kept in history.`;
+    if (!window.confirm(message)) return;
     setBusy(version);
     const res = await apiFetch(
       `/companies/${companyId}/passwords/${passwordId}/versions/${version}/restore`,
-      { method: 'POST' },
+      fields
+        ? { method: 'POST', body: JSON.stringify({ fields }) }
+        : { method: 'POST' },
     );
     setBusy(null);
     if (!res.ok) {
@@ -52,7 +53,10 @@ export function VersionHistoryPanel({
       );
       return;
     }
-    toast.push(`Restored from v${version}`, 'ok');
+    toast.push(
+      label ? `Restored ${label} from v${version}` : `Restored from v${version}`,
+      'ok',
+    );
     startTransition(() => router.refresh());
   }
 
@@ -95,7 +99,7 @@ export function VersionHistoryPanel({
               canManage={canManage}
               requiresReason={requiresReason}
               busy={busy === version.version}
-              onRestore={() => void restore(version.version)}
+              onRestore={(fields) => void restore(version.version, fields)}
             />
           ))}
         </div>
@@ -119,7 +123,7 @@ function VersionHistoryItem({
   canManage: boolean;
   requiresReason: boolean;
   busy: boolean;
-  onRestore: () => void;
+  onRestore: (fields?: PasswordRestoreField[]) => void;
 }) {
   const toast = useToast();
   const [plaintext, setPlaintext] = useState<string | null>(null);
@@ -267,12 +271,18 @@ function VersionHistoryItem({
             {plaintext ? 'Hide' : revealBusy ? 'Revealing...' : 'Reveal'}
           </TextAction>
           {canManage && (
-            <TextAction disabled={busy} onClick={onRestore}>
+            <TextAction disabled={busy} onClick={() => onRestore()}>
               Restore
             </TextAction>
           )}
         </div>
       </div>
+      <CapturedFields
+        version={version}
+        canManage={canManage}
+        busy={busy}
+        onRestoreField={(field) => onRestore([field])}
+      />
       {plaintext && (
         <div
           style={{
@@ -308,6 +318,87 @@ function VersionHistoryItem({
           </Btn>
         </div>
       )}
+    </div>
+  );
+}
+
+type RestorableField = 'name' | 'username' | 'url';
+
+const RESTORABLE_LABEL: Record<RestorableField, string> = {
+  name: 'name',
+  username: 'username',
+  url: 'URL',
+};
+const RESTORABLE_FIELDS: readonly RestorableField[] = ['name', 'username', 'url'];
+
+/**
+ * The plain-text values this version captured (name, username, URL).
+ * Fields listed in `changedFields` are highlighted — with a "changed" tag,
+ * not colour alone. Notes, password and TOTP are never shown here: they are
+ * encrypted and only leave through reveal. Older API payloads carry no
+ * values, in which case nothing renders.
+ */
+function CapturedFields({
+  version,
+  canManage,
+  busy,
+  onRestoreField,
+}: {
+  version: PasswordVersionSummary;
+  canManage: boolean;
+  busy: boolean;
+  onRestoreField: (field: RestorableField) => void;
+}) {
+  const rows = RESTORABLE_FIELDS.filter((f) => version[f] !== undefined);
+  if (rows.length === 0) return null;
+  return (
+    <div
+      style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}
+      aria-label={`Values captured in version ${version.version}`}
+    >
+      {rows.map((field) => {
+        const value = version[field];
+        const changed = version.changedFields.includes(field);
+        return (
+          <div
+            key={field}
+            data-changed={changed ? 'true' : 'false'}
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'baseline',
+              columnGap: 8,
+              rowGap: 2,
+              minWidth: 0,
+              padding: '2px 6px',
+              borderRadius: 4,
+              fontSize: 11.5,
+              background: changed ? 'var(--accent-soft)' : 'transparent',
+            }}
+          >
+            <span style={{ color: 'var(--muted)' }}>{RESTORABLE_LABEL[field]}:</span>
+            <span
+              style={{
+                minWidth: 0,
+                overflowWrap: 'anywhere',
+                color: 'var(--text)',
+                fontWeight: changed ? 600 : 400,
+                fontFamily: field === 'name' ? undefined : 'var(--font-mono)',
+              }}
+            >
+              {value ? value : <em style={{ color: 'var(--dim)' }}>(empty)</em>}
+            </span>
+            {changed && (
+              <span style={{ fontSize: 10.5, color: 'var(--accent)' }}>changed</span>
+            )}
+            {canManage && (
+              <TextAction disabled={busy} onClick={() => onRestoreField(field)}>
+                {`Restore this ${RESTORABLE_LABEL[field]}`}
+              </TextAction>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
