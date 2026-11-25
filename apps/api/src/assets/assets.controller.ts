@@ -9,6 +9,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -24,22 +25,29 @@ import { contentDispositionFor } from '../common/content-disposition.js';
 import {
   assetExportColumnsSchema,
   bulkAssetIdsSchema,
+  assetVersionListQuerySchema,
   bulkCloneAssetsSchema,
   cloneAssetSchema,
   createAssetSchema,
   fieldSlugSchema,
+  redactAssetVersionsSchema,
+  restoreAssetVersionSchema,
   updateAssetSchema,
   type BulkAssetIdsInput,
   type BulkCloneAssetsInput,
+  type AssetVersionListQuery,
   type CloneAssetInput,
   type CreateAssetInput,
+  type RedactAssetVersionsInput,
+  type RestoreAssetVersionInput,
   type UpdateAssetInput,
 } from '@weavestream/shared';
 import { AssetsService } from './assets.service.js';
 import { CurrentUser, type AuthedUser } from '../common/current-user.decorator.js';
 import { RequirePermission } from '../rbac/require-permission.decorator.js';
 import { RequireStepUp } from '../auth/step-up/require-step-up.decorator.js';
-import { ZodBody } from '../common/zod-validation.pipe.js';
+import { InteractiveOnly } from '../auth/interactive-only.decorator.js';
+import { ZodBody, ZodParam } from '../common/zod-validation.pipe.js';
 import { requestMetaOf as meta } from '../common/request-meta.js';
 import { PermissionService } from '../rbac/permission.service.js';
 
@@ -288,6 +296,74 @@ export class AssetsController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ) {
     return this.assets.get(actor, companyId, id);
+  }
+
+  /**
+   * Lightweight edit history (migration 0098): summaries only, newest
+   * first, keyset-paginated (`limit` 1..100, default 20; `cursor` = last
+   * version of the previous page). Same authorisation as reading the asset.
+   */
+  @Get(':id/versions')
+  @RequirePermission('asset.read', { companyIdFrom: 'params.companyId' })
+  async versions(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query(new ZodParam(assetVersionListQuerySchema)) query: AssetVersionListQuery,
+  ) {
+    return this.assets.listVersions(actor, companyId, id, query);
+  }
+
+  /**
+   * Erase captured values from history (`fieldId` across all versions, or
+   * one `version`). Purge-level permission, fresh step-up, human session
+   * only, rate limited. Declared before the `:version` routes so `redact`
+   * is never read as a version number.
+   */
+  @Post(':id/versions/redact')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('asset.purge', { companyIdFrom: 'params.companyId' })
+  @RequireStepUp()
+  @InteractiveOnly()
+  @Throttle({ global: { limit: 10, ttl: 60_000 } })
+  async redactVersions(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body(new ZodBody(redactAssetVersionsSchema)) dto: RedactAssetVersionsInput,
+    @Req() req: Request,
+  ) {
+    return this.assets.redactVersions(actor, companyId, id, dto, meta(req));
+  }
+
+  /** One version with its captured values (same projection rules as the list). */
+  @Get(':id/versions/:version')
+  @RequirePermission('asset.read', { companyIdFrom: 'params.companyId' })
+  async version(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('version', new ParseIntPipe()) version: number,
+  ) {
+    return this.assets.getVersion(actor, companyId, id, version);
+  }
+
+  /**
+   * Forward-only restore of a version (whole, or the `fields` allowlist).
+   * Same permission as editing the asset; refused on archived assets.
+   */
+  @Post(':id/versions/:version/restore')
+  @HttpCode(HttpStatus.OK)
+  @RequirePermission('asset.write', { companyIdFrom: 'params.companyId' })
+  async restoreVersion(
+    @CurrentUser() actor: AuthedUser,
+    @Param('companyId', new ParseUUIDPipe()) companyId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('version', new ParseIntPipe()) version: number,
+    @Body(new ZodBody(restoreAssetVersionSchema)) dto: RestoreAssetVersionInput,
+    @Req() req: Request,
+  ) {
+    return this.assets.restoreVersion(actor, companyId, id, version, meta(req), dto.fields);
   }
 
   /** Copy (or, with `archiveOriginal`, move) one asset into a company. */

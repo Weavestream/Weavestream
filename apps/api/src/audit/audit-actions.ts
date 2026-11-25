@@ -180,6 +180,17 @@ export const AUDIT_ACTIONS = {
     // CSV export of one layout's list (entityId = the layout; after
     // carries counts, field slugs, and filter shape — never cell values).
     export: 'asset.export',
+    // Forward-only restore of a historical version (entityId = the asset;
+    // after.fromVersion, plus after.fields = field IDS/identity tokens
+    // for a per-field restore - never values). The write itself is also
+    // recorded as a regular `asset.update`.
+    versionRestored: 'asset.version.restored',
+    // Erasure of captured values from history (entityId = the asset;
+    // after = { fieldId?, version?, versionsRedacted } - ids and a count,
+    // never values).
+    versionRedacted: 'asset.version.redacted',
+    // Retention prune of old versions by the CLI (after = counts only).
+    versionsPruned: 'asset.versions.pruned',
   },
   article: {
     create: 'article.create',
