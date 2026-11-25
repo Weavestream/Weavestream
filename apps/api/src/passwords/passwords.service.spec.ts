@@ -1105,3 +1105,250 @@ describe('PasswordsService — updateFolder parent scoping', () => {
     expect(cleared.parentId).toBeNull();
   });
 });
+
+function versionRow(init: Partial<PasswordVersion> & { version: number }): StoredVersion {
+  return {
+    id: `pv-seed-${init.version}`,
+    passwordId: 'pwd-a',
+    companyId: 'co-1',
+    name: 'Acme VPN',
+    username: 'ops@acme.test',
+    url: 'https://vpn.acme.test',
+    notesCiphertext: null,
+    passwordCiphertext: 'ENC(old-secret)',
+    totpSecretCiphertext: null,
+    totpAlgorithm: 'SHA1',
+    totpDigits: 6,
+    totpPeriod: 30,
+    changedFields: ['username'],
+    changedBy: 'user-op',
+    changeReason: null,
+    createdAt: new Date('2026-01-02T00:00:00Z'),
+    ...init,
+  } as unknown as StoredVersion;
+}
+
+describe('PasswordsService — listVersions captured fields', () => {
+  it('returns name/username/url per version and never ciphertext', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a' })],
+    });
+    versions.push(
+      versionRow({
+        version: 1,
+        name: 'Old name',
+        username: 'old@example.test',
+        url: null,
+        notesCiphertext: 'ENC(secret note)',
+        totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+      }),
+    );
+    const [row] = await svc.listVersions(OPERATOR, 'co-1', 'pwd-a');
+    expect(row).toMatchObject({
+      version: 1,
+      name: 'Old name',
+      username: 'old@example.test',
+      url: null,
+    });
+    const json = JSON.stringify(row);
+    expect(json).not.toContain('Ciphertext');
+    expect(json).not.toContain('old-secret');
+    expect(json).not.toContain('secret note');
+    expect(json).not.toContain('JBSWY3DPEHPK3PXP');
+    expect(Object.keys(row ?? {})).not.toContain('notes');
+  });
+});
+
+describe('PasswordsService — update flags only real changes', () => {
+  it('does not flag notes/password/totp that are re-sent unchanged', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          notesCiphertext: 'ENC(same note)',
+          totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+        }),
+      ],
+    });
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      {
+        username: 'new@acme.test',
+        password: 'super-secret',
+        notes: 'same note',
+        totp: { secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA1', digits: 6, period: 30 },
+      },
+      META,
+    );
+    expect(versions).toHaveLength(1);
+    expect(versions[0]?.changedFields).toEqual(['username']);
+  });
+
+  it('writes no version at all when every sent field is unchanged', async () => {
+    const { svc, versions, passwords } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', notesCiphertext: 'ENC(same note)' })],
+    });
+    const before = { ...passwords[0] };
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      { password: 'super-secret', notes: 'same note', totp: null },
+      META,
+    );
+    expect(versions).toHaveLength(0);
+    expect(passwords[0]?.passwordCiphertext).toBe(before.passwordCiphertext);
+    expect(passwords[0]?.lastRotatedAt).toEqual(before.lastRotatedAt);
+  });
+
+  it('treats empty-string and null notes as the same "no notes"', async () => {
+    const { svc, versions } = makeStubs({ passwords: [passwordRow({ id: 'pwd-a' })] });
+    await svc.update(OPERATOR, 'co-1', 'pwd-a', { notes: '' }, META);
+    await svc.update(OPERATOR, 'co-1', 'pwd-a', { notes: null }, META);
+    expect(versions).toHaveLength(0);
+  });
+
+  it('still flags notes, password and totp parts that truly differ', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          notesCiphertext: 'ENC(old note)',
+          totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+        }),
+      ],
+    });
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      {
+        password: 'a-different-secret',
+        notes: 'new note',
+        totp: { secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA256', digits: 8, period: 30 },
+      },
+      META,
+    );
+    expect(versions[0]?.changedFields).toEqual([
+      'password',
+      'notes',
+      'totpAlgorithm',
+      'totpDigits',
+    ]);
+  });
+
+  it('clearing a TOTP secret that does not exist is a no-op', async () => {
+    const { svc, versions } = makeStubs({ passwords: [passwordRow({ id: 'pwd-a' })] });
+    await svc.update(OPERATOR, 'co-1', 'pwd-a', { totp: null }, META);
+    expect(versions).toHaveLength(0);
+  });
+});
+
+describe('PasswordsService — field-level restoreVersion', () => {
+  function setup(extra: DeepPartial<Password> = {}) {
+    const stubs = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          username: 'current@acme.test',
+          passwordCiphertext: 'ENC(current-secret)',
+          notesCiphertext: 'ENC(current note)',
+          ...extra,
+        }),
+      ],
+    });
+    stubs.versions.push(
+      versionRow({
+        version: 1,
+        name: 'Old name',
+        username: 'old@acme.test',
+        url: 'https://old.acme.test',
+        notesCiphertext: 'ENC(old note)',
+        passwordCiphertext: 'ENC(old-secret)',
+      }),
+    );
+    return stubs;
+  }
+
+  it('restoring only the username leaves the password and everything else', async () => {
+    const { svc, passwords, versions, audit } = setup();
+    await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']);
+    const row = passwords[0];
+    expect(row?.username).toBe('old@acme.test');
+    expect(row?.passwordCiphertext).toBe('ENC(current-secret)');
+    expect(row?.notesCiphertext).toBe('ENC(current note)');
+    expect(row?.name).toBe('Acme VPN');
+    expect(row?.url).toBe('https://vpn.acme.test');
+    const created = versions[versions.length - 1];
+    expect(created?.changedFields).toEqual(['username']);
+    expect(created?.changeReason).toBe('restore username from v1');
+    // Audit carries field names only.
+    const restoredCall = audit.log.mock.calls
+      .map((c) => c[0] as { action: string; after: unknown })
+      .find((c) => c.action === 'password.version.restored');
+    expect(restoredCall?.after).toEqual({ fromVersion: 1, fields: ['username'] });
+    expect(JSON.stringify(audit.log.mock.calls)).not.toContain('old@acme.test');
+    expect(JSON.stringify(audit.log.mock.calls)).not.toContain('old-secret');
+  });
+
+  it('restores several chosen fields, including a secret, via update()', async () => {
+    const { svc, passwords } = setup();
+    await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['url', 'password']);
+    expect(passwords[0]?.url).toBe('https://old.acme.test');
+    expect(passwords[0]?.passwordCiphertext).toBe('ENC(old-secret)');
+    expect(passwords[0]?.username).toBe('current@acme.test');
+  });
+
+  it('does not echo plaintext secrets in the response', async () => {
+    const { svc } = setup();
+    const out = await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['password']);
+    expect(JSON.stringify(out)).not.toContain('old-secret');
+    expect(JSON.stringify(out)).not.toContain('Ciphertext');
+  });
+
+  it('omitting fields keeps the whole-version behaviour', async () => {
+    const { svc, passwords, audit } = setup();
+    await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META);
+    const row = passwords[0];
+    expect(row?.username).toBe('old@acme.test');
+    expect(row?.name).toBe('Old name');
+    expect(row?.passwordCiphertext).toBe('ENC(old-secret)');
+    expect(row?.notesCiphertext).toBe('ENC(old note)');
+    const restoredCall = audit.log.mock.calls
+      .map((c) => c[0] as { action: string; after: unknown })
+      .find((c) => c.action === 'password.version.restored');
+    expect(restoredCall?.after).toEqual({ fromVersion: 1 });
+  });
+
+  it('rejects unknown or empty field lists before changing anything', async () => {
+    const { svc, passwords } = setup();
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, [
+        'color' as unknown as 'username',
+      ]),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, []),
+    ).rejects.toThrow(BadRequestException);
+    expect(passwords[0]?.username).toBe('current@acme.test');
+  });
+
+  it('refuses an archived password', async () => {
+    const { svc } = setup({ archivedAt: new Date('2026-02-01T00:00:00Z') });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('404s on an unknown version and 403s for a non-allow-listed operator', async () => {
+    const { svc } = setup({ restrictedToUserIds: ['user-op'] });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 9, META, ['username']),
+    ).rejects.toThrow(NotFoundException);
+    await expect(
+      svc.restoreVersion(OTHER_OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']),
+    ).rejects.toThrow(ForbiddenException);
+  });
+});

@@ -10,11 +10,13 @@ import type {
   CreatePasswordInput,
   CreatePasswordFolderInput,
   PasswordFilterInput,
+  PasswordRestoreField,
   RevealPasswordInput,
   TotpConfigInput,
   UpdatePasswordFolderInput,
   UpdatePasswordInput,
 } from '@weavestream/shared';
+import { PASSWORD_RESTORE_FIELDS } from '@weavestream/shared';
 import { randomUUID } from 'node:crypto';
 import { authenticator } from 'otplib';
 import { computeHibpRangeHash } from './hibp-range-hash.js';
@@ -114,6 +116,14 @@ export interface SerializedPasswordVersion {
   changedByName: string | null;
   changeReason: string | null;
   createdAt: Date;
+  /**
+   * Captured plain-text values. Never notes/password/TOTP (encrypted).
+   * Optional only to match the shared wire contract (older clients and
+   * payloads omit them); `listVersions` always sets all three.
+   */
+  name?: string;
+  username?: string | null;
+  url?: string | null;
 }
 
 export interface SerializedPasswordFolder {
@@ -253,6 +263,9 @@ export class PasswordsService {
       changedByName: nameById.get(r.changedBy) ?? null,
       changeReason: r.changeReason,
       createdAt: r.createdAt,
+      name: r.name,
+      username: r.username,
+      url: r.url,
     }));
   }
 
@@ -451,44 +464,85 @@ export class PasswordsService {
       data.url = input.url ?? null;
       changedFields.push('url');
     }
+    // Secrets are re-encrypted with a fresh nonce on every write, so the
+    // ciphertext can never be compared: decrypt the stored value and flag
+    // a change only when the plaintext truly differs. A stored blob that
+    // cannot be decrypted counts as changed (the write repairs it).
     if (input.password !== undefined) {
-      data.passwordCiphertext = this.crypto.encrypt(
-        input.password,
+      const current = this.tryDecryptSecret(
+        existing.passwordCiphertext,
         passwordVaultAad(companyId, id, 'password'),
       );
-      data.lastRotatedAt = new Date();
-      data.passwordStrength = computePasswordStrength(input.password, [
-        (input.name ?? existing.name) ?? '',
-        (input.username ?? existing.username) ?? '',
-        (input.url ?? existing.url) ?? '',
-      ]);
-      changedFields.push('password');
+      if (current !== input.password) {
+        data.passwordCiphertext = this.crypto.encrypt(
+          input.password,
+          passwordVaultAad(companyId, id, 'password'),
+        );
+        data.lastRotatedAt = new Date();
+        data.passwordStrength = computePasswordStrength(input.password, [
+          (input.name ?? existing.name) ?? '',
+          (input.username ?? existing.username) ?? '',
+          (input.url ?? existing.url) ?? '',
+        ]);
+        changedFields.push('password');
+      }
     }
     if (input.notes !== undefined) {
-      data.notesCiphertext = this.encodeNotes(input.notes, companyId, id);
-      changedFields.push('notes');
+      const nextNotes = input.notes ? input.notes : null;
+      const currentNotes = existing.notesCiphertext
+        ? this.safeDecryptNotes(existing.notesCiphertext, companyId, id)
+        : null;
+      // `currentNotes === null` with a stored blob means it was
+      // undecryptable: treat as changed so the write repairs it.
+      const unchanged =
+        existing.notesCiphertext === null
+          ? nextNotes === null
+          : currentNotes !== null && currentNotes === nextNotes;
+      if (!unchanged) {
+        data.notesCiphertext = this.encodeNotes(input.notes, companyId, id);
+        changedFields.push('notes');
+      }
     }
     if (input.totp !== undefined) {
       if (input.totp === null) {
-        data.totpSecretCiphertext = null;
-        data.totpAlgorithm = 'SHA1';
-        data.totpDigits = 6;
-        data.totpPeriod = 30;
-        if (existing.totpSecretCiphertext) changedFields.push('totpSecret');
+        if (existing.totpSecretCiphertext) {
+          data.totpSecretCiphertext = null;
+          data.totpAlgorithm = 'SHA1';
+          data.totpDigits = 6;
+          data.totpPeriod = 30;
+          changedFields.push('totpSecret');
+        }
       } else {
         const block: TotpConfigInput = input.totp;
-        data.totpSecretCiphertext = this.crypto.encrypt(
-          block.secret,
-          passwordVaultAad(companyId, id, 'totp'),
-        );
-        data.totpAlgorithm = block.algorithm;
-        data.totpDigits = block.digits;
-        data.totpPeriod = block.period;
-        changedFields.push('totpSecret');
-        if (block.algorithm !== existing.totpAlgorithm)
+        const currentSecret = existing.totpSecretCiphertext
+          ? this.tryDecryptSecret(
+              existing.totpSecretCiphertext,
+              passwordVaultAad(companyId, id, 'totp'),
+            )
+          : null;
+        const secretChanged = currentSecret !== block.secret;
+        const algoChanged = block.algorithm !== existing.totpAlgorithm;
+        const digitsChanged = block.digits !== existing.totpDigits;
+        const periodChanged = block.period !== existing.totpPeriod;
+        if (secretChanged) {
+          data.totpSecretCiphertext = this.crypto.encrypt(
+            block.secret,
+            passwordVaultAad(companyId, id, 'totp'),
+          );
+          changedFields.push('totpSecret');
+        }
+        if (algoChanged) {
+          data.totpAlgorithm = block.algorithm;
           changedFields.push('totpAlgorithm');
-        if (block.digits !== existing.totpDigits) changedFields.push('totpDigits');
-        if (block.period !== existing.totpPeriod) changedFields.push('totpPeriod');
+        }
+        if (digitsChanged) {
+          data.totpDigits = block.digits;
+          changedFields.push('totpDigits');
+        }
+        if (periodChanged) {
+          data.totpPeriod = block.period;
+          changedFields.push('totpPeriod');
+        }
       }
     }
 
@@ -834,6 +888,7 @@ export class PasswordsService {
     id: string,
     version: number,
     meta: AuditMeta,
+    fields?: readonly PasswordRestoreField[],
   ): Promise<SerializedPasswordDetail> {
     const existing = await this.loadForRead(actor, companyId, id);
     if (existing.archivedAt) {
@@ -846,45 +901,61 @@ export class PasswordsService {
     });
     if (!v) throw new NotFoundException('version not found');
 
-    // Pipe vN's decrypted contents back through update() so strength
-    // re-computes, HIBP re-enqueues, and a fresh version row is written
-    // by the same code path as a normal edit.
-    const plaintext = this.crypto.decrypt(
-      v.passwordCiphertext,
-      passwordVaultAad(companyId, id, 'password'),
-    );
-    const notes = v.notesCiphertext
-      ? this.safeDecryptNotes(v.notesCiphertext, companyId, id)
-      : null;
-    const totpSecret = v.totpSecretCiphertext
-      ? this.crypto.decrypt(
-          v.totpSecretCiphertext,
-          passwordVaultAad(companyId, id, 'totp'),
-        )
-      : null;
+    // Defence in depth: the controller validates with zod, but the service
+    // is also called directly, so re-check the allow-list here.
+    const requested = fields
+      ? Array.from(new Set(fields))
+      : [...PASSWORD_RESTORE_FIELDS];
+    if (
+      requested.length === 0 ||
+      requested.some((f) => !(PASSWORD_RESTORE_FIELDS as readonly string[]).includes(f))
+    ) {
+      throw new BadRequestException('Unknown or empty restore field list.');
+    }
+    const want = new Set<string>(requested);
 
-    const result = await this.update(
-      actor,
-      companyId,
-      id,
-      {
-        name: v.name,
-        username: v.username,
-        url: v.url,
-        password: plaintext,
-        notes,
-        totp: totpSecret
-          ? {
-              secret: totpSecret,
-              algorithm: v.totpAlgorithm,
-              digits: v.totpDigits,
-              period: v.totpPeriod,
-            }
-          : null,
-        changeReason: `restore from v${version}`,
-      },
-      meta,
-    );
+    // Pipe the chosen fields of vN back through update() so strength
+    // re-computes, HIBP re-enqueues, and a fresh version row is written
+    // by the same code path as a normal edit. Unchosen fields are left
+    // out of the input, so they keep their CURRENT values. Only the
+    // chosen secrets are decrypted.
+    const input: UpdatePasswordInput = {
+      changeReason: fields
+        ? `restore ${requested.join(', ')} from v${version}`
+        : `restore from v${version}`,
+    };
+    if (want.has('name')) input.name = v.name;
+    if (want.has('username')) input.username = v.username;
+    if (want.has('url')) input.url = v.url;
+    if (want.has('password')) {
+      input.password = this.crypto.decrypt(
+        v.passwordCiphertext,
+        passwordVaultAad(companyId, id, 'password'),
+      );
+    }
+    if (want.has('notes')) {
+      input.notes = v.notesCiphertext
+        ? this.safeDecryptNotes(v.notesCiphertext, companyId, id)
+        : null;
+    }
+    if (want.has('totp')) {
+      const totpSecret = v.totpSecretCiphertext
+        ? this.crypto.decrypt(
+            v.totpSecretCiphertext,
+            passwordVaultAad(companyId, id, 'totp'),
+          )
+        : null;
+      input.totp = totpSecret
+        ? {
+            secret: totpSecret,
+            algorithm: v.totpAlgorithm,
+            digits: v.totpDigits,
+            period: v.totpPeriod,
+          }
+        : null;
+    }
+
+    const result = await this.update(actor, companyId, id, input, meta);
 
     await this.audit.log({
       actorId: actor.id,
@@ -895,7 +966,8 @@ export class PasswordsService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { fromVersion: version },
+      // Field NAMES only, never values. Absent for a whole-version restore.
+      after: fields ? { fromVersion: version, fields: requested } : { fromVersion: version },
     });
 
     return result;
@@ -1341,6 +1413,22 @@ export class PasswordsService {
       notes,
       passwordVaultAad(companyId, passwordId, 'notes'),
     );
+  }
+
+  /**
+   * Decrypt a stored secret for a change comparison. Returns null when the
+   * blob cannot be decrypted (logged without the value) so the caller
+   * treats the field as changed.
+   */
+  private tryDecryptSecret(blob: string, aad: string): string | null {
+    try {
+      return this.crypto.decrypt(blob, aad);
+    } catch (err) {
+      this.logger.error(
+        `Failed to decrypt a stored secret for comparison: ${(err as Error).message}`,
+      );
+      return null;
+    }
   }
 
   private safeDecryptNotes(
