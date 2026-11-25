@@ -30,6 +30,7 @@ Every create, update, delete, archive, restore, and sensitive access operation w
 - **Login** events (success, failure, MFA success/failure, logout, refresh)
 - **Auth** MFA enroll/complete, sessions revoke others, remote AI connection approved (`auth.mcp_connection.create`) and revoked (`auth.mcp_connection.revoke`)
 - **Single sign-on** sign-in success and failure (`auth.sso.login.success`, `auth.sso.login.failure`), a first sign-in linked to an existing user (`auth.sso.link`) or creating one (`auth.sso.provision`), a provider re-authentication that opened the step-up window (`auth.sso.stepup`), and a user unlinking their provider account (`auth.sso.unlink`). A user linking their own account is `auth.sso.link` with reason `self_service`. Failures carry a fixed reason code, never a token, code or claim set.
+- **Settings** single sign-on configuration saves (`settings.sso.change`, field names only plus whether the client secret was set, cleared or unchanged, never a value) and connection tests (`settings.sso.test`, issuer host and outcome flags only)
 - **Settings** the API key and remote AI connection switches (`settings.api_keys.toggle`, `settings.mcp_remote.toggle`), and which AI apps can connect (`settings.mcp_client_policy.change`)
 - **Settings** global password access policy changes (`settings.password_access_policy.change`), including before/after modes and selected user IDs, plus the acting session row ID
 

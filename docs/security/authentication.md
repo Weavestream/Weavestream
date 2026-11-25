@@ -130,7 +130,7 @@ The authorization server has no login form and never sees a password or an MFA c
 
 ## Single sign-on (OIDC)
 
-Weavestream can sign people in through an OpenID Connect identity provider, with Microsoft Entra ID as the first target. It is **off by default**. An admin turns it on by setting `SSO_OIDC_ISSUER` (and the client ID and secret) in the environment; see [Environment variables](../configuration/environment.md#single-sign-on-oidc). Password and TOTP sign-in keep working as a break-glass path.
+Weavestream can sign people in through an OpenID Connect identity provider, with Microsoft Entra ID as the first target. It is **off by default**. An admin turns it on under **Admin → Settings → Single sign-on** (see [Workspace Settings](../configuration/workspace-settings.md#single-sign-on) and the [Entra guide](/guides/sso-microsoft-entra/)), or by setting `SSO_OIDC_ISSUER` (and the client ID and secret) in the environment. **When `SSO_OIDC_ISSUER` is set the environment wins entirely** and the settings tab is read-only; see [Environment variables](../configuration/environment.md#single-sign-on-oidc). Password and TOTP sign-in keep working as a break-glass path.
 
 ### Sign-in flow
 
@@ -214,6 +214,8 @@ To remove the link, choose **Unlink** (confirmation and a fresh step-up required
 | Action | When |
 |---|---|
 | `auth.sso.login.success` | An SSO session was created (`after` carries `idpMfa`, `amrPresent` and `idpMfaAsserted` (did the provider send an `amr` claim at all, and was it accepted as MFA), `mfaPending`, `mfaSetupRequired`). |
+| `settings.sso.change` | An admin saved the Single sign-on tab. `after` lists the field names changed and whether the client secret was set, cleared or left alone; never a value. |
+| `settings.sso.test` | An admin ran Test connection (issuer host and outcome flags only). |
 | `auth.sso.login.failure` | Any refusal; `after.reason` is a fixed code. |
 | `auth.sso.link` | A user was linked to a provider account: on first sign-in by email, or by the user themselves (`reason: self_service`). |
 | `auth.sso.unlink` | A user removed their link, or was refused because it would lock them out (`after.refused`). |

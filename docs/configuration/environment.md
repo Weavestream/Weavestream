@@ -77,7 +77,12 @@ Generate all signing keys with `./scripts/keygen.sh`. Each key is 32 random byte
 
 ## Single Sign-On (OIDC)
 
-Optional. Sign-in with an OpenID Connect identity provider (Microsoft Entra ID first) is configured with the variables below. With `SSO_OIDC_ISSUER` unset, SSO is off and nothing else here has any effect. The API refuses to start with a half-configured set (https issuer, multi-tenant endpoints refused, client ID and secret required, tenant ID format). See [Single sign-on (OIDC)](../security/authentication.md#single-sign-on-oidc) for the sign-in flow, the account-matching rules and the Entra setup steps.
+Optional. Sign-in with an OpenID Connect identity provider (Microsoft Entra ID first) can be configured in two ways:
+
+- **In the app** (recommended for new setups): **Admin → Settings → Single sign-on**. Nothing needs to be set in the environment. See [Workspace Settings](workspace-settings.md#single-sign-on) and the [Microsoft Entra guide](/guides/sso-microsoft-entra/).
+- **With the variables below.** **If `SSO_OIDC_ISSUER` is set, the environment wins entirely**: every `SSO_*` value comes from the environment, anything saved in the Single sign-on tab is ignored, and the tab becomes read-only with a "Managed by environment variables" banner listing which variables are set (never their values). Remove `SSO_OIDC_ISSUER` and restart to manage SSO from the tab instead. An install configured with these variables behaves exactly as before.
+
+With neither, SSO is off. The same validation applies to both routes (https issuer, multi-tenant endpoints refused, client ID and secret required, tenant ID format). See [Single sign-on (OIDC)](../security/authentication.md#single-sign-on-oidc) for the sign-in flow, the account-matching rules and the Entra setup steps.
 
 | Variable | Default | Notes |
 |---|---|---|
