@@ -75,6 +75,25 @@ Generate all signing keys with `./scripts/keygen.sh`. Each key is 32 random byte
 | `CSRF_SIGNING_KEY` | HMAC key for double-submit CSRF tokens. |
 | `STEP_UP_TTL_SEC` | Optional. Seconds a step-up re-authentication stays valid before a sensitive admin action re-prompts. Default: `900` (15 min). Range: 60–3600. |
 
+## Single Sign-On (OIDC)
+
+Optional. Sign-in with an OpenID Connect identity provider (Microsoft Entra ID first) is configured with the variables below. With `SSO_OIDC_ISSUER` unset, SSO is off and nothing else here has any effect. The API refuses to start with a half-configured set (https issuer, multi-tenant endpoints refused, client ID and secret required, tenant ID format). See [Single sign-on (OIDC)](../security/authentication.md#single-sign-on-oidc) for the sign-in flow, the account-matching rules and the Entra setup steps.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SSO_OIDC_ISSUER` | _(unset: SSO off)_ | Issuer URL of the identity provider. For Entra: `https://login.microsoftonline.com/<tenant-id>/v2.0`. The API refuses to start if it contains `/common`, `/organizations` or `/consumers` (multi-tenant endpoints), or if it is not `https` (plain `http` is accepted only for `localhost`). |
+| `SSO_OIDC_CLIENT_ID` | | Application (client) ID. **Required** when `SSO_OIDC_ISSUER` is set. |
+| `SSO_OIDC_CLIENT_SECRET` | | Client secret value. **Required** when `SSO_OIDC_ISSUER` is set. Keep it in your secret store, never in version control. |
+| `SSO_OIDC_SCOPES` | `openid profile email` | Space-separated scopes requested at sign-in. |
+| `SSO_PROVIDER_NAME` | `Single sign-on` | Name shown on the sign-in button ("Sign in with …"). Up to 60 characters. |
+| `SSO_LINK_BY_EMAIL` | `false` | On a person's first SSO sign-in, link them to the existing user whose email matches. **Off by default: the safe default is no auto-link.** When on, the token must prove the email is verified (`email_verified: true`, or for Entra the optional `xms_edov` claim set to true; an absent claim is not verified), the user must be active with a password set, and **SUPER_ADMIN accounts and accounts with platform capabilities are never auto-linked**. Only the `email` claim is used, never `preferred_username`. For Entra, enable the optional `xms_edov` claim, or link people another way: each person (and every SUPER_ADMIN) links their own account under **My account → Security → Single sign-on**, or use `SSO_AUTO_PROVISION`. |
+| `SSO_AUTO_PROVISION` | `false` | Create an account on first sign-in when nobody matches: an Operator with global access **None** and no company memberships (they land on "Access pending" until an administrator grants access). When `false`, an unmatched person is refused. |
+| `SSO_TRUST_IDP_MFA` | `false` | Treat an ID token whose `amr` claim contains `mfa` as multi-factor sign-in, so that session skips Weavestream's TOTP enrollment and challenge. Checked on every request, not just at sign-in: turning it back off ends the exemption for sessions that already exist. When `false`, Weavestream's own TOTP rules apply after SSO. |
+| `SSO_LOCAL_LOGIN` | `true` | Set to `false` to refuse password sign-in for everyone except **SUPER_ADMIN** (the break-glass account). A refused sign-in gets the same generic error as a wrong password, and **existing password sessions of non-SUPER_ADMIN users stop working** on their next request. SSO sessions and SUPER_ADMIN sessions are unaffected. Exception: the one-time invite link (`accept-invite`) still lets an invitee set a password, but with this set to `false` the session it creates is rejected for a non-SUPER_ADMIN, so the invitee has to sign in with SSO. |
+| `SSO_ALLOWED_TENANT_ID` | _(unset)_ | Optional Entra tenant ID that the ID token's `tid` claim must match. An extra pin on top of the tenant in the issuer URL. |
+
+Register `<API_URL>/v1/auth/sso/callback` as the redirect URI at the provider (for example `https://docs.example.com/api/v1/auth/sso/callback`). `API_URL` and `APP_URL` should share a host, because the sign-in cookies are set on the API response.
+
 ## Argon2 (Password Hashing)
 
 Advanced; the defaults follow OWASP guidance and rarely need tuning.

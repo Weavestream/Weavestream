@@ -128,6 +128,100 @@ The authorization server has no login form and never sees a password or an MFA c
 - **Revocation.** The person revokes a connection under **Account → AI connections**; an administrator under **Security center → AI connections**. Every event that revokes API keys (password change, signing out other sessions, MFA reset, re-invite, deactivation, the recovery CLI commands) revokes AI connections too. Every `/mcp` request and every token refresh checks the connection, the person's account, the **Allow remote AI connections** switch and the client choice above, so a revocation takes effect on the next request.
 - **Containment.** A connection has the same limits as an API key on the REST API it reaches internally: no account, user, session or key management, no step-up actions, no password reveal, and read-only unless the person allowed changes.
 
+## Single sign-on (OIDC)
+
+Weavestream can sign people in through an OpenID Connect identity provider, with Microsoft Entra ID as the first target. It is **off by default**. An admin turns it on by setting `SSO_OIDC_ISSUER` (and the client ID and secret) in the environment; see [Environment variables](../configuration/environment.md#single-sign-on-oidc). Password and TOTP sign-in keep working as a break-glass path.
+
+### Sign-in flow
+
+1. The sign-in page asks `GET /api/v1/auth/sso/config` (public, no secrets) and shows **Sign in with &lt;SSO_PROVIDER_NAME&gt;** when SSO is on.
+2. `GET /api/v1/auth/sso/login` sends the browser to the provider with an authorization-code request: PKCE (`S256`), a random `state` and a random `nonce`, all from `crypto.randomBytes`. The three values travel in one signed, `HttpOnly`, `SameSite=Lax` cookie that lives 10 minutes and is cleared on return. Over https it is named `__Host-ws_sso_flow` (Secure, Path=/, no Domain, so a sibling subdomain cannot plant it); over plain http (local development only) it is `ws_sso_flow`. The signed payload also carries a fixed purpose string, separate for sign-in and step-up, that is checked on return.
+3. The provider returns the browser to `GET /api/v1/auth/sso/callback`. The API compares `state` in constant time, exchanges the code over the back channel (with a timeout), and verifies the ID token before reading any claim from it.
+4. On success the person gets the **same session** as a password sign-in (same refresh-token rotation, access cookie, CSRF cookie and appearance cookie) and is redirected to `/`. On any failure the browser goes to `/login?sso_error=<code>` with one of four fixed codes: `no_account`, `not_allowed`, `failed`, `expired`. The redirect target is always the configured `APP_URL`, never a value from the request, and the detail stays in the server log and the audit trail.
+
+The sign-in start and callback routes use the same rate limit as password sign-in (`AUTH_RATE_LIMIT_PER_MIN`).
+
+### ID token checks
+
+| Check | Rule |
+|---|---|
+| Signature | Verified against the issuer's published keys (discovery document, cached). Only `RS256`, `ES256` and `PS256` are accepted; `none` and the HMAC algorithms are refused. |
+| `iss` | Must equal `SSO_OIDC_ISSUER` exactly. The discovery document must also describe that issuer. |
+| `aud` | Must contain the client ID (and, with several audiences, `azp` must be the client ID). |
+| `exp`, `iat`, `sub` | Required; 60 seconds of clock skew allowed. |
+| `nonce` | Must equal the nonce from the flow cookie (constant time). |
+| `tid` | When `SSO_ALLOWED_TENANT_ID` is set, must equal it. |
+
+A multi-tenant issuer (`/common`, `/organizations`, `/consumers`, or the personal-accounts tenant id `9188040d-6c67-4c5b-b112-36a304b66dad`) is refused at startup. In a multi-tenant endpoint the email address in a token is not proof of identity, so matching by email there would allow account takeover.
+
+### Which Weavestream user signs in
+
+- A user is matched by a stored link `(issuer, subject)`, never by email once linked. For an Entra issuer (`login.microsoftonline.com`) the subject is the object ID (`oid`) and a token without one is refused, so the subject cannot flip between `oid` and `sub`. Other providers use `sub`. Links are stored in `user_identities` and are removed with the user.
+- **First sign-in, no link.** Auto-linking by email is **off by default** (`SSO_LINK_BY_EMAIL=false`), because an email address is only as trustworthy as the provider's verification of it. With it on, the person is linked to the existing user whose `email` claim matches (case-insensitively) only when all of these hold: the token proves the email is verified (`email_verified` is `true`, or the Entra `xms_edov` claim is `true`; an absent claim is not verified); the user is active; the user has a password set (an unaccepted invite is never linked); and the user is not a `SUPER_ADMIN` and has no platform capabilities (those are never auto-linked). Only the `email` claim is used, never `preferred_username`. A user already linked to another account at the same issuer is not given a second one. For Entra, normally enable the optional `xms_edov` claim on the application, or skip auto-linking and use `SSO_AUTO_PROVISION` and an administrator to grant access. Every refusal shows the person the same `not_allowed` (or `no_account`) page; the real reason is only in the audit row and server log. A successful link is audited as `auth.sso.link`.
+- **Nobody matches.** With `SSO_AUTO_PROVISION=true` an Operator with global access **None** and no memberships is created (audited as `auth.sso.provision`); otherwise the person sees `no_account`.
+- A deactivated user is refused (`not_allowed`) even when already linked.
+
+### Multi-factor authentication
+
+- By default Weavestream's own rules apply after SSO: a user without TOTP is sent to enrollment, and a user with TOTP is challenged.
+- With `SSO_TRUST_IDP_MFA=true`, an ID token whose `amr` claim contains `mfa` makes that **session** multi-factor complete (`sessions.idp_mfa`). Nothing is written to the user's own MFA state, so a password sign-in for the same person is still held to the TOTP rules. The setting is checked on every request, so turning it off ends the exemption for sessions that already exist. Only enable this when the provider genuinely enforces MFA for this application (for Entra, with a Conditional Access policy that requires it).
+
+### Step-up for sensitive actions
+
+Sensitive actions ask for a recent re-authentication (the window is `STEP_UP_TTL_SEC`, see [Environment](../configuration/environment.md)). Which credential is requested depends on the session:
+
+| Session | Factor |
+|---|---|
+| Account has TOTP enabled | `mfa`: a TOTP or backup code, as before |
+| SSO session, no TOTP | `sso`: the browser is sent to `GET /api/v1/auth/sso/step-up`, which re-authenticates at the provider with `prompt=login` and `max_age=0` |
+| Password session, no TOTP | `password`, as before |
+
+For the `sso` factor the callback accepts the result only when the ID token carries an `auth_time` within the last 120 seconds, belongs to the account that owns the session, and the session is still live. The provider must therefore include `auth_time` in the ID token: in Entra, add it as an optional claim on the application. A token without it is refused.
+
+### Turning off password sign-in
+
+`SSO_LOCAL_LOGIN=false` makes `POST /auth/login` refuse everyone except `SUPER_ADMIN`. The refusal is the same generic 401 as a wrong password, still spends one Argon2 verification, and counts toward the failure lockout. Password sessions that already exist stop working for every non-`SUPER_ADMIN` user on their next request (SSO sessions and `SUPER_ADMIN` sessions are unaffected). The `SUPER_ADMIN` exception exists so a broken identity provider cannot lock every administrator out. One carve-out remains: the one-time invite link still accepts a new password, but under this setting the session it creates is refused for a non-`SUPER_ADMIN`, so the invitee has to sign in through SSO afterwards.
+
+### Setting up Microsoft Entra ID
+
+1. In the Entra admin center, register an application (single tenant).
+2. Add a **Web** redirect URI: `<API_URL>/v1/auth/sso/callback`.
+3. Create a client secret and keep its value (it is shown once).
+4. Add the optional ID-token claims `auth_time` (needed for step-up) and, if you turn on `SSO_LINK_BY_EMAIL`, `email` and `xms_edov` (the email's domain owner verification; without it no one is auto-linked).
+5. Set `SSO_OIDC_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0`, `SSO_OIDC_CLIENT_ID` and `SSO_OIDC_CLIENT_SECRET`, then restart the API.
+6. Optionally require assignment on the enterprise application so that only assigned people can sign in (an unassigned person is returned as `not_allowed`).
+
+### Linking your own account (self-service)
+
+Auto-linking by email is off by default and never applies to `SUPER_ADMIN` accounts or accounts with platform capabilities, so those people link their provider account themselves, signed in:
+
+1. Sign in (password and TOTP) and open **My account → Security → Single sign-on** (shown only when SSO is on).
+2. Choose **Link &lt;provider&gt; account**. Weavestream asks for a fresh step-up first (a TOTP or backup code if you have TOTP, otherwise your password).
+3. The browser goes to the provider (`GET /api/v1/auth/sso/link`, with `prompt=select_account` so you can pick the account) and returns to **My account** with the result.
+
+Rules the API enforces:
+
+- Interactive sessions only (no API keys or AI connections), MFA complete, rate-limited, and a recent step-up. Requests the browser marks as cross-site (`Sec-Fetch-Site: cross-site`) are refused.
+- The flow is bound to your user and your session in a signed cookie with its own purpose string (`weavestream.sso.link.v1`). When the provider returns, the session must still be live, unrevoked and yours, you must still be active, and the step-up window must still be open.
+- The link uses only the verified `(issuer, subject)`. The email claim is not read, so it works for any role and for providers that do not send a verified email. It creates no session and does not change your current one.
+- It is refused (shown as "could not be linked") when that provider account is already linked to any user, including you, or when you already have a linked account at this provider. Unlink first to switch.
+- Audited as `auth.sso.link` with reason `self_service`, plus short hashes of the subject and email, never raw values.
+
+To remove the link, choose **Unlink** (confirmation and a fresh step-up required; `DELETE /api/v1/auth/sso/link`, audited as `auth.sso.unlink`). It is refused when it would leave the account with no way to sign in: the user has no password, or password sign-in is off for them (`SSO_LOCAL_LOGIN=false` and not `SUPER_ADMIN`). `GET /api/v1/auth/sso/link/status` returns `{ enabled, linked, providerName }` for the signed-in user. Existing SSO sessions are not ended by an unlink.
+
+### Audit
+
+| Action | When |
+|---|---|
+| `auth.sso.login.success` | An SSO session was created (`after` carries `idpMfa`, `amrPresent` and `idpMfaAsserted` (did the provider send an `amr` claim at all, and was it accepted as MFA), `mfaPending`, `mfaSetupRequired`). |
+| `auth.sso.login.failure` | Any refusal; `after.reason` is a fixed code. |
+| `auth.sso.link` | A user was linked to a provider account: on first sign-in by email, or by the user themselves (`reason: self_service`). |
+| `auth.sso.unlink` | A user removed their link, or was refused because it would lock them out (`after.refused`). |
+| `auth.sso.provision` | First sign-in created a user. |
+| `auth.sso.stepup` | A provider re-authentication opened the step-up window. |
+
+Authorization codes, tokens, the client secret and claim sets are never logged or audited.
+
 ## Rate Limiting and Lockout
 
 The login endpoint has two independent protections:
