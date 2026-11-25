@@ -18,8 +18,12 @@ export const stepUpVerifySchema = z.object({
 });
 export type StepUpVerifyInput = z.infer<typeof stepUpVerifySchema>;
 
-/** Which credential the client must collect for a step-up challenge. */
-export type StepUpFactor = 'mfa' | 'password';
+/**
+ * Which credential the client must collect for a step-up challenge.
+ * `sso` means there is nothing to type: the client sends the browser to
+ * `/api/v1/auth/sso/step-up`, which re-authenticates at the identity provider.
+ */
+export type StepUpFactor = 'mfa' | 'password' | 'sso';
 
 /** Shape returned by `GET /auth/step-up` for the proactive download flow. */
 export interface StepUpStatus {
