@@ -119,7 +119,8 @@ export interface SerializedPasswordVersion {
   /**
    * Captured plain-text values. Never notes/password/TOTP (encrypted).
    * Optional only to match the shared wire contract (older clients and
-   * payloads omit them); `listVersions` always sets all three.
+   * payloads omit them). `listVersions` sets all three for staff, and omits
+   * all three for CLIENT_USER (portal) actors.
    */
   name?: string;
   username?: string | null;
@@ -256,17 +257,19 @@ export class PasswordsService {
       select: { id: true, name: true },
     });
     const nameById = new Map(users.map((u) => [u.id, u.name] as const));
-    return rows.map((r) => ({
-      version: r.version,
-      changedFields: r.changedFields,
-      changedBy: r.changedBy,
-      changedByName: nameById.get(r.changedBy) ?? null,
-      changeReason: r.changeReason,
-      createdAt: r.createdAt,
-      name: r.name,
-      username: r.username,
-      url: r.url,
-    }));
+    const isClient = actor.role === 'CLIENT_USER';
+    return rows.map((r) => {
+      const base: SerializedPasswordVersion = {
+        version: r.version,
+        changedFields: r.changedFields,
+        changedBy: r.changedBy,
+        changedByName: nameById.get(r.changedBy) ?? null,
+        changeReason: r.changeReason,
+        createdAt: r.createdAt,
+      };
+      if (isClient) return base;
+      return { ...base, name: r.name, username: r.username, url: r.url };
+    });
   }
 
   // ------------------------------------------------------------------

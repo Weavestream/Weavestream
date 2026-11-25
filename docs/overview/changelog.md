@@ -19,7 +19,7 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ### Changed
 
-- **Password history shows the name, username and URL of every version.** Earlier usernames can be read straight from the list, and the fields that changed are highlighted. Notes, passwords and TOTP secrets stay encrypted and are only shown through **Reveal**.
+- **Password history shows the name, username and URL of every version.** Earlier usernames can be read straight from the list, and the fields that changed are highlighted. Notes, passwords and TOTP secrets stay encrypted and are only shown through **Reveal**. Client-portal users still see only the history metadata (who changed which fields, and when), never these captured values.
 
 ### Fixed
 

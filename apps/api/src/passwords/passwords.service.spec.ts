@@ -1157,6 +1157,33 @@ describe('PasswordsService — listVersions captured fields', () => {
     expect(json).not.toContain('JBSWY3DPEHPK3PXP');
     expect(Object.keys(row ?? {})).not.toContain('notes');
   });
+
+  it('withholds the captured name/username/url from CLIENT_USER (portal) reads', async () => {
+    // A credential shared with the client portal may have had a different
+    // name, username or URL before it was shared. The history metadata
+    // (who/when/which fields) stays visible, as before; the captured values
+    // are internal-only.
+    const { svc, versions } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', visibleToClients: true })],
+    });
+    versions.push(
+      versionRow({
+        version: 1,
+        name: 'Internal name',
+        username: 'internal-admin@example.test',
+        url: 'https://internal.example.test',
+      }),
+    );
+    const [row] = await svc.listVersions(CLIENT, 'co-1', 'pwd-a');
+    expect(row).toMatchObject({ version: 1 });
+    expect(row).not.toHaveProperty('name');
+    expect(row).not.toHaveProperty('username');
+    expect(row).not.toHaveProperty('url');
+    const json = JSON.stringify(row);
+    expect(json).not.toContain('Internal name');
+    expect(json).not.toContain('internal-admin@example.test');
+    expect(json).not.toContain('internal.example.test');
+  });
 });
 
 describe('PasswordsService — update flags only real changes', () => {

@@ -88,6 +88,8 @@ Every change to a password is stored as an immutable `PasswordVersion` record ca
 
 The history panel shows the captured **name, username and URL** for every version and highlights the ones that changed, so earlier usernames can be read straight from the list. Notes, passwords and TOTP secrets are encrypted and are never listed; the password can be revealed per version with the usual permission and reason rules.
 
+Client-portal users (`CLIENT_USER`) never receive the captured name, username or URL from the history API, even for a password shared with clients: it may have had an internal name or username before it was shared. They see the same metadata as before (version, changed fields, actor, reason and time).
+
 ### Restoring
 
 Restoring is forward-only: it appends a new version and keeps the current one in history. You can restore a whole version, or one field at a time (**Restore this username / URL / name**). A per-field restore changes only that field; everything else, including the password, keeps its current value. The API accepts an optional `fields` array (`name`, `username`, `url`, `notes`, `password`, `totp`) on `POST /companies/:companyId/passwords/:id/versions/:version/restore`; omitting it restores the whole version. Restores need the same permission as editing, are refused on archived passwords, and are audited as `password.version.restored` with the field names only, never values.
