@@ -50,6 +50,7 @@ export const ssoSettingsSchema = z.object({
   linkByEmail: z.boolean(),
   autoProvision: z.boolean(),
   trustIdpMfa: z.boolean(),
+  assumeIdpMfa: z.boolean(),
   localLoginEnabled: z.boolean(),
   /** The redirect URI to register at the identity provider. */
   callbackUrl: z.string(),
@@ -83,9 +84,14 @@ export const updateSsoSettingsSchema = z
     linkByEmail: z.boolean().optional(),
     autoProvision: z.boolean().optional(),
     trustIdpMfa: z.boolean().optional(),
+    assumeIdpMfa: z.boolean().optional(),
     localLoginEnabled: z.boolean().optional(),
   })
   .refine((v) => Object.keys(v).length > 0, 'At least one field must be provided')
+  .refine((v) => !(v.assumeIdpMfa === true && v.trustIdpMfa === false), {
+    message: 'Assuming provider MFA requires trusting the provider multi-factor sign-in',
+    path: ['assumeIdpMfa'],
+  })
   .refine((v) => !(v.clientSecret && v.clearClientSecret), {
     message: 'Cannot set and clear the client secret in the same request',
     path: ['clientSecret'],

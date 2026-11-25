@@ -104,6 +104,7 @@ describe('single sign-on env', () => {
     expect(env.SSO_LINK_BY_EMAIL).toBe(false);
     expect(env.SSO_AUTO_PROVISION).toBe(false);
     expect(env.SSO_TRUST_IDP_MFA).toBe(false);
+    expect(env.SSO_ASSUME_IDP_MFA).toBe(false);
     expect(env.SSO_LOCAL_LOGIN).toBe(true);
     expect(env.SSO_ALLOWED_TENANT_ID).toBeUndefined();
   });
@@ -128,12 +129,14 @@ describe('single sign-on env', () => {
       SSO_LINK_BY_EMAIL: 'true',
       SSO_AUTO_PROVISION: 'true',
       SSO_TRUST_IDP_MFA: '1',
+      SSO_ASSUME_IDP_MFA: 'yes',
       SSO_LOCAL_LOGIN: 'off',
     });
     expect(env.SSO_OIDC_ISSUER).toBe(ENTRA_ISSUER);
     expect(env.SSO_LINK_BY_EMAIL).toBe(true);
     expect(env.SSO_AUTO_PROVISION).toBe(true);
     expect(env.SSO_TRUST_IDP_MFA).toBe(true);
+    expect(env.SSO_ASSUME_IDP_MFA).toBe(true);
     expect(env.SSO_LOCAL_LOGIN).toBe(false);
   });
 

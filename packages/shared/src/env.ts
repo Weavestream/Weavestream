@@ -182,6 +182,11 @@ export const envSchema = z.object({
   SSO_AUTO_PROVISION: boolish.default(false),
   // Treat an ID token whose `amr` contains `mfa` as MFA-complete.
   SSO_TRUST_IDP_MFA: boolish.default(false),
+  // With SSO_TRUST_IDP_MFA on: count EVERY SSO sign-in as MFA-complete even when
+  // the provider sends no `amr` claim (Entra does not for v2 ID tokens). Only
+  // set this when the provider's policy (e.g. Conditional Access) requires MFA
+  // for this app. Inert while SSO_TRUST_IDP_MFA is off.
+  SSO_ASSUME_IDP_MFA: boolish.default(false),
   // false: password login is refused for everyone except SUPER_ADMIN.
   SSO_LOCAL_LOGIN: boolish.default(true),
   // Entra tenant id the ID token's `tid` must equal. Optional extra pin.
