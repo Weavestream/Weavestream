@@ -51,6 +51,9 @@ export function integrationConnectionSecretAad(integrationId: string, connection
  */
 export const AI_SETTINGS_API_KEY_AAD = 'ai-settings:singleton:api-key';
 
+/** AAD for the single sign-on client secret (`SsoSetting` singleton row). */
+export const SSO_SETTINGS_CLIENT_SECRET_AAD = 'sso-settings:singleton:client-secret';
+
 @Injectable()
 export class IntegrationSecretEncryptionService {
   private readonly envelope: AesGcmEnvelope;

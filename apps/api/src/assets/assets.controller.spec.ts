@@ -1,6 +1,7 @@
 import { AssetsController } from './assets.controller.js';
 import { REQUIRE_PERMISSION_KEY } from '../rbac/require-permission.decorator.js';
 import { REQUIRE_STEP_UP_KEY } from '../auth/step-up/require-step-up.decorator.js';
+import { INTERACTIVE_ONLY_KEY } from '../auth/interactive-only.decorator.js';
 
 /**
  * Pins the authorization configuration of the destructive asset routes
@@ -118,5 +119,68 @@ describe('AssetsController CSV export', () => {
       status: 400,
     });
     expect(exportCsv).not.toHaveBeenCalled();
+  });
+});
+
+describe('AssetsController version history routes', () => {
+  const COMPANY = '00000000-0000-4000-8000-000000000001';
+  const ASSET = '00000000-0000-4000-8000-0000000000a1';
+  const actor = { id: 'u1', role: 'OPERATOR' } as never;
+  const req = { ip: '127.0.0.1', headers: { 'user-agent': 'jest' } } as never;
+
+  const metaOf = (key: string, handler: keyof AssetsController): unknown =>
+    Reflect.getMetadata(key, AssetsController.prototype[handler] as object);
+
+  it('redact is erasure: asset.purge, step-up, human session only, rate limited', () => {
+    expect(metaOf(REQUIRE_PERMISSION_KEY, 'redactVersions')).toEqual({
+      action: 'asset.purge',
+      companyIdFrom: 'params.companyId',
+    });
+    expect(metaOf(REQUIRE_STEP_UP_KEY, 'redactVersions')).toEqual({});
+    expect(metaOf(INTERACTIVE_ONLY_KEY, 'redactVersions')).toBe(true);
+    expect(metaOf('THROTTLER:LIMITglobal', 'redactVersions')).toBe(10);
+    expect(metaOf('THROTTLER:TTLglobal', 'redactVersions')).toBe(60_000);
+  });
+
+  it.each(['versions', 'version'] as const)('%s needs asset.read on the route company', (handler) => {
+    expect(metaOf(REQUIRE_PERMISSION_KEY, handler)).toEqual({
+      action: 'asset.read',
+      companyIdFrom: 'params.companyId',
+    });
+  });
+
+  it('restore needs asset.write (same as editing)', () => {
+    expect(metaOf(REQUIRE_PERMISSION_KEY, 'restoreVersion')).toEqual({
+      action: 'asset.write',
+      companyIdFrom: 'params.companyId',
+    });
+  });
+
+  it('declares redact before the :version routes so "redact" is never a version number', () => {
+    const names = Object.getOwnPropertyNames(AssetsController.prototype);
+    expect(names.indexOf('redactVersions')).toBeLessThan(names.indexOf('version'));
+  });
+
+  it('delegates list, detail and redact with the actor and company from the route', async () => {
+    const svc = {
+      listVersions: jest.fn().mockResolvedValue('list'),
+      getVersion: jest.fn().mockResolvedValue('detail'),
+      redactVersions: jest.fn().mockResolvedValue({ versionsRedacted: 2 }),
+    };
+    const c = new AssetsController(svc as never, {} as never);
+    await c.versions(actor, COMPANY, ASSET, { limit: 5, cursor: 9 });
+    expect(svc.listVersions).toHaveBeenCalledWith(actor, COMPANY, ASSET, { limit: 5, cursor: 9 });
+    await c.version(actor, COMPANY, ASSET, 3);
+    expect(svc.getVersion).toHaveBeenCalledWith(actor, COMPANY, ASSET, 3);
+    await expect(c.redactVersions(actor, COMPANY, ASSET, { version: 2 }, req)).resolves.toEqual({
+      versionsRedacted: 2,
+    });
+    expect(svc.redactVersions).toHaveBeenCalledWith(
+      actor,
+      COMPANY,
+      ASSET,
+      { version: 2 },
+      expect.objectContaining({ ip: expect.anything() }),
+    );
   });
 });

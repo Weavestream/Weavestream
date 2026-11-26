@@ -44,6 +44,17 @@ import { PasswordsService } from '../passwords/passwords.service.js';
 import { StarsService } from '../stars/stars.service.js';
 import { TagsService } from '../tags/tags.service.js';
 import { buildAssetZodSchema } from './build-asset-schema.js';
+import {
+  buildAssetSnapshot,
+  lockAndSnapshotAsset,
+  projectVersionDetail,
+  projectVersionSummary,
+  readableFieldsFor,
+  restoreChangeReason,
+  recordAssetVersion,
+  sameAssetValue,
+  type StoredAssetVersion,
+} from './asset-versions.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { INTEGRATION_WRITE_ACTOR } from '../common/integration-write-actor.js';
 import { expandMatchValueVariants } from '../integrations/match-resolver.service.js';
@@ -65,6 +76,12 @@ export interface AuditMeta {
 export function assetFieldChecksum(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value ?? null)).digest('hex');
 }
+
+/** `changeReason` on versions written by reconstruction/sync. */
+const INTEGRATION_VERSION_REASON = {
+  created: 'initial version (integration sync)',
+  updated: 'integration sync',
+} as const;
 
 export function classifyIntegrationAssetChange(input: {
   exists: boolean;
@@ -992,6 +1009,13 @@ export class AssetsService {
       // only becomes discoverable after its field values are visible
       // to the rest of the app.
       await this.searchIndex.upsertAsset(tx, created.id, companyId);
+      // Version 1 ("initial version"), same transaction as the write.
+      await recordAssetVersion(tx, {
+        companyId,
+        assetId: created.id,
+        previous: null,
+        changedBy: actor.id,
+      });
 
       return created;
     });
@@ -1024,6 +1048,11 @@ export class AssetsService {
     meta: AuditMeta,
     /** Run the write in the caller's transaction (it holds a lock the write must not outlive). */
     client?: Prisma.TransactionClient,
+    options?: {
+      changeReason?: string;
+      /** Set by `restoreVersion`: audit `asset.version.restored` in the same transaction. */
+      restore?: { fromVersion: number; fields?: string[] };
+    },
   ): Promise<SerializedAsset> {
     const existing = await this.prisma.asset.findFirst({
       where: { id, companyId },
@@ -1080,6 +1109,11 @@ export class AssetsService {
     const runTransaction = <T>(callback: (tx: Prisma.TransactionClient) => Promise<T>) =>
       client ? callback(client) : this.prisma.$transaction(callback);
     await runTransaction(async (tx) => {
+      // Lock the row, then take the "before" state for the version diff
+      // here, inside the transaction, so a concurrent editor's committed
+      // change is what we diff against (never a stale pre-read).
+      const previousState = await lockAndSnapshotAsset(tx, companyId, id);
+      if (!previousState) throw new NotFoundException();
       // `updateMany` lets us carry `companyId` in the `where` clause so
       // the tenant-scope middleware can verify the write is in-scope.
       // Plain `update` requires a unique `where`, which would only
@@ -1114,6 +1148,32 @@ export class AssetsService {
       // updated field values and name surface in the next search
       // query. Same-tx so a rollback cleans both sides up together.
       await this.searchIndex.upsertAsset(tx, id, companyId);
+      // A version row only when the normalised state truly changed.
+      const recorded = await recordAssetVersion(tx, {
+        companyId,
+        assetId: id,
+        previous: previousState,
+        changedBy: actor.id,
+        changeReason: options?.changeReason ?? null,
+      });
+      // The restore audit row commits with the version it describes, and
+      // only exists when a version was actually recorded.
+      if (recorded && options?.restore) {
+        await this.audit.logWithClient(tx, {
+          actorId: actor.id,
+          action: AUDIT_ACTIONS.asset.versionRestored,
+          entityType: 'Asset',
+          entityId: id,
+          companyId,
+          ip: meta.ip,
+          userAgent: meta.userAgent,
+          before: null,
+          // Field NAMES only (staff-readable audit), never values.
+          after: options.restore.fields
+            ? { fromVersion: options.restore.fromVersion, fields: options.restore.fields }
+            : { fromVersion: options.restore.fromVersion },
+        });
+      }
     });
 
     const entry: AuditEntry = {
@@ -1142,6 +1202,313 @@ export class AssetsService {
     await (client ? this.audit.logWithClient(client, entry) : this.audit.log(entry));
 
     return this.get(actor, companyId, id);
+  }
+
+  // --------------------------------------------------------------------
+  // Version history (migration 0098)
+  // --------------------------------------------------------------------
+
+  private async loadVersionContext(companyId: string, id: string) {
+    const asset = await this.prisma.asset.findFirst({
+      where: { id, companyId },
+      select: { id: true, assetLayout: { select: { fields: { orderBy: { position: 'asc' } } } } },
+    });
+    if (!asset) throw new NotFoundException();
+    return asset.assetLayout.fields;
+  }
+
+  private async versionAuthorNames(userIds: Array<string | null>): Promise<Map<string, string>> {
+    const ids = Array.from(new Set(userIds.filter((u): u is string => u !== null)));
+    if (ids.length === 0) return new Map();
+    const users = await this.prisma.user.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, name: true },
+    });
+    return new Map(users.map((u) => [u.id, u.name] as const));
+  }
+
+  /**
+   * Lightweight edit history, newest first, keyset-paginated on the
+   * version number (`cursor` = last version of the previous page). Rows
+   * carry no captured values (see `getVersion`). Same authorisation as
+   * reading the asset (route: `asset.read`; the asset is looked up by
+   * `{ id, companyId }` so a foreign id is a 404). Client users never get
+   * author names or free-text reasons, and only see readable fields.
+   */
+  async listVersions(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    page: { limit: number; cursor?: number } = { limit: 20 },
+  ): Promise<{
+    fields: Array<{
+      id: string;
+      name: string;
+      fieldType: FieldType;
+      options: Record<string, unknown>;
+    }>;
+    items: Array<ReturnType<typeof projectVersionSummary>>;
+    nextCursor: number | null;
+  }> {
+    const layoutFields = await this.loadVersionContext(companyId, id);
+    const limit = Math.min(Math.max(Math.trunc(page.limit) || 20, 1), 100);
+    const rows = await this.prisma.assetVersion.findMany({
+      where: {
+        assetId: id,
+        companyId,
+        ...(page.cursor !== undefined ? { version: { lt: page.cursor } } : {}),
+      },
+      select: {
+        version: true,
+        changedFields: true,
+        changedBy: true,
+        changeReason: true,
+        redactedAt: true,
+        redactedFields: true,
+        createdAt: true,
+      },
+      orderBy: { version: 'desc' },
+      take: limit + 1,
+    });
+    const pageRows = rows.slice(0, limit);
+    const nameById =
+      actor.role === 'CLIENT_USER'
+        ? new Map<string, string>()
+        : await this.versionAuthorNames(pageRows.map((r) => r.changedBy));
+    return {
+      fields: readableFieldsFor(layoutFields, actor.role).map((f) => ({
+        id: f.id,
+        name: f.name,
+        fieldType: f.fieldType,
+        options: (f.options ?? {}) as Record<string, unknown>,
+      })),
+      items: pageRows.map((r) => projectVersionSummary(r, layoutFields, actor.role, nameById)),
+      nextCursor: rows.length > limit ? pageRows[pageRows.length - 1]!.version : null,
+    };
+  }
+
+  /**
+   * One version with its captured values, plus the previous retained
+   * version's state (for "was: ..."), under the same projection rules as
+   * the list. 404 for an unknown asset/version or another company.
+   */
+  async getVersion(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    version: number,
+  ): Promise<ReturnType<typeof projectVersionDetail>> {
+    if (!Number.isInteger(version) || version < 1 || version > 2_147_483_647) {
+      throw new NotFoundException('version not found');
+    }
+    const layoutFields = await this.loadVersionContext(companyId, id);
+    const row = await this.prisma.assetVersion.findFirst({
+      where: { assetId: id, companyId, version },
+    });
+    if (!row) throw new NotFoundException('version not found');
+    const previous = await this.prisma.assetVersion.findFirst({
+      where: { assetId: id, companyId, version: { lt: version } },
+      orderBy: { version: 'desc' },
+    });
+    const nameById =
+      actor.role === 'CLIENT_USER'
+        ? new Map<string, string>()
+        : await this.versionAuthorNames([row.changedBy]);
+    return projectVersionDetail(
+      row as StoredAssetVersion,
+      previous as StoredAssetVersion | null,
+      layoutFields,
+      actor.role,
+      nameById,
+    );
+  }
+
+  /**
+   * Erasure path for history (route: `asset.purge` + step-up + interactive
+   * only). `fieldId` blanks that field's value in ALL versions of the asset;
+   * `version` blanks every captured value of that one version; both blank
+   * that field in that version only. Rows and numbers stay, marked
+   * redacted. Does NOT touch the live value, audit rows or backups.
+   * Raw SQL because Prisma cannot delete a JSON key; every statement
+   * carries `company_id` in its WHERE (the tenant middleware cannot see
+   * raw queries). Audit holds ids and counts only, in the same transaction.
+   */
+  async redactVersions(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    input: { fieldId?: string; version?: number },
+    meta: AuditMeta,
+  ): Promise<{ versionsRedacted: number }> {
+    if (input.fieldId === undefined && input.version === undefined) {
+      throw new BadRequestException('Provide fieldId, version, or both.');
+    }
+    const layoutFields = await this.loadVersionContext(companyId, id);
+    // Retired fields stay in the layout (archived), which is exactly when an
+    // operator needs to scrub them; an id that is not on this layout is a typo.
+    if (input.fieldId !== undefined && !layoutFields.some((f) => f.id === input.fieldId)) {
+      throw new NotFoundException('field not found');
+    }
+    if (input.version !== undefined) {
+      const exists = await this.prisma.assetVersion.findFirst({
+        where: { assetId: id, companyId, version: input.version },
+        select: { version: true },
+      });
+      if (!exists) throw new NotFoundException('version not found');
+    }
+
+    const count = await this.prisma.$transaction(async (tx) => {
+      let affected: number;
+      if (input.fieldId !== undefined) {
+        const fieldId = input.fieldId;
+        const versionFilter =
+          input.version !== undefined
+            ? Prisma.sql`AND version = ${input.version}`
+            : Prisma.empty;
+        affected = await tx.$executeRaw`UPDATE asset_versions
+          SET field_values = field_values - ${fieldId}::text,
+              redacted_at = now(),
+              redacted_fields = (
+                SELECT COALESCE(array_agg(DISTINCT f), ARRAY[]::text[])
+                FROM unnest(redacted_fields || ARRAY[${fieldId}::text]) AS f
+              )
+          WHERE asset_id = ${id}::uuid AND company_id = ${companyId}::uuid
+            AND jsonb_exists(field_values, ${fieldId}::text)
+            ${versionFilter}`;
+      } else {
+        affected = await tx.$executeRaw`UPDATE asset_versions
+          SET field_values = '{}'::jsonb, redacted_at = now(), redacted_fields = ARRAY[]::text[]
+          WHERE asset_id = ${id}::uuid AND company_id = ${companyId}::uuid
+            AND version = ${input.version!}`;
+      }
+      await this.audit.logWithClient(tx, {
+        actorId: actor.id,
+        action: AUDIT_ACTIONS.asset.versionRedacted,
+        entityType: 'Asset',
+        entityId: id,
+        companyId,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        before: null,
+        // Ids and a count only: never a value.
+        after: {
+          ...(input.fieldId !== undefined ? { fieldId: input.fieldId } : {}),
+          ...(input.version !== undefined ? { version: input.version } : {}),
+          versionsRedacted: affected,
+        },
+      });
+      return affected;
+    });
+    return { versionsRedacted: count };
+  }
+
+  /**
+   * Forward-only restore of a historical version (whole, or only the
+   * named `fields`), routed through `update()` so validation, uniqueness,
+   * the search index, the `asset.update` audit row, the new version row
+   * and permissions all behave like an ordinary edit. Never restores the
+   * external identity (`externalId` / `externalSource`) - a stale sync
+   * binding must not be re-applied from history.
+   *
+   * `fields` entries must be `name` or the id of a field the actor can
+   * read that exists on that version (has a stored value or is listed in
+   * its `changedFields`). Unchosen fields keep their CURRENT values.
+   */
+  async restoreVersion(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    version: number,
+    meta: AuditMeta,
+    fields?: readonly string[],
+  ): Promise<SerializedAsset> {
+    if (!Number.isInteger(version) || version < 1 || version > 2_147_483_647) {
+      throw new NotFoundException('version not found');
+    }
+    const existing = await this.prisma.asset.findFirst({
+      where: { id, companyId },
+      include: {
+        assetLayout: { include: { fields: { orderBy: { position: 'asc' } } } },
+        fieldValues: true,
+      },
+    });
+    if (!existing) throw new NotFoundException();
+    if (existing.archivedAt) {
+      throw new BadRequestException(
+        'Cannot restore a version on an archived asset — restore the asset first.',
+      );
+    }
+    const v = await this.prisma.assetVersion.findFirst({
+      where: { assetId: id, companyId, version },
+    });
+    if (!v) throw new NotFoundException('version not found');
+
+    const readable = readableFieldsFor(existing.assetLayout.fields, actor.role);
+    const readableById = new Map(readable.map((f) => [f.id, f]));
+    const stored =
+      v.fieldValues && typeof v.fieldValues === 'object' && !Array.isArray(v.fieldValues)
+        ? (v.fieldValues as Record<string, unknown>)
+        : {};
+
+    // Defence in depth: the controller validates with zod, but the service
+    // is also called directly, so re-check the allow-list here.
+    let wantName: boolean;
+    let wantFieldIds: string[];
+    if (fields) {
+      const requested = Array.from(new Set(fields));
+      const valid = (f: string): boolean =>
+        f === 'name' ||
+        (readableById.has(f) && (f in stored || v.changedFields.includes(f)));
+      if (requested.length === 0 || !requested.every(valid)) {
+        throw new BadRequestException('Unknown or empty restore field list.');
+      }
+      wantName = requested.includes('name');
+      wantFieldIds = requested.filter((f) => f !== 'name');
+    } else {
+      wantName = true;
+      wantFieldIds = readable.map((f) => f.id);
+    }
+
+    const currentById = new Map(existing.fieldValues.map((r) => [r.assetFieldId, r.value]));
+    const fieldValues: Record<string, unknown> = {};
+    const restoredNames: string[] = [];
+    for (const fieldId of wantFieldIds) {
+      const field = readableById.get(fieldId)!;
+      const target = fieldId in stored ? stored[fieldId] : null;
+      // Skip fields already at the historical value: it avoids re-validating
+      // untouched data (options may have tightened since) and keeps the
+      // new version's changedFields honest.
+      if (sameAssetValue(currentById.get(fieldId), target)) continue;
+      fieldValues[field.slug] = target;
+      restoredNames.push(field.name);
+    }
+    const nameChanged = wantName && existing.name !== v.name;
+    if (nameChanged) restoredNames.unshift('name');
+    if (restoredNames.length === 0) {
+      // Already identical to that version: nothing to write or audit.
+      return this.get(actor, companyId, id);
+    }
+
+    return this.update(
+      actor,
+      companyId,
+      id,
+      {
+        // Pin the name unless it is being restored: `update()` otherwise
+        // re-derives it from the primary field, which would let a
+        // per-field restore move a field the user did not choose.
+        name: nameChanged ? v.name : existing.name,
+        fieldValues,
+      },
+      meta,
+      undefined,
+      {
+        // Generic on purpose: field names (possibly hidden-from-client
+        // ones) are never stored in the reason.
+        changeReason: restoreChangeReason(version, fields !== undefined),
+        restore: { fromVersion: version, ...(fields ? { fields: restoredNames } : {}) },
+      },
+    );
   }
 
   /**
@@ -1531,6 +1898,14 @@ export class AssetsService {
         );
         await this.linkFileFieldUploadsToAsset(tx, input.companyId, row.id, layout, canonicalValues);
         await this.searchIndex.upsertAsset(tx, row.id, input.companyId);
+        // Machine write: no human author (matches `createdBy` above).
+        await recordAssetVersion(tx, {
+          companyId: input.companyId,
+          assetId: row.id,
+          previous: null,
+          changedBy: INTEGRATION_WRITE_ACTOR,
+          changeReason: INTEGRATION_VERSION_REASON.created,
+        });
         await this.audit.logWithClient(tx, {
           actorId: input.auditActorId,
           action: 'integration.asset.created',
@@ -1654,6 +2029,19 @@ export class AssetsService {
           );
           await this.linkFileFieldUploadsToAsset(tx, input.companyId, target!.id, layout, canonicalValues);
           await this.searchIndex.upsertAsset(tx, target!.id, input.companyId);
+          // Machine write: no human author (matches `updatedBy` above).
+          // Archive-only transitions (a restore with no content change)
+          // do not create a version: the state did not change.
+          await recordAssetVersion(tx, {
+            companyId: input.companyId,
+            assetId: target!.id,
+            previous: {
+              ...buildAssetSnapshot(target!, target!.fieldValues),
+              updatedAt: target!.updatedAt,
+            },
+            changedBy: INTEGRATION_WRITE_ACTOR,
+            changeReason: INTEGRATION_VERSION_REASON.updated,
+          });
           await this.audit.logWithClient(tx, {
             actorId: input.auditActorId,
             action: 'integration.asset.updated',

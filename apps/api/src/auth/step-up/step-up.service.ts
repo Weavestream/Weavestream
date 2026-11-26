@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   HttpException,
   HttpStatus,
@@ -60,9 +61,11 @@ export class StepUpService {
    * An MFA-pending session can never satisfy step-up; it gets the
    * challenge, so the client prompts rather than silently failing.
    */
-  async assertVerified(user: Pick<AuthedUser, 'id' | 'sessionId' | 'mfaPending'>): Promise<void> {
+  async assertVerified(
+    user: Pick<AuthedUser, 'id' | 'sessionId' | 'mfaPending' | 'authMethod'>,
+  ): Promise<void> {
     if (user.mfaPending || !(await this.isVerified(user.sessionId))) {
-      throw new StepUpRequiredException(await this.requiredFactor(user.id));
+      throw new StepUpRequiredException(await this.requiredFactor(user.id, user.authMethod));
     }
   }
 
@@ -83,7 +86,7 @@ export class StepUpService {
   async status(user: AuthedUser): Promise<StepUpStatus> {
     const [verified, factor, ttl] = await Promise.all([
       this.isVerified(user.sessionId),
-      this.requiredFactor(user.id),
+      this.requiredFactor(user.id, user.authMethod),
       this.redis.client.ttl(this.key(user.sessionId)),
     ]);
     return { verified, factor, expiresInSec: ttl > 0 ? ttl : 0 };
@@ -92,28 +95,34 @@ export class StepUpService {
   /**
    * Single source of truth for which credential a step-up requires.
    * Both the guard and `verify()` derive the factor from this so they
-   * can never disagree. `mfaEnabled` with a stored secret → `mfa`;
-   * everything else (including the should-never-happen inconsistent
-   * state) → `password`.
+   * can never disagree. `mfaEnabled` with a stored secret → `mfa`; a
+   * single sign-on session without TOTP → `sso` (re-authenticate at the
+   * identity provider); everything else (including the should-never-happen
+   * inconsistent state) → `password`.
    */
-  async requiredFactor(userId: string): Promise<StepUpFactor> {
+  async requiredFactor(
+    userId: string,
+    authMethod?: AuthedUser['authMethod'],
+  ): Promise<StepUpFactor> {
     const row = await this.prisma.user.findUnique({
       where: { id: userId },
       select: { mfaEnabled: true, mfaSecretEncrypted: true },
     });
-    return this.factorOf(row);
+    return this.factorOf(row, authMethod);
   }
 
   /**
-   * The one place that decides 'mfa' vs 'password'. Both `requiredFactor`
+   * The one place that decides 'mfa' vs 'sso' vs 'password'. Both `requiredFactor`
    * (guard path) and `verify` call this so the challenge the client is
    * told to satisfy and the credential the server actually checks can
    * never drift apart.
    */
   private factorOf(
     row: { mfaEnabled: boolean; mfaSecretEncrypted: string | null } | null,
+    authMethod?: AuthedUser['authMethod'],
   ): StepUpFactor {
-    return row?.mfaEnabled && row.mfaSecretEncrypted ? 'mfa' : 'password';
+    if (row?.mfaEnabled && row.mfaSecretEncrypted) return 'mfa';
+    return authMethod === 'sso' ? 'sso' : 'password';
   }
 
   // ── Verification ────────────────────────────────────────────────────
@@ -148,7 +157,13 @@ export class StepUpService {
     });
     if (!row) throw new UnauthorizedException();
 
-    const factor = this.factorOf(row);
+    const factor = this.factorOf(row, user.authMethod);
+    if (factor === 'sso') {
+      // Nothing to type: the client sends the browser to
+      // `GET /auth/sso/step-up`, whose callback opens the window. A code
+      // posted here can never satisfy it.
+      throw new BadRequestException('Confirm with single sign-on');
+    }
     let method: 'totp' | 'backup_code' | 'password';
     let ok = false;
 

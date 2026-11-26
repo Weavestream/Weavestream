@@ -29,6 +29,22 @@ export const AUDIT_ACTIONS = {
     // `client_revoked` (the client revoked its token); `after.targetUserId`
     // is the owner.
     mcpConnectionRevoke: 'auth.mcp_connection.revoke',
+    // OIDC single sign-on. `ssoLoginSuccess` is the session creation
+    // (`entityType` Session; `after` carries `{ issuerHost, idpMfa,
+    // mfaPending, mfaSetupRequired }`). `ssoLoginFailure` carries a fixed
+    // `reason` code (and the issuer host), never a token, code, secret or
+    // claim set. `ssoLink` records a first sign-in tying a user to an identity
+    // (`after.via` is `email`); `ssoProvision` a user created by auto-provision;
+    // `ssoStepUp` an IdP re-authentication that opened the step-up window.
+    ssoLoginSuccess: 'auth.sso.login.success',
+    ssoLoginFailure: 'auth.sso.login.failure',
+    ssoLink: 'auth.sso.link',
+    ssoProvision: 'auth.sso.provision',
+    ssoStepUp: 'auth.sso.stepup',
+    // A signed-in user removed the link between their account and the
+    // identity provider (`DELETE /auth/sso/link`). `after` carries the issuer
+    // host and identity id, never the subject.
+    ssoUnlink: 'auth.sso.unlink',
   },
   user: {
     create: 'user.create',
@@ -58,6 +74,12 @@ export const AUDIT_ACTIONS = {
     emailTest: 'settings.email.test',
     aiUpdate: 'settings.ai.update',
     aiTest: 'settings.ai.test',
+    // Admin > Settings > Single sign-on (`PATCH /settings/sso`). `after`
+    // carries `{ changedFields: string[], clientSecret: 'set'|'cleared'|'unchanged' }`:
+    // field NAMES only, never a value. `ssoTest` records a connection test
+    // (`after`: host, outcome flags; never a provider response body).
+    ssoChange: 'settings.sso.change',
+    ssoTest: 'settings.sso.test',
     // Instance-wide API key switch (`PUT /settings/api-keys`). `before` and
     // `after` carry `{ apiKeysEnabled }`.
     apiKeysToggle: 'settings.api_keys.toggle',
@@ -158,6 +180,17 @@ export const AUDIT_ACTIONS = {
     // CSV export of one layout's list (entityId = the layout; after
     // carries counts, field slugs, and filter shape — never cell values).
     export: 'asset.export',
+    // Forward-only restore of a historical version (entityId = the asset;
+    // after.fromVersion, plus after.fields = field IDS/identity tokens
+    // for a per-field restore - never values). The write itself is also
+    // recorded as a regular `asset.update`.
+    versionRestored: 'asset.version.restored',
+    // Erasure of captured values from history (entityId = the asset;
+    // after = { fieldId?, version?, versionsRedacted } - ids and a count,
+    // never values).
+    versionRedacted: 'asset.version.redacted',
+    // Retention prune of old versions by the CLI (after = counts only).
+    versionsPruned: 'asset.versions.pruned',
   },
   article: {
     create: 'article.create',

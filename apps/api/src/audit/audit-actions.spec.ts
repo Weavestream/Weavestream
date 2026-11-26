@@ -67,3 +67,51 @@ describe('reconstruction target audit catalog', () => {
     expect(JSON.stringify(payload)).not.toContain(secret);
   });
 });
+
+describe('single sign-on audit catalog', () => {
+  it('registers the five sso actions with their exact names', () => {
+    const auth = auditCatalog.AUDIT_ACTIONS.auth as Record<string, string>;
+    expect({
+      success: auth.ssoLoginSuccess,
+      failure: auth.ssoLoginFailure,
+      link: auth.ssoLink,
+      provision: auth.ssoProvision,
+      stepUp: auth.ssoStepUp,
+    }).toEqual({
+      success: 'auth.sso.login.success',
+      failure: 'auth.sso.login.failure',
+      link: 'auth.sso.link',
+      provision: 'auth.sso.provision',
+      stepUp: 'auth.sso.stepup',
+    });
+  });
+
+  it('includes them in the complete inventory, once each', () => {
+    for (const action of [
+      'auth.sso.unlink',
+      'auth.sso.login.success',
+      'auth.sso.login.failure',
+      'auth.sso.link',
+      'auth.sso.provision',
+      'auth.sso.stepup',
+    ]) {
+      expect(auditCatalog.ALL_AUDIT_ACTIONS.filter((a) => a === action)).toHaveLength(1);
+    }
+  });
+});
+
+describe('single sign-on settings audit catalog', () => {
+  it('registers the settings change and test actions with their exact names', () => {
+    const settings = auditCatalog.AUDIT_ACTIONS.settings as Record<string, string>;
+    expect({ change: settings.ssoChange, test: settings.ssoTest }).toEqual({
+      change: 'settings.sso.change',
+      test: 'settings.sso.test',
+    });
+  });
+
+  it('includes them in the complete inventory, once each', () => {
+    for (const action of ['settings.sso.change', 'settings.sso.test']) {
+      expect(auditCatalog.ALL_AUDIT_ACTIONS.filter((a) => a === action)).toHaveLength(1);
+    }
+  });
+});

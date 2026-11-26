@@ -13,7 +13,7 @@ Every mutation in Weavestream writes an immutable record to the audit log. The l
 
 Every create, update, delete, archive, restore, and sensitive access operation writes an audit entry. This includes:
 
-- **Asset** create, update, archive, restore, CSV export (`asset.export`, including layout, column mode, field slugs, row count, truncation, and filter metadata)
+- **Asset** create, update, archive, restore, version restore (`asset.version.restored`, field names only), history redaction (`asset.version.redacted`, ids and counts only), version prune from the CLI (`asset.versions.pruned`, counts only), CSV export (`asset.export`, including layout, column mode, field slugs, row count, truncation, and filter metadata)
 - **Password** create, update, archive, restore, **reveal** (each decryption), version restore
 - **Article** create, update, move, archive, restore
 - **Company** create, update, archive, restore
@@ -29,6 +29,8 @@ Every create, update, delete, archive, restore, and sensitive access operation w
 - **Security** session revocation, IP rule CRUD, egress blocks
 - **Login** events (success, failure, MFA success/failure, logout, refresh)
 - **Auth** MFA enroll/complete, sessions revoke others, remote AI connection approved (`auth.mcp_connection.create`) and revoked (`auth.mcp_connection.revoke`)
+- **Single sign-on** sign-in success and failure (`auth.sso.login.success`, `auth.sso.login.failure`), a first sign-in linked to an existing user (`auth.sso.link`) or creating one (`auth.sso.provision`), a provider re-authentication that opened the step-up window (`auth.sso.stepup`), and a user unlinking their provider account (`auth.sso.unlink`). A user linking their own account is `auth.sso.link` with reason `self_service`. Failures carry a fixed reason code, never a token, code or claim set.
+- **Settings** single sign-on configuration saves (`settings.sso.change`, field names only plus whether the client secret was set, cleared or unchanged, never a value) and connection tests (`settings.sso.test`, issuer host and outcome flags only)
 - **Settings** the API key and remote AI connection switches (`settings.api_keys.toggle`, `settings.mcp_remote.toggle`), and which AI apps can connect (`settings.mcp_client_policy.change`)
 - **Settings** global password access policy changes (`settings.password_access_policy.change`), including before/after modes and selected user IDs, plus the acting session row ID
 

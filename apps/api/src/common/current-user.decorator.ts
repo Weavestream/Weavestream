@@ -23,6 +23,19 @@ export interface AuthedUser {
   mfaEnforcementCompletedAt: Date | null;
   mfaPending: boolean;
   /**
+   * How the session was established: `password` or `sso`. Cookie sessions
+   * only; absent for API keys and MCP connections, which never reach a
+   * step-up route. Step-up uses it to pick the `sso` factor.
+   */
+  authMethod?: 'password' | 'sso';
+  /**
+   * True when the identity provider vouched for MFA at sign-in and the
+   * instance trusts that (`SSO_TRUST_IDP_MFA`). Such a session is treated as
+   * MFA-complete by `AuthGuard`, so `mfaEnforcementCompletedAt` is set
+   * (to the session's creation time) and `mfaPending` is false.
+   */
+  idpMfa?: boolean;
+  /**
    * Who this user may open password entries WITHOUT their own allow-list
    * for, per company: the global password access policy plus the user's
    * active membership overrides (`allow` / `deny`). Resolved once per

@@ -105,6 +105,56 @@ single row rather than one per keystroke.
 There is no per-version retention cap; to remove a specific historical body an
 operator must purge the article or edit the `article_versions` rows directly.
 
+### Asset versions
+
+Every real change to an asset persists a full snapshot in `asset_versions`: the
+name, external identity and **every field value, including fields hidden from
+clients**, keyed by field id. Asset field values are plaintext today (accepted
+risk WS-004) and there is no encrypted asset field type, so the snapshot has the
+same protection as the live `asset_field_values` rows, not more. It is
+tenant-scoped, never part of the asset list or detail responses, and fields with
+`visibleToClients=false` are stripped on read for client users (including from
+the list of changed fields; client users also never see who made a change or a
+free-text reason).
+
+Unlike the audit log (append-only, never auto-pruned), history has three bounded
+lifetimes and an erasure path:
+
+- **Per-asset cap:** at most **500** versions are kept per asset. When a new
+  version would exceed it, the oldest are deleted. The first version (the
+  origin or baseline) and the latest are never deleted.
+- **Retention prune (opt-in, operator-run):** there is no audit-log retention
+  setting to mirror and no scheduled maintenance runner for it, so pruning is a
+  CLI command. `prune-asset-versions --older-than-days=<n>` is a dry run; add
+  `--apply` to delete versions created before that many days ago. The first and
+  latest version of every asset are always kept. Run it from cron if you want a
+  retention window; nothing runs it automatically.
+- **Purge:** versions are cascade-deleted with the asset when it is purged.
+- **Redaction (erasure of a specific value):** `POST /companies/:companyId/assets/:id/versions/redact`
+  with `{ "fieldId": "<field id>" }` blanks that field's value in **all** versions of
+  the asset; `{ "version": N }` blanks every captured value of that one version;
+  both together blank one field in one version. The rows and version numbers stay
+  and are marked **redacted**. It needs the asset purge permission, a fresh
+  step-up confirmation and a signed-in human session (API keys are refused), is
+  rate limited, and is audited as `asset.version.redacted` with ids and a count
+  only. Redaction does **not** change the live field value, the audit log, or
+  any backup.
+
+!!!warning What redaction does not reach
+- **The live value** in `asset_field_values` (edit or clear the field first, or
+  the next edit will copy it into history again).
+- **Audit rows.** `asset.create` / `asset.update` rows hold plaintext before/after
+  copies of field values (WS-004) and are append-only; scrubbing them needs the
+  procedure in [Audit Log → Tamper Protection](/security/audit-log/).
+- **Backups.** Any backup taken **before** a redaction (or a prune, cap deletion
+  or purge) still contains the original value. Rotate those dumps out per your
+  backup retention policy.
+!!!
+
+**Follow-up (not built):** application-layer encryption of asset field values and
+their history snapshots would make history cover only ciphertext at rest. It is
+not implemented; today history is as protected as the live values.
+
 ### Backups
 
 Database backups are `pg_dump` outputs written under `$DATA_DIR/backup`. A dump

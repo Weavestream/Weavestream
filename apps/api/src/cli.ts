@@ -15,6 +15,8 @@ import {
   passwordVaultAad,
 } from './crypto/secret-encryption.service.js';
 import { revokeDelegatedAccessForUser } from './auth/revoke-api-keys.js';
+import { pruneAssetVersions } from './assets/asset-versions-retention.js';
+import { AUDIT_ACTIONS } from './audit/audit-actions.js';
 
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule, { bufferLogs: true });
@@ -50,6 +52,9 @@ async function bootstrap() {
       case 'reencrypt-passwords':
         await reencryptPasswords(prisma, app.get(SecretEncryptionService), audit, rest);
         break;
+      case 'prune-asset-versions':
+        await pruneAssetVersionsCommand(prisma, audit, rest);
+        break;
       default:
         printUsage();
         process.exit(cmd ? 1 : 0);
@@ -81,6 +86,11 @@ Commands:
                                  default pass upgrades legacy pre-AAD blobs to the
                                  record-bound format); pass --force to re-wrap
                                  regardless.
+  prune-asset-versions --older-than-days=<n> [--apply]
+                                 Delete asset version history older than n days
+                                 (1-3650). The first and latest version of every
+                                 asset are always kept. Dry run unless --apply.
+                                 Schedule it (cron) for a retention window.
 `);
 }
 
@@ -90,6 +100,40 @@ function parseFlag(args: string[], name: string): string | undefined {
   const i = args.indexOf(`--${name}`);
   if (i >= 0 && i + 1 < args.length) return args[i + 1];
   return undefined;
+}
+
+async function pruneAssetVersionsCommand(
+  prisma: PrismaService,
+  audit: AuditLogService,
+  args: string[],
+): Promise<void> {
+  const raw = parseFlag(args, 'older-than-days');
+  const days = raw === undefined ? NaN : Number(raw);
+  if (!Number.isInteger(days)) {
+    // eslint-disable-next-line no-console
+    console.error('prune-asset-versions needs --older-than-days=<whole number of days>.');
+    process.exit(1);
+  }
+  const apply = args.includes('--apply');
+  const result = await pruneAssetVersions(prisma, { olderThanDays: days, dryRun: !apply });
+  if (apply) {
+    await audit.log({
+      actorId: null,
+      action: AUDIT_ACTIONS.asset.versionsPruned,
+      entityType: 'Asset',
+      entityId: null,
+      ip: 'cli',
+      userAgent: 'cli',
+      before: null,
+      after: { olderThanDays: days, cutoff: result.cutoff.toISOString(), deleted: result.deleted },
+    });
+  }
+  // eslint-disable-next-line no-console
+  console.log(
+    apply
+      ? `Deleted ${result.deleted} asset versions created before ${result.cutoff.toISOString()} (first and latest of each asset kept).`
+      : `Dry run: ${result.eligible} asset versions created before ${result.cutoff.toISOString()} would be deleted. Re-run with --apply.`,
+  );
 }
 
 async function createAdmin(

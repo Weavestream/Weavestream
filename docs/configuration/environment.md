@@ -75,6 +75,31 @@ Generate all signing keys with `./scripts/keygen.sh`. Each key is 32 random byte
 | `CSRF_SIGNING_KEY` | HMAC key for double-submit CSRF tokens. |
 | `STEP_UP_TTL_SEC` | Optional. Seconds a step-up re-authentication stays valid before a sensitive admin action re-prompts. Default: `900` (15 min). Range: 60–3600. |
 
+## Single Sign-On (OIDC)
+
+Optional. Sign-in with an OpenID Connect identity provider (Microsoft Entra ID first) can be configured in two ways:
+
+- **In the app** (recommended for new setups): **Admin → Settings → Single sign-on**. Nothing needs to be set in the environment. See [Workspace Settings](workspace-settings.md#single-sign-on) and the [Microsoft Entra guide](/guides/sso-microsoft-entra/).
+- **With the variables below.** **If `SSO_OIDC_ISSUER` is set, the environment wins entirely**: every `SSO_*` value comes from the environment, anything saved in the Single sign-on tab is ignored, and the tab becomes read-only with a "Managed by environment variables" banner listing which variables are set (never their values). Remove `SSO_OIDC_ISSUER` and restart to manage SSO from the tab instead. An install configured with these variables behaves exactly as before.
+
+With neither, SSO is off. The same validation applies to both routes (https issuer, multi-tenant endpoints refused, client ID and secret required, tenant ID format). See [Single sign-on (OIDC)](../security/authentication.md#single-sign-on-oidc) for the sign-in flow, the account-matching rules and the Entra setup steps.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `SSO_OIDC_ISSUER` | _(unset: SSO off)_ | Issuer URL of the identity provider. For Entra: `https://login.microsoftonline.com/<tenant-id>/v2.0`. The API refuses to start if it contains `/common`, `/organizations` or `/consumers` (multi-tenant endpoints), or if it is not `https` (plain `http` is accepted only for `localhost`). |
+| `SSO_OIDC_CLIENT_ID` | | Application (client) ID. **Required** when `SSO_OIDC_ISSUER` is set. |
+| `SSO_OIDC_CLIENT_SECRET` | | Client secret value. **Required** when `SSO_OIDC_ISSUER` is set. Keep it in your secret store, never in version control. |
+| `SSO_OIDC_SCOPES` | `openid profile email` | Space-separated scopes requested at sign-in. |
+| `SSO_PROVIDER_NAME` | `Single sign-on` | Name shown on the sign-in button ("Sign in with …"). Up to 60 characters. |
+| `SSO_LINK_BY_EMAIL` | `false` | On a person's first SSO sign-in, link them to the existing user whose email matches. **Off by default: the safe default is no auto-link.** When on, the token must prove the email is verified (`email_verified: true`, or for Entra the optional `xms_edov` claim set to true; an absent claim is not verified), the user must be active with a password set, and **SUPER_ADMIN accounts and accounts with platform capabilities are never auto-linked**. Only the `email` claim is used, never `preferred_username`. For Entra, enable the optional `xms_edov` claim, or link people another way: each person (and every SUPER_ADMIN) links their own account under **My account → Security → Single sign-on**, or use `SSO_AUTO_PROVISION`. |
+| `SSO_AUTO_PROVISION` | `false` | Create an account on first sign-in when nobody matches: an Operator with global access **None** and no company memberships (they land on "Access pending" until an administrator grants access). When `false`, an unmatched person is refused. |
+| `SSO_TRUST_IDP_MFA` | `false` | Treat an ID token whose `amr` claim contains `mfa` as multi-factor sign-in, so that session skips Weavestream's TOTP enrollment and challenge. Checked on every request, not just at sign-in: turning it back off ends the exemption for sessions that already exist. When `false`, Weavestream's own TOTP rules apply after SSO. |
+| `SSO_ASSUME_IDP_MFA` | `false` | Only has effect when `SSO_TRUST_IDP_MFA` is `true`. Counts **every** SSO sign-in as multi-factor, even when the provider sends no `amr` claim (Microsoft Entra does not send it in v2 ID tokens). **Set this only when the provider's own policy requires MFA for this application** (for Entra, a Conditional Access policy targeting it): Weavestream cannot verify that, and if the policy is missing or changes, Weavestream will skip its own TOTP for every SSO sign-in. Step-up for sensitive actions is unchanged. Password sign-in is unaffected. |
+| `SSO_LOCAL_LOGIN` | `true` | Set to `false` to refuse password sign-in for everyone except **SUPER_ADMIN** (the break-glass account). A refused sign-in gets the same generic error as a wrong password, and **existing password sessions of non-SUPER_ADMIN users stop working** on their next request. SSO sessions and SUPER_ADMIN sessions are unaffected. Exception: the one-time invite link (`accept-invite`) still lets an invitee set a password, but with this set to `false` the session it creates is rejected for a non-SUPER_ADMIN, so the invitee has to sign in with SSO. |
+| `SSO_ALLOWED_TENANT_ID` | _(unset)_ | Optional Entra tenant ID that the ID token's `tid` claim must match. An extra pin on top of the tenant in the issuer URL. |
+
+Register `<API_URL>/v1/auth/sso/callback` as the redirect URI at the provider (for example `https://docs.example.com/api/v1/auth/sso/callback`). `API_URL` and `APP_URL` should share a host, because the sign-in cookies are set on the API response.
+
 ## Argon2 (Password Hashing)
 
 Advanced; the defaults follow OWASP guidance and rarely need tuning.

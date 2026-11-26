@@ -126,3 +126,33 @@ export function setUiCookie(
     maxAge: 365 * 24 * 60 * 60 * 1000,
   });
 }
+
+/**
+ * Single sign-on flow cookie: one signed, httpOnly, SameSite=Lax cookie that
+ * carries `state`, `nonce` and the PKCE verifier from `GET /auth/sso/login`
+ * to the callback. Lax (not Strict) is required: the identity provider
+ * returns the browser by a cross-site top-level GET, which Lax sends and
+ * Strict would drop. It lives ten minutes and is cleared on the callback.
+ */
+export const SSO_FLOW_MAX_AGE_MS = 10 * 60 * 1000;
+
+/**
+ * `__Host-` prefix when the cookie is Secure: the browser then refuses it
+ * unless it is Secure, Path=/ and has no Domain, so a sibling subdomain cannot
+ * plant or overwrite it. Browsers drop `__Host-` cookies over plain http, so
+ * the plain name is used only when `APP_URL` is http (local development).
+ */
+export function ssoFlowCookieName(env: EnvService): string {
+  return cookiesSecure(env) ? '__Host-ws_sso_flow' : 'ws_sso_flow';
+}
+
+export function setSsoFlowCookie(res: Response, env: EnvService, value: string): void {
+  res.cookie(ssoFlowCookieName(env), value, {
+    ...secureCookieOptions(env),
+    maxAge: SSO_FLOW_MAX_AGE_MS,
+  });
+}
+
+export function clearSsoFlowCookie(res: Response, env: EnvService): void {
+  res.clearCookie(ssoFlowCookieName(env), secureCookieOptions(env));
+}

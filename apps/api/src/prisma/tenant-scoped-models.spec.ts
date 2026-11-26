@@ -225,6 +225,7 @@ describe('TENANT_SCOPED_MODELS (Phase 3+4 registry)', () => {
   it.each([
     'Asset',
     'AssetFieldValue',
+    'AssetVersion',
     'Relation',
     'Article',
     'Folder',
