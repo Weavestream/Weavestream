@@ -190,6 +190,16 @@ describe('VersionHistoryPanel restore', () => {
     expect(toast.push).toHaveBeenCalledWith('Restored from v2', 'ok');
   });
 
+  it('reports a network failure and re-enables the restore buttons', async () => {
+    apiFetch.mockRejectedValue(new TypeError('Failed to fetch'));
+    renderPanel(versions);
+    const button = screen.getByRole('button', { name: 'Restore this username' });
+    fireEvent.click(button);
+    await waitFor(() => expect(toast.push).toHaveBeenCalledWith('Restore failed', 'danger'));
+    expect(button).not.toBeDisabled();
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it('shows the server problem and does not refresh when restore fails', async () => {
     apiFetch.mockResolvedValue({ ok: false, problem: { detail: 'Cannot restore on archived' } });
     renderPanel(versions);

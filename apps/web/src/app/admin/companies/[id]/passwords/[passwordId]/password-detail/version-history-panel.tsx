@@ -42,13 +42,21 @@ export function VersionHistoryPanel({
       : `Restore version #${version} as a new version on top of history?\n\nThis is forward-only — a new version will be appended, the current version is kept in history.`;
     if (!window.confirm(message)) return;
     setBusy(version);
-    const res = await apiFetch(
-      `/companies/${companyId}/passwords/${passwordId}/versions/${version}/restore`,
-      fields
-        ? { method: 'POST', body: JSON.stringify({ fields }) }
-        : { method: 'POST' },
-    );
-    setBusy(null);
+    let res: Awaited<ReturnType<typeof apiFetch>>;
+    try {
+      res = await apiFetch(
+        `/companies/${companyId}/passwords/${passwordId}/versions/${version}/restore`,
+        fields
+          ? { method: 'POST', body: JSON.stringify({ fields }) }
+          : { method: 'POST' },
+      );
+    } catch {
+      // apiFetch re-throws network failures; report them and re-enable the buttons.
+      toast.push('Restore failed', 'danger');
+      return;
+    } finally {
+      setBusy(null);
+    }
     if (!res.ok) {
       toast.push(
         problemMessage(res.problem) ?? 'Restore failed',
