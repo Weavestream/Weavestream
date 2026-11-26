@@ -16,6 +16,7 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 ### Added
 
 - **Restore a single field from password history.** Next to the captured name, username and URL, **Restore this username** (or URL or name) brings back one field without touching the password. Restoring adds a new version and keeps the current one in history.
+- **Single sign-on with OpenID Connect (Microsoft Entra ID first).** Set `SSO_OIDC_ISSUER`, `SSO_OIDC_CLIENT_ID` and `SSO_OIDC_CLIENT_SECRET` to let people sign in with your identity provider. It is off unless configured, password and TOTP sign-in keep working, and `SSO_LOCAL_LOGIN=false` limits password sign-in to super admins. First sign-ins can link to an existing user by email or create an Operator with no access. See [Single sign-on (OIDC)](/security/authentication/#single-sign-on-oidc). Under **My account → Security → Single sign-on** a signed-in user can link or unlink their own provider account (a fresh confirmation is required); this is how super admins link, since they are never matched by email.
 
 ### Changed
 
@@ -25,6 +26,7 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 - **Saving a password no longer lists notes as changed every time.** A field is flagged as changed only when its value differs, so unchanged notes, password or TOTP no longer create a change entry. So that saving can never confirm a guessed secret, a re-sent password or TOTP secret still counts as changed on credentials that require a reason to view, and for API keys and MCP connections without reveal access. Versions saved before this release keep the change markers they were recorded with.
 - **Changing a password's name, username or URL now updates its strength score.** The score checks whether the password contains those values, so it went stale when only they changed.
+- **Single sign-on no longer loops back to the login page when two-factor is still needed.** After signing in through your provider, people whose session still needs Weavestream's two-factor code (the provider did not report MFA) or who have not set up two-factor yet now land on the two-factor page instead of being sent back to sign in again.
 
 ## [1.13.2] - 2026-11-16
 

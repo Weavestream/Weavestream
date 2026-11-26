@@ -9,7 +9,7 @@ import type {
   UserSearchDefaults,
   UserUiPreferences,
 } from '@weavestream/shared';
-import { unwrapMeResponse } from '../api-errors';
+import { mfaRedirectFor, unwrapMeResponse } from '../api-errors';
 import { forMetadata, serverApiFetch } from './core';
 
 export type Membership = {
@@ -73,7 +73,13 @@ export type Me = {
 // memoizes the *rejected* promise as well, the layout, its page, and any
 // `generateMetadata` all observe one outcome from one `/me` call.
 export const getMe = cache(async (): Promise<Me | null> => {
-  return unwrapMeResponse(await serverApiFetch<Me>('/me'));
+  const res = await serverApiFetch<Me>('/me');
+  // Signed in but MFA not finished (a single sign-on login without an MFA
+  // claim, or no enrolment yet): keep them on the MFA page rather than
+  // bouncing to /login.
+  const mfaTarget = mfaRedirectFor(res);
+  if (mfaTarget) redirect(mfaTarget);
+  return unwrapMeResponse(res);
 });
 
 /**

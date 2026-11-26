@@ -36,3 +36,4 @@ export * from './expiration.js';
 export * from './star.js';
 export * from './activity.js';
 export * from './mcp-connection.js';
+export * from './sso.js';

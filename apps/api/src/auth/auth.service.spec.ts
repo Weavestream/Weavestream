@@ -5,6 +5,7 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
+import { fakeSsoConfig } from '../sso/sso-config.fake.js';
 import { AuthService } from './auth.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { FULL_PASSWORD_ACCESS } from '../passwords/password-access-policy.js';
@@ -57,6 +58,7 @@ function makeService(backupOk: boolean) {
     { values: { SESSION_MAX_AGE_DAYS: 30 } } as never,
     audit as never,
     {} as never,
+    fakeSsoConfig(),
   );
   return { svc, prisma, audit, backupCodes, lockout };
 }
@@ -176,6 +178,7 @@ function makeRotateService(
     { values: { SESSION_MAX_AGE_DAYS: 30 } } as never, // env
     audit as never, // audit
     {} as never, // setupTokens
+    fakeSsoConfig(), // ssoConfig
   );
   return { svc, prisma, tokens, stepUp, audit };
 }
@@ -369,7 +372,10 @@ describe('AuthService.rotateRefresh', () => {
 
 const DUMMY_HASH = '$argon2id$dummy';
 
-function makeLoginService(userRow: Record<string, unknown> | null) {
+function makeLoginService(
+  userRow: Record<string, unknown> | null,
+  envValues: Record<string, unknown> = {},
+) {
   const prisma = {
     user: {
       findUnique: jest.fn().mockResolvedValue(userRow),
@@ -402,11 +408,12 @@ function makeLoginService(userRow: Record<string, unknown> | null) {
     {} as never,
     lockout as never,
     {} as never,
-    { values: { SESSION_MAX_AGE_DAYS: 30 } } as never,
+    { values: { SESSION_MAX_AGE_DAYS: 30, ...envValues } } as never,
     audit as never,
     {} as never,
+    fakeSsoConfig(envValues),
   );
-  return { svc, prisma, passwords, lockout, audit };
+  return { svc, prisma, passwords, lockout, audit, tokens };
 }
 
 // WS-025: every login attempt must spend one Argon2 verification so latency
@@ -489,6 +496,165 @@ describe('AuthService.login timing equalization', () => {
   });
 });
 
+const LOGIN_ROW = {
+  id: 'u-1',
+  email: 'u@example.com',
+  name: 'U',
+  role: 'OPERATOR',
+  isActive: true,
+  passwordHash: 'real-hash',
+  mfaEnforcementCompletedAt: new Date(),
+  mfaEnabled: false,
+  uiTheme: 'SYSTEM',
+  uiAccent: 'BLUE',
+  showItemCounts: true,
+};
+
+// SSO_LOCAL_LOGIN=false: password login is refused for everyone except
+// SUPER_ADMIN, indistinguishably from a wrong password.
+describe('AuthService.login with SSO_LOCAL_LOGIN=false', () => {
+  it('refuses an OPERATOR with the correct password: same 401, Argon2 still spent', async () => {
+    const { svc, passwords, prisma, lockout, audit } = makeLoginService(LOGIN_ROW, {
+      SSO_LOCAL_LOGIN: false,
+    });
+    passwords.verify.mockResolvedValue(true);
+
+    const err = await svc
+      .login('u@example.com', 'correct', '127.0.0.1', 'jest')
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(UnauthorizedException);
+    expect((err as UnauthorizedException).message).toBe('Invalid credentials');
+    expect(passwords.verify).toHaveBeenCalledWith('real-hash', 'correct');
+    expect(prisma.session.create).not.toHaveBeenCalled();
+    expect(lockout.recordFailure).toHaveBeenCalled();
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'auth.login.failure',
+        after: expect.objectContaining({ reason: 'local_login_disabled' }),
+      }),
+    );
+  });
+
+  it('gives a wrong password the identical response', async () => {
+    const { svc, passwords } = makeLoginService(LOGIN_ROW, { SSO_LOCAL_LOGIN: false });
+    passwords.verify.mockResolvedValue(false);
+    const wrong = await svc.login('u@example.com', 'wrong', '127.0.0.1', 'jest').catch((e: unknown) => e);
+    passwords.verify.mockResolvedValue(true);
+    const refused = await svc.login('u@example.com', 'right', '127.0.0.1', 'jest').catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(UnauthorizedException);
+    expect((refused as UnauthorizedException).getResponse()).toEqual(
+      (wrong as UnauthorizedException).getResponse(),
+    );
+  });
+
+  it('still lets a SUPER_ADMIN sign in with a password (break-glass)', async () => {
+    const { svc, passwords, prisma } = makeLoginService(
+      { ...LOGIN_ROW, role: 'SUPER_ADMIN' },
+      { SSO_LOCAL_LOGIN: false },
+    );
+    passwords.verify.mockResolvedValue(true);
+    const out = await svc.login('u@example.com', 'correct', '127.0.0.1', 'jest');
+    expect(out.user.role).toBe('SUPER_ADMIN');
+    expect(prisma.session.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not change anything when SSO_LOCAL_LOGIN is true (the default)', async () => {
+    const { svc, passwords } = makeLoginService(LOGIN_ROW, { SSO_LOCAL_LOGIN: true });
+    passwords.verify.mockResolvedValue(true);
+    await expect(svc.login('u@example.com', 'correct', '127.0.0.1', 'jest')).resolves.toBeDefined();
+  });
+
+  it('records a password session as authMethod password, idpMfa false', async () => {
+    const { svc, passwords, prisma } = makeLoginService(LOGIN_ROW);
+    passwords.verify.mockResolvedValue(true);
+    await svc.login('u@example.com', 'correct', '127.0.0.1', 'jest');
+    expect(prisma.session.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ authMethod: 'password', idpMfa: false }),
+    });
+  });
+});
+
+describe('AuthService.issueSession (shared by password and SSO sign-in)', () => {
+  const META = { ip: '127.0.0.1', userAgent: 'jest' };
+
+  it('an SSO session with idpMfa is MFA-complete even for a user who never enrolled', async () => {
+    const { svc, prisma } = makeLoginService(null);
+    const out = await svc.issueSession(
+      { ...LOGIN_ROW, mfaEnforcementCompletedAt: null, mfaEnabled: false } as never,
+      { ...META, authMethod: 'sso', idpMfa: true },
+    );
+    expect(out.mfaSetupRequired).toBe(false);
+    expect(out.mfaChallengeRequired).toBe(false);
+    expect(out.result.mfaSetupRequired).toBe(false);
+    expect(prisma.session.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        authMethod: 'sso',
+        idpMfa: true,
+        mfaPending: false,
+      }),
+    });
+  });
+
+  it('an SSO session with idpMfa skips the TOTP challenge for an enrolled user', async () => {
+    const { svc, prisma } = makeLoginService(null);
+    const out = await svc.issueSession(
+      { ...LOGIN_ROW, mfaEnabled: true } as never,
+      { ...META, authMethod: 'sso', idpMfa: true },
+    );
+    expect(out.mfaChallengeRequired).toBe(false);
+    expect(prisma.session.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ mfaPending: false }),
+    });
+  });
+
+  it('an SSO session without idpMfa keeps the normal TOTP rules (enrolled: challenge)', async () => {
+    const { svc, prisma } = makeLoginService(null);
+    const out = await svc.issueSession(
+      { ...LOGIN_ROW, mfaEnabled: true } as never,
+      { ...META, authMethod: 'sso', idpMfa: false },
+    );
+    expect(out.mfaChallengeRequired).toBe(true);
+    expect(prisma.session.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ authMethod: 'sso', idpMfa: false, mfaPending: true }),
+    });
+  });
+
+  it('an SSO session without idpMfa keeps the normal TOTP rules (not enrolled: setup)', async () => {
+    const { svc } = makeLoginService(null);
+    const out = await svc.issueSession(
+      { ...LOGIN_ROW, mfaEnforcementCompletedAt: null } as never,
+      { ...META, authMethod: 'sso', idpMfa: false },
+    );
+    expect(out.mfaSetupRequired).toBe(true);
+  });
+
+  it('mints tokens, stamps lastLoginAt, and returns the same result shape as login', async () => {
+    const { svc, prisma, tokens } = makeLoginService(null);
+    const out = await svc.issueSession(LOGIN_ROW as never, {
+      ...META,
+      authMethod: 'sso',
+      idpMfa: false,
+    });
+    expect(tokens.issueAccessToken).toHaveBeenCalledWith({
+      sub: 'u-1',
+      sid: 's-new',
+      role: 'OPERATOR',
+    });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: 'u-1' },
+      data: { lastLoginAt: expect.any(Date) },
+    });
+    expect(out.sessionId).toBe('s-new');
+    expect(out.result).toMatchObject({
+      accessToken: 'access',
+      refreshToken: 'refresh',
+      user: { id: 'u-1', email: 'u@example.com', name: 'U', role: 'OPERATOR' },
+      preferences: { uiTheme: 'system', uiAccent: 'blue', showItemCounts: true },
+    });
+  });
+});
+
 // WS-030: consuming an invite/setup token must be atomic — the single-use
 // invariant is enforced in the WHERE clause of the write, not by the earlier
 // read, so concurrent redemptions (and tokens that expire in flight) cannot
@@ -564,6 +730,7 @@ function makeInviteService(
     { values: { SESSION_MAX_AGE_DAYS: 30 } } as never,
     audit as never,
     setupTokens as never,
+    fakeSsoConfig(),
   );
   return { svc, prisma, passwords, tokens, audit, setupTokens };
 }
