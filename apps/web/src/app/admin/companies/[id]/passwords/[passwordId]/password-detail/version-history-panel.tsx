@@ -390,10 +390,16 @@ function CapturedFields({
             }}
           >
             <span style={{ color: 'var(--muted)' }}>{RESTORABLE_LABEL[field]}:</span>
+            {/* One line per value: a long URL repeated in every version would
+                otherwise fill the narrow side column. Hover shows it in full. */}
             <span
+              title={value || undefined}
               style={{
                 minWidth: 0,
-                overflowWrap: 'anywhere',
+                maxWidth: '100%',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
                 color: 'var(--text)',
                 fontWeight: changed ? 600 : 400,
                 fontFamily: field === 'name' ? undefined : 'var(--font-mono)',
