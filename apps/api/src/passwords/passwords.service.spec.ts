@@ -1645,4 +1645,48 @@ describe('PasswordsService — strength context and restore races', () => {
     expect(passwords[0]?.passwordCiphertext).toBe('ENC(rotated-secret)');
     expect(versions).toHaveLength(1);
   });
+
+  /** Run `change` on the live row just before the Nth decrypt call. */
+  function changeRowOnDecrypt(
+    stubs: ReturnType<typeof makeStubs>,
+    nth: number,
+    change: Partial<Password>,
+  ) {
+    const decrypt = stubs.crypto.decrypt.getMockImplementation()!;
+    let calls = 0;
+    stubs.crypto.decrypt.mockImplementation((blob: string) => {
+      calls += 1;
+      if (calls === nth) {
+        stubs.passwords[0] = {
+          ...stubs.passwords[0]!,
+          ...change,
+          updatedAt: new Date(Date.now() + 60_000),
+        };
+      }
+      return decrypt(blob);
+    });
+  }
+
+  it('checks the password-only restore gate on the row it writes', async () => {
+    const stubs = setup();
+    // Call 1 decrypts the version's password; reason-to-view is turned on
+    // before update reads the row.
+    changeRowOnDecrypt(stubs, 1, { requireReasonToView: true });
+    await expect(
+      stubs.svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['password']),
+    ).rejects.toThrow(ForbiddenException);
+    expect(stubs.passwords[0]?.passwordCiphertext).toBe('ENC(current-secret)');
+  });
+
+  it('does not report success when TOTP was added during a restore that clears it', async () => {
+    const stubs = setup({ notesCiphertext: 'ENC(current note)' });
+    stubs.versions[0] = versionRow({ version: 1, notesCiphertext: 'ENC(old note)' });
+    // Call 1 reads the version's notes; call 2 compares the live notes.
+    changeRowOnDecrypt(stubs, 2, { totpSecretCiphertext: 'ENC(NEWTOTP)' });
+    await expect(
+      stubs.svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['notes', 'totp']),
+    ).rejects.toThrow(ConflictException);
+    expect(stubs.passwords[0]?.totpSecretCiphertext).toBe('ENC(NEWTOTP)');
+    expect(stubs.passwords[0]?.notesCiphertext).toBe('ENC(current note)');
+  });
 });

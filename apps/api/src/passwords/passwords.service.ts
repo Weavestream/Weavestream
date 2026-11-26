@@ -444,6 +444,7 @@ export class PasswordsService {
     id: string,
     input: UpdatePasswordInput,
     meta: AuditMeta,
+    opts: { passwordNeedsSecretAccess?: boolean } = {},
   ): Promise<{ detail: SerializedPasswordDetail; changedFields: VersionedField[] }> {
     const existing = await this.loadForRead(actor, companyId, id);
     if (existing.archivedAt) {
@@ -499,11 +500,11 @@ export class PasswordsService {
     // reason, so they only need the first gate.
     const mayCompareNotes = mayReadVaultNotes(actor);
     const mayCompareSecrets = mayCompareStoredSecrets(actor, existing);
-    // Set when a write decision rests on a stored secret read above (a
-    // secret judged unchanged and so not written, or a strength re-scored
-    // from the stored password). The write must then fail if the row moved
-    // in between, or a concurrent rotation could be mixed with this request.
-    let dependsOnStoredSecret = false;
+    if (opts.passwordNeedsSecretAccess && !mayCompareSecrets) {
+      throw new ForbiddenException(
+        'Restoring the password on its own needs access to reveal it without a reason. Restore the whole version instead.',
+      );
+    }
     // Strength is scored against the name, username and URL, so a change to
     // any of them re-scores it. An explicit null clears the value.
     const contextChanged = changedFields.some(
@@ -532,7 +533,6 @@ export class PasswordsService {
         data.lastRotatedAt = new Date();
         changedFields.push('password');
       }
-      if (unchanged) dependsOnStoredSecret = true;
       // Rotation and history flags stay tied to the password itself.
       if (!unchanged || contextChanged) {
         data.passwordStrength = computePasswordStrength(input.password, strengthContext());
@@ -548,7 +548,6 @@ export class PasswordsService {
       );
       if (current !== null) {
         data.passwordStrength = computePasswordStrength(current, strengthContext());
-        dependsOnStoredSecret = true;
       }
     }
     if (input.notes !== undefined) {
@@ -564,9 +563,7 @@ export class PasswordsService {
           unchanged = currentNotes !== null && secretsEqual(currentNotes, nextNotes);
         }
       }
-      if (unchanged) {
-        dependsOnStoredSecret = true;
-      } else {
+      if (!unchanged) {
         data.notesCiphertext = this.encodeNotes(input.notes, companyId, id);
         changedFields.push('notes');
       }
@@ -608,8 +605,6 @@ export class PasswordsService {
           data.totpAlgorithm = block.algorithm;
           data.totpDigits = block.digits;
           data.totpPeriod = block.period;
-        } else {
-          dependsOnStoredSecret = true;
         }
         if (secretChanged) changedFields.push('totpSecret');
         if (algoChanged) changedFields.push('totpAlgorithm');
@@ -678,10 +673,12 @@ export class PasswordsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Every decision above (what changed, what was skipped, the strength
+      // context, the reveal gate) rests on the row read at the start. Write
+      // only if that row is still current, so a concurrent edit is never
+      // mixed with this one; the caller reloads and retries instead.
       const { count } = await tx.password.updateMany({
-        where: dependsOnStoredSecret
-          ? { id, companyId, updatedAt: existing.updatedAt }
-          : { id, companyId },
+        where: { id, companyId, updatedAt: existing.updatedAt },
         data,
       });
       if (count === 0) {
@@ -996,16 +993,6 @@ export class PasswordsService {
       throw new BadRequestException('Unknown or empty restore field list.');
     }
     const want = new Set<string>(requested);
-    // A password restored on its own is scored against the live name,
-    // username and URL, which the caller can set first. The score comes
-    // back to the caller, so it tells them something about the old
-    // password. Allow that only to a caller who may read it anyway. A
-    // whole-version restore scores it against the version's own values.
-    if (fields && want.has('password') && !mayCompareStoredSecrets(actor, existing)) {
-      throw new ForbiddenException(
-        'Restoring the password on its own needs access to reveal it without a reason. Restore the whole version instead.',
-      );
-    }
 
     // Pipe the chosen fields of vN back through update() so strength
     // re-computes, HIBP re-enqueues, and a fresh version row is written
@@ -1058,12 +1045,19 @@ export class PasswordsService {
         : null;
     }
 
+    // A password restored on its own is scored against the live name,
+    // username and URL, which the caller can set first. The score comes
+    // back to the caller, so it tells them something about the old
+    // password: allow that only to a caller who may read it anyway. A
+    // whole-version restore scores it against the version's own values.
+    // applyUpdate() checks this on the same read that guards its write.
     const { detail: result, changedFields } = await this.applyUpdate(
       actor,
       companyId,
       id,
       input,
       meta,
+      { passwordNeedsSecretAccess: fields !== undefined && want.has('password') },
     );
     if (changedFields.length === 0) {
       // Nothing was written, so there is nothing to audit as a restore.
