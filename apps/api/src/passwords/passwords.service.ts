@@ -17,7 +17,7 @@ import type {
   UpdatePasswordInput,
 } from '@weavestream/shared';
 import { PASSWORD_RESTORE_FIELDS } from '@weavestream/shared';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { authenticator } from 'otplib';
 import { computeHibpRangeHash } from './hibp-range-hash.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -430,6 +430,20 @@ export class PasswordsService {
     input: UpdatePasswordInput,
     meta: AuditMeta,
   ): Promise<SerializedPasswordDetail> {
+    return (await this.applyUpdate(actor, companyId, id, input, meta)).detail;
+  }
+
+  /**
+   * The body of `update()`. Also returns the versioned fields it changed,
+   * so `restoreVersion()` can tell a real restore from a no-op.
+   */
+  private async applyUpdate(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    input: UpdatePasswordInput,
+    meta: AuditMeta,
+  ): Promise<{ detail: SerializedPasswordDetail; changedFields: VersionedField[] }> {
     const existing = await this.loadForRead(actor, companyId, id);
     if (existing.archivedAt) {
       throw new BadRequestException(
@@ -471,12 +485,25 @@ export class PasswordsService {
     // ciphertext can never be compared: decrypt the stored value and flag
     // a change only when the plaintext truly differs. A stored blob that
     // cannot be decrypted counts as changed (the write repairs it).
+    //
+    // Comparing a caller-chosen value with the stored secret is a match
+    // oracle (the response, version list and audit trail all show whether
+    // it matched). So compare only for a caller who may read the secret
+    // anyway: the same gate as notes and reveal for API keys and MCP
+    // connections. Any other caller keeps the old behaviour, where a sent
+    // secret always counts as changed.
+    const mayCompareSecrets = mayReadVaultNotes(actor);
     if (input.password !== undefined) {
-      const current = this.tryDecryptSecret(
-        existing.passwordCiphertext,
-        passwordVaultAad(companyId, id, 'password'),
-      );
-      if (current !== input.password) {
+      const unchanged =
+        mayCompareSecrets &&
+        secretsEqual(
+          this.tryDecryptSecret(
+            existing.passwordCiphertext,
+            passwordVaultAad(companyId, id, 'password'),
+          ),
+          input.password,
+        );
+      if (!unchanged) {
         data.passwordCiphertext = this.crypto.encrypt(
           input.password,
           passwordVaultAad(companyId, id, 'password'),
@@ -492,15 +519,17 @@ export class PasswordsService {
     }
     if (input.notes !== undefined) {
       const nextNotes = input.notes ? input.notes : null;
-      const currentNotes = existing.notesCiphertext
-        ? this.safeDecryptNotes(existing.notesCiphertext, companyId, id)
-        : null;
-      // `currentNotes === null` with a stored blob means it was
-      // undecryptable: treat as changed so the write repairs it.
-      const unchanged =
-        existing.notesCiphertext === null
-          ? nextNotes === null
-          : currentNotes !== null && currentNotes === nextNotes;
+      let unchanged = false;
+      if (mayCompareSecrets) {
+        if (existing.notesCiphertext === null) {
+          unchanged = nextNotes === null;
+        } else {
+          // null here means the stored blob was undecryptable: treat it as
+          // changed so the write repairs it.
+          const currentNotes = this.safeDecryptNotes(existing.notesCiphertext, companyId, id);
+          unchanged = currentNotes !== null && secretsEqual(currentNotes, nextNotes);
+        }
+      }
       if (!unchanged) {
         data.notesCiphertext = this.encodeNotes(input.notes, companyId, id);
         changedFields.push('notes');
@@ -517,13 +546,17 @@ export class PasswordsService {
         }
       } else {
         const block: TotpConfigInput = input.totp;
-        const currentSecret = existing.totpSecretCiphertext
-          ? this.tryDecryptSecret(
-              existing.totpSecretCiphertext,
-              passwordVaultAad(companyId, id, 'totp'),
-            )
-          : null;
-        const secretChanged = currentSecret !== block.secret;
+        const secretChanged =
+          !mayCompareSecrets ||
+          !secretsEqual(
+            existing.totpSecretCiphertext
+              ? this.tryDecryptSecret(
+                  existing.totpSecretCiphertext,
+                  passwordVaultAad(companyId, id, 'totp'),
+                )
+              : null,
+            block.secret,
+          );
         const algoChanged = block.algorithm !== existing.totpAlgorithm;
         const digitsChanged = block.digits !== existing.totpDigits;
         const periodChanged = block.period !== existing.totpPeriod;
@@ -605,7 +638,7 @@ export class PasswordsService {
     const touchedKeys = Object.keys(data).filter((k) => k !== 'updatedBy');
     if (touchedKeys.length === 0) {
       // Pure no-op — don't write a version or audit row.
-      return this.getDetail(actor, companyId, id);
+      return { detail: await this.getDetail(actor, companyId, id), changedFields };
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -663,7 +696,7 @@ export class PasswordsService {
     }
 
     const isStarred = await this.stars.isStarred(actor.id, 'password', id);
-    return {
+    const detail: SerializedPasswordDetail = {
       ...this.toSummary(updated, actor),
       notes:
         updated.notesCiphertext && mayReadVaultNotes(actor)
@@ -674,6 +707,7 @@ export class PasswordsService {
       totpPeriod: updated.totpPeriod,
       isStarred,
     };
+    return { detail, changedFields };
   }
 
   async archive(
@@ -937,9 +971,19 @@ export class PasswordsService {
       );
     }
     if (want.has('notes')) {
-      input.notes = v.notesCiphertext
-        ? this.safeDecryptNotes(v.notesCiphertext, companyId, id)
-        : null;
+      if (v.notesCiphertext) {
+        const notes = this.safeDecryptNotes(v.notesCiphertext, companyId, id);
+        // An unreadable snapshot is not "no notes": restoring it as null
+        // would silently delete the current notes.
+        if (notes === null) {
+          throw new BadRequestException(
+            `The notes in version ${version} cannot be decrypted, so they cannot be restored.`,
+          );
+        }
+        input.notes = notes;
+      } else {
+        input.notes = null;
+      }
     }
     if (want.has('totp')) {
       const totpSecret = v.totpSecretCiphertext
@@ -958,7 +1002,19 @@ export class PasswordsService {
         : null;
     }
 
-    const result = await this.update(actor, companyId, id, input, meta);
+    const { detail: result, changedFields } = await this.applyUpdate(
+      actor,
+      companyId,
+      id,
+      input,
+      meta,
+    );
+    if (changedFields.length === 0) {
+      // Nothing was written, so there is nothing to audit as a restore.
+      throw new BadRequestException(
+        `Nothing to restore: the current values already match version ${version}.`,
+      );
+    }
 
     await this.audit.log({
       actorId: actor.id,
@@ -1566,4 +1622,16 @@ export type { Password, PasswordVersion };
  */
 function mayReadVaultNotes(actor: AuthedUser): boolean {
   return !isProgrammatic(actor) || actor.apiKeyAllowPasswordReveal === true;
+}
+
+/**
+ * Constant-time equality for two decrypted secrets (null = absent). Both
+ * sides are reduced to a SHA-256 digest first so the comparison is
+ * fixed-length and leaks no length either. The digest is only a
+ * comparison aid here; it is never stored.
+ */
+function secretsEqual(a: string | null, b: string | null): boolean {
+  if (a === null || b === null) return a === b;
+  const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest();
+  return timingSafeEqual(digest(a), digest(b));
 }

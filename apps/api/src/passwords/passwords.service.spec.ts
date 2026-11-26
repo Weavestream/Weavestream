@@ -1273,6 +1273,58 @@ describe('PasswordsService — update flags only real changes', () => {
   });
 });
 
+describe('PasswordsService — secret comparison is gated on reveal', () => {
+  // A write-only API key must not learn whether a guessed secret matches
+  // the stored one, so for it a sent secret always counts as changed and
+  // the stored secret is never decrypted for a comparison.
+  const WRITE_ONLY_KEY: AuthedUser = {
+    ...OPERATOR,
+    apiKeyId: 'key-1',
+    apiKeyAllowWrite: true,
+    apiKeyAllowPasswordReveal: false,
+  };
+
+  it('flags re-sent identical secrets as changed for a key without reveal', async () => {
+    const { svc, versions, crypto } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          notesCiphertext: 'ENC(same note)',
+          totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+        }),
+      ],
+    });
+    await svc.update(
+      WRITE_ONLY_KEY,
+      'co-1',
+      'pwd-a',
+      {
+        password: 'super-secret',
+        notes: 'same note',
+        totp: { secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA1', digits: 6, period: 30 },
+      },
+      META,
+    );
+    expect(versions).toHaveLength(1);
+    expect(versions[0]?.changedFields).toEqual(['password', 'notes', 'totpSecret']);
+    expect(crypto.decrypt).not.toHaveBeenCalled();
+  });
+
+  it('still compares for a key minted with reveal', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', notesCiphertext: 'ENC(same note)' })],
+    });
+    await svc.update(
+      { ...WRITE_ONLY_KEY, apiKeyAllowPasswordReveal: true },
+      'co-1',
+      'pwd-a',
+      { password: 'super-secret', notes: 'same note' },
+      META,
+    );
+    expect(versions).toHaveLength(0);
+  });
+});
+
 describe('PasswordsService — field-level restoreVersion', () => {
   function setup(extra: DeepPartial<Password> = {}) {
     const stubs = makeStubs({
@@ -1347,6 +1399,29 @@ describe('PasswordsService — field-level restoreVersion', () => {
       .map((c) => c[0] as { action: string; after: unknown })
       .find((c) => c.action === 'password.version.restored');
     expect(restoredCall?.after).toEqual({ fromVersion: 1 });
+  });
+
+  it('refuses to restore notes it cannot decrypt instead of clearing them', async () => {
+    const { svc, passwords, versions, crypto } = setup();
+    versions[0]!.notesCiphertext = 'UNREADABLE';
+    crypto.decrypt.mockImplementation((blob: string) => {
+      if (blob === 'UNREADABLE') throw new Error('unknown kid');
+      return blob.startsWith('ENC(') ? blob.slice(4, -1) : blob;
+    });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['notes']),
+    ).rejects.toThrow(BadRequestException);
+    expect(passwords[0]?.notesCiphertext).toBe('ENC(current note)');
+    expect(versions).toHaveLength(1);
+  });
+
+  it('reports a restore that changes nothing and does not audit it', async () => {
+    const { svc, versions, audit } = setup({ username: 'old@acme.test' });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']),
+    ).rejects.toThrow(/Nothing to restore/);
+    expect(versions).toHaveLength(1);
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it('rejects unknown or empty field lists before changing anything', async () => {
