@@ -45,12 +45,19 @@ function v(over: Partial<PasswordVersionSummary> & { version: number }): Passwor
   };
 }
 
-function renderPanel(versions: PasswordVersionSummary[], canManage = true) {
+const CURRENT = { name: 'Acme VPN (new)', username: 'new@example.com', url: 'https://new.example' };
+
+function renderPanel(
+  versions: PasswordVersionSummary[],
+  canManage = true,
+  current: { name: string; username: string | null; url: string | null } = CURRENT,
+) {
   return render(
     <VersionHistoryPanel
       companyId="co-1"
       passwordId="pw-1"
       versions={versions}
+      current={current}
       canManage={canManage}
       requiresReason={false}
       expanded
@@ -91,6 +98,14 @@ describe('VersionHistoryPanel captured fields', () => {
     renderPanel([v({ version: 1, changedFields: ['password'] })]);
     expect(document.querySelector('[data-changed]')).toBeNull();
     expect(screen.queryByText(/Restore this/)).not.toBeInTheDocument();
+  });
+
+  it('offers a field restore only when the value differs from the current one', () => {
+    renderPanel(versions, true, { name: 'Acme VPN', username: 'new@example.com', url: '' });
+    expect(screen.getByRole('button', { name: 'Restore this username' })).toBeInTheDocument();
+    // Same name; and an empty URL equals the captured null.
+    expect(screen.queryByRole('button', { name: 'Restore this name' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Restore this URL' })).not.toBeInTheDocument();
   });
 
   it('hides the per-field restore without manage permission', () => {

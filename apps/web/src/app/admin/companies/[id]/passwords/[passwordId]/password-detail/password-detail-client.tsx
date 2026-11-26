@@ -387,6 +387,7 @@ export function PasswordDetailClient({
               companyId={companyId}
               passwordId={password.id}
               versions={versions}
+              current={password}
               canManage={canManage}
               requiresReason={password.requireReasonToView}
               expanded={versionsExpanded}

@@ -14,6 +14,7 @@ export function VersionHistoryPanel({
   companyId,
   passwordId,
   versions,
+  current,
   canManage,
   requiresReason,
   expanded,
@@ -22,6 +23,8 @@ export function VersionHistoryPanel({
   companyId: string;
   passwordId: string;
   versions: PasswordVersionSummary[];
+  /** The password's live values, so a field restore that would change nothing is not offered. */
+  current: CurrentValues;
   canManage: boolean;
   requiresReason: boolean;
   expanded: boolean;
@@ -96,6 +99,7 @@ export function VersionHistoryPanel({
               companyId={companyId}
               passwordId={passwordId}
               version={version}
+              current={current}
               canManage={canManage}
               requiresReason={requiresReason}
               busy={busy === version.version}
@@ -112,6 +116,7 @@ function VersionHistoryItem({
   companyId,
   passwordId,
   version,
+  current,
   canManage,
   requiresReason,
   busy,
@@ -120,6 +125,7 @@ function VersionHistoryItem({
   companyId: string;
   passwordId: string;
   version: PasswordVersionSummary;
+  current: CurrentValues;
   canManage: boolean;
   requiresReason: boolean;
   busy: boolean;
@@ -279,6 +285,7 @@ function VersionHistoryItem({
       </div>
       <CapturedFields
         version={version}
+        current={current}
         canManage={canManage}
         busy={busy}
         onRestoreField={(field) => onRestore([field])}
@@ -331,6 +338,8 @@ const RESTORABLE_LABEL: Record<RestorableField, string> = {
 };
 const RESTORABLE_FIELDS: readonly RestorableField[] = ['name', 'username', 'url'];
 
+type CurrentValues = { name: string; username: string | null; url: string | null };
+
 /**
  * The plain-text values this version captured (name, username, URL).
  * Fields listed in `changedFields` are highlighted — with a "changed" tag,
@@ -340,11 +349,13 @@ const RESTORABLE_FIELDS: readonly RestorableField[] = ['name', 'username', 'url'
  */
 function CapturedFields({
   version,
+  current,
   canManage,
   busy,
   onRestoreField,
 }: {
   version: PasswordVersionSummary;
+  current: CurrentValues;
   canManage: boolean;
   busy: boolean;
   onRestoreField: (field: RestorableField) => void;
@@ -359,6 +370,8 @@ function CapturedFields({
       {rows.map((field) => {
         const value = version[field];
         const changed = version.changedFields.includes(field);
+        // Empty and null are the same stored value; only offer a restore that changes something.
+        const differsFromCurrent = (value || null) !== (current[field] || null);
         return (
           <div
             key={field}
@@ -391,7 +404,7 @@ function CapturedFields({
             {changed && (
               <span style={{ fontSize: 10.5, color: 'var(--accent)' }}>changed</span>
             )}
-            {canManage && (
+            {canManage && differsFromCurrent && (
               <TextAction disabled={busy} onClick={() => onRestoreField(field)}>
                 {`Restore this ${RESTORABLE_LABEL[field]}`}
               </TextAction>
