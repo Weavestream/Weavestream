@@ -387,7 +387,8 @@ export function PasswordDetailClient({
               companyId={companyId}
               passwordId={password.id}
               versions={versions}
-              canManage={canManage}
+              current={password}
+              canManage={canManage && !password.archivedAt}
               requiresReason={password.requireReasonToView}
               expanded={versionsExpanded}
               onToggleExpanded={() => setVersionsExpanded((v) => !v)}

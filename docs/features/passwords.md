@@ -82,8 +82,17 @@ Only 5 characters leave the server — the full password is never transmitted. T
 
 Every change to a password is stored as an immutable `PasswordVersion` record capturing:
 
-- The previous values of all fields (name, username, URL, ciphertext)
-- The actor and timestamp
+- The values of all fields at that point (name, username, URL, and the encrypted password, notes and TOTP secret)
+- Which fields actually changed. A field is flagged only when its value differs: re-saving a form with unchanged notes, password or TOTP does not create a change entry. Two deliberate exceptions, so that saving can never confirm a guessed secret: an API key or MCP connection without reveal access gets every notes, password or TOTP value it sends recorded as changed, and on a credential that requires a reason to view, a re-sent password or TOTP secret is always recorded as changed. Versions saved before this behaviour was introduced keep the change markers they were recorded with
+- The actor, optional reason, and timestamp
+
+The history panel shows the captured **name, username and URL** for every version and highlights the ones that changed, so earlier usernames can be read straight from the list. Notes, passwords and TOTP secrets are encrypted and are never listed; the password can be revealed per version with the usual permission and reason rules.
+
+Client-portal users (`CLIENT_USER`) never receive the captured name, username or URL from the history API, even for a password shared with clients: it may have had an internal name or username before it was shared. They see the same metadata as before (version, changed fields, actor, reason and time).
+
+### Restoring
+
+Restoring is forward-only: it appends a new version and keeps the current one in history. You can restore a whole version, or one field at a time (**Restore this username / URL / name**). A per-field restore changes only that field; everything else, including the password, keeps its current value. The API accepts an optional `fields` array (`name`, `username`, `url`, `notes`, `password`, `totp`) on `POST /companies/:companyId/passwords/:id/versions/:version/restore`; omitting it restores the whole version. Restores need the same permission as editing, are refused on archived passwords, and are audited as `password.version.restored` with the field names only, never values. Restoring the password on its own needs access to reveal it without a reason, because its new strength score is computed against the current name, username and URL. Anyone else can restore the whole version. If the password changes while a save or restore is running, the request fails with a conflict instead of mixing the two changes.
 
 Version history cannot be deleted. Archived passwords retain their history.
 

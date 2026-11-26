@@ -19,11 +19,13 @@ import {
   createPasswordFolderSchema,
   createPasswordSchema,
   passwordFilterSchema,
+  restorePasswordVersionSchema,
   revealPasswordSchema,
   updatePasswordFolderSchema,
   updatePasswordSchema,
   type CreatePasswordFolderInput,
   type CreatePasswordInput,
+  type RestorePasswordVersionInput,
   type RevealPasswordInput,
   type UpdatePasswordFolderInput,
   type UpdatePasswordInput,
@@ -212,9 +214,10 @@ export class PasswordsController {
     @Param('companyId', new ParseUUIDPipe()) companyId: string,
     @Param('id', new ParseUUIDPipe()) id: string,
     @Param('version', new ParseIntPipe()) version: number,
+    @Body(new ZodBody(restorePasswordVersionSchema)) dto: RestorePasswordVersionInput,
     @Req() req: Request,
   ) {
-    return this.passwords.restoreVersion(actor, companyId, id, version, meta(req));
+    return this.passwords.restoreVersion(actor, companyId, id, version, meta(req), dto.fields);
   }
 }
 

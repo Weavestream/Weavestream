@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -11,6 +12,7 @@ import type {
   TotpAlgo,
 } from '@prisma/client';
 import { PasswordsService } from './passwords.service.js';
+import { computePasswordStrength } from './password-strength.js';
 import { passwordVaultAad } from '../crypto/secret-encryption.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { FULL_PASSWORD_ACCESS, NO_PASSWORD_ACCESS } from './password-access-policy.js';
@@ -91,6 +93,12 @@ function matchPassword(
     if (!where.OR.some((w) => matchPassword(row, w))) return false;
   }
   if (where.id && (where.id as string) !== row.id) return false;
+  if (
+    where.updatedAt instanceof Date &&
+    row.updatedAt.getTime() !== where.updatedAt.getTime()
+  ) {
+    return false;
+  }
   if (where.companyId && (where.companyId as string) !== row.companyId)
     return false;
   if (
@@ -1103,5 +1111,582 @@ describe('PasswordsService — updateFolder parent scoping', () => {
       META,
     );
     expect(cleared.parentId).toBeNull();
+  });
+});
+
+function versionRow(init: Partial<PasswordVersion> & { version: number }): StoredVersion {
+  return {
+    id: `pv-seed-${init.version}`,
+    passwordId: 'pwd-a',
+    companyId: 'co-1',
+    name: 'Acme VPN',
+    username: 'ops@acme.test',
+    url: 'https://vpn.acme.test',
+    notesCiphertext: null,
+    passwordCiphertext: 'ENC(old-secret)',
+    totpSecretCiphertext: null,
+    totpAlgorithm: 'SHA1',
+    totpDigits: 6,
+    totpPeriod: 30,
+    changedFields: ['username'],
+    changedBy: 'user-op',
+    changeReason: null,
+    createdAt: new Date('2026-01-02T00:00:00Z'),
+    ...init,
+  } as unknown as StoredVersion;
+}
+
+describe('PasswordsService — listVersions captured fields', () => {
+  it('returns name/username/url per version and never ciphertext', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a' })],
+    });
+    versions.push(
+      versionRow({
+        version: 1,
+        name: 'Old name',
+        username: 'old@example.test',
+        url: null,
+        notesCiphertext: 'ENC(secret note)',
+        totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+      }),
+    );
+    const [row] = await svc.listVersions(OPERATOR, 'co-1', 'pwd-a');
+    expect(row).toMatchObject({
+      version: 1,
+      name: 'Old name',
+      username: 'old@example.test',
+      url: null,
+    });
+    const json = JSON.stringify(row);
+    expect(json).not.toContain('Ciphertext');
+    expect(json).not.toContain('old-secret');
+    expect(json).not.toContain('secret note');
+    expect(json).not.toContain('JBSWY3DPEHPK3PXP');
+    expect(Object.keys(row ?? {})).not.toContain('notes');
+  });
+
+  it('withholds the captured name/username/url from CLIENT_USER (portal) reads', async () => {
+    // A credential shared with the client portal may have had a different
+    // name, username or URL before it was shared. The history metadata
+    // (who/when/which fields) stays visible, as before; the captured values
+    // are internal-only.
+    const { svc, versions } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', visibleToClients: true })],
+    });
+    versions.push(
+      versionRow({
+        version: 1,
+        name: 'Internal name',
+        username: 'internal-admin@example.test',
+        url: 'https://internal.example.test',
+      }),
+    );
+    const [row] = await svc.listVersions(CLIENT, 'co-1', 'pwd-a');
+    expect(row).toMatchObject({ version: 1 });
+    expect(row).not.toHaveProperty('name');
+    expect(row).not.toHaveProperty('username');
+    expect(row).not.toHaveProperty('url');
+    const json = JSON.stringify(row);
+    expect(json).not.toContain('Internal name');
+    expect(json).not.toContain('internal-admin@example.test');
+    expect(json).not.toContain('internal.example.test');
+  });
+});
+
+describe('PasswordsService — update flags only real changes', () => {
+  it('does not flag notes/password/totp that are re-sent unchanged', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          notesCiphertext: 'ENC(same note)',
+          totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+        }),
+      ],
+    });
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      {
+        username: 'new@acme.test',
+        password: 'super-secret',
+        notes: 'same note',
+        totp: { secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA1', digits: 6, period: 30 },
+      },
+      META,
+    );
+    expect(versions).toHaveLength(1);
+    expect(versions[0]?.changedFields).toEqual(['username']);
+  });
+
+  it('re-scores strength when an unchanged password is sent with a new username', async () => {
+    const { svc, passwords, versions } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', passwordStrength: 4 })],
+    });
+    const rotatedBefore = passwords[0]?.lastRotatedAt;
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      { username: 'super-secret', password: 'super-secret' },
+      META,
+    );
+    expect(versions[0]?.changedFields).toEqual(['username']);
+    expect(passwords[0]?.lastRotatedAt).toEqual(rotatedBefore);
+    expect(passwords[0]?.passwordStrength).toBe(
+      computePasswordStrength('super-secret', ['Acme VPN', 'super-secret', 'https://vpn.acme.test']),
+    );
+    expect(passwords[0]?.passwordStrength).not.toBe(4);
+  });
+
+  it('writes no version at all when every sent field is unchanged', async () => {
+    const { svc, versions, passwords } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', notesCiphertext: 'ENC(same note)' })],
+    });
+    const before = { ...passwords[0] };
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      { password: 'super-secret', notes: 'same note', totp: null },
+      META,
+    );
+    expect(versions).toHaveLength(0);
+    expect(passwords[0]?.passwordCiphertext).toBe(before.passwordCiphertext);
+    expect(passwords[0]?.lastRotatedAt).toEqual(before.lastRotatedAt);
+  });
+
+  it('treats empty-string and null notes as the same "no notes"', async () => {
+    const { svc, versions } = makeStubs({ passwords: [passwordRow({ id: 'pwd-a' })] });
+    await svc.update(OPERATOR, 'co-1', 'pwd-a', { notes: '' }, META);
+    await svc.update(OPERATOR, 'co-1', 'pwd-a', { notes: null }, META);
+    expect(versions).toHaveLength(0);
+  });
+
+  it('still flags notes, password and totp parts that truly differ', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          notesCiphertext: 'ENC(old note)',
+          totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+        }),
+      ],
+    });
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      {
+        password: 'a-different-secret',
+        notes: 'new note',
+        totp: { secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA256', digits: 8, period: 30 },
+      },
+      META,
+    );
+    expect(versions[0]?.changedFields).toEqual([
+      'password',
+      'notes',
+      'totpAlgorithm',
+      'totpDigits',
+    ]);
+  });
+
+  it('clearing a TOTP secret that does not exist is a no-op', async () => {
+    const { svc, versions } = makeStubs({ passwords: [passwordRow({ id: 'pwd-a' })] });
+    await svc.update(OPERATOR, 'co-1', 'pwd-a', { totp: null }, META);
+    expect(versions).toHaveLength(0);
+  });
+});
+
+describe('PasswordsService — secret comparison is gated on reveal', () => {
+  // A write-only API key must not learn whether a guessed secret matches
+  // the stored one, so for it a sent secret always counts as changed and
+  // the stored secret is never decrypted for a comparison.
+  const WRITE_ONLY_KEY: AuthedUser = {
+    ...OPERATOR,
+    apiKeyId: 'key-1',
+    apiKeyAllowWrite: true,
+    apiKeyAllowPasswordReveal: false,
+  };
+
+  it('flags re-sent identical secrets as changed for a key without reveal', async () => {
+    const { svc, versions, crypto } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          notesCiphertext: 'ENC(same note)',
+          totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+        }),
+      ],
+    });
+    await svc.update(
+      WRITE_ONLY_KEY,
+      'co-1',
+      'pwd-a',
+      {
+        password: 'super-secret',
+        notes: 'same note',
+        totp: { secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA1', digits: 6, period: 30 },
+      },
+      META,
+    );
+    expect(versions).toHaveLength(1);
+    expect(versions[0]?.changedFields).toEqual(['password', 'notes', 'totpSecret']);
+    expect(crypto.decrypt).not.toHaveBeenCalled();
+  });
+
+  it('does not compare the password or TOTP of a reason-to-view credential', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          requireReasonToView: true,
+          notesCiphertext: 'ENC(same note)',
+          totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+        }),
+      ],
+    });
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      {
+        password: 'super-secret',
+        notes: 'same note',
+        totp: { secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA1', digits: 6, period: 30 },
+      },
+      META,
+    );
+    // Notes are readable without a reason, so they are still compared.
+    expect(versions[0]?.changedFields).toEqual(['password', 'totpSecret']);
+  });
+
+  it('writes the whole TOTP block when only one parameter changed', async () => {
+    const { svc, passwords, versions } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)' })],
+    });
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      { totp: { secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA256', digits: 6, period: 30 } },
+      META,
+    );
+    expect(versions[0]?.changedFields).toEqual(['totpAlgorithm']);
+    expect(passwords[0]?.totpSecretCiphertext).toBe('ENC(JBSWY3DPEHPK3PXP)');
+    expect(passwords[0]?.totpAlgorithm).toBe('SHA256');
+    expect(passwords[0]?.totpDigits).toBe(6);
+    expect(passwords[0]?.totpPeriod).toBe(30);
+  });
+
+  it('still compares for a key minted with reveal', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', notesCiphertext: 'ENC(same note)' })],
+    });
+    await svc.update(
+      { ...WRITE_ONLY_KEY, apiKeyAllowPasswordReveal: true },
+      'co-1',
+      'pwd-a',
+      { password: 'super-secret', notes: 'same note' },
+      META,
+    );
+    expect(versions).toHaveLength(0);
+  });
+});
+
+describe('PasswordsService — field-level restoreVersion', () => {
+  function setup(extra: DeepPartial<Password> = {}) {
+    const stubs = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          username: 'current@acme.test',
+          passwordCiphertext: 'ENC(current-secret)',
+          notesCiphertext: 'ENC(current note)',
+          ...extra,
+        }),
+      ],
+    });
+    stubs.versions.push(
+      versionRow({
+        version: 1,
+        name: 'Old name',
+        username: 'old@acme.test',
+        url: 'https://old.acme.test',
+        notesCiphertext: 'ENC(old note)',
+        passwordCiphertext: 'ENC(old-secret)',
+      }),
+    );
+    return stubs;
+  }
+
+  it('restoring only the username leaves the password and everything else', async () => {
+    const { svc, passwords, versions, audit } = setup();
+    await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']);
+    const row = passwords[0];
+    expect(row?.username).toBe('old@acme.test');
+    expect(row?.passwordCiphertext).toBe('ENC(current-secret)');
+    expect(row?.notesCiphertext).toBe('ENC(current note)');
+    expect(row?.name).toBe('Acme VPN');
+    expect(row?.url).toBe('https://vpn.acme.test');
+    const created = versions[versions.length - 1];
+    expect(created?.changedFields).toEqual(['username']);
+    expect(created?.changeReason).toBe('restore username from v1');
+    // Audit carries field names only.
+    const restoredCall = audit.log.mock.calls
+      .map((c) => c[0] as { action: string; after: unknown })
+      .find((c) => c.action === 'password.version.restored');
+    expect(restoredCall?.after).toEqual({ fromVersion: 1, fields: ['username'] });
+    expect(JSON.stringify(audit.log.mock.calls)).not.toContain('old@acme.test');
+    expect(JSON.stringify(audit.log.mock.calls)).not.toContain('old-secret');
+  });
+
+  it('restores several chosen fields, including a secret, via update()', async () => {
+    const { svc, passwords } = setup();
+    await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['url', 'password']);
+    expect(passwords[0]?.url).toBe('https://old.acme.test');
+    expect(passwords[0]?.passwordCiphertext).toBe('ENC(old-secret)');
+    expect(passwords[0]?.username).toBe('current@acme.test');
+  });
+
+  it('does not echo plaintext secrets in the response', async () => {
+    const { svc } = setup();
+    const out = await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['password']);
+    expect(JSON.stringify(out)).not.toContain('old-secret');
+    expect(JSON.stringify(out)).not.toContain('Ciphertext');
+  });
+
+  it('omitting fields keeps the whole-version behaviour', async () => {
+    const { svc, passwords, audit } = setup();
+    await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META);
+    const row = passwords[0];
+    expect(row?.username).toBe('old@acme.test');
+    expect(row?.name).toBe('Old name');
+    expect(row?.passwordCiphertext).toBe('ENC(old-secret)');
+    expect(row?.notesCiphertext).toBe('ENC(old note)');
+    const restoredCall = audit.log.mock.calls
+      .map((c) => c[0] as { action: string; after: unknown })
+      .find((c) => c.action === 'password.version.restored');
+    expect(restoredCall?.after).toEqual({ fromVersion: 1 });
+  });
+
+  it('refuses to restore notes it cannot decrypt instead of clearing them', async () => {
+    const { svc, passwords, versions, crypto } = setup();
+    versions[0]!.notesCiphertext = 'UNREADABLE';
+    crypto.decrypt.mockImplementation((blob: string) => {
+      if (blob === 'UNREADABLE') throw new Error('unknown kid');
+      return blob.startsWith('ENC(') ? blob.slice(4, -1) : blob;
+    });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['notes']),
+    ).rejects.toThrow(BadRequestException);
+    expect(passwords[0]?.notesCiphertext).toBe('ENC(current note)');
+    expect(versions).toHaveLength(1);
+  });
+
+  it('reports a restore that changes nothing and does not audit it', async () => {
+    const { svc, versions, audit } = setup({ username: 'old@acme.test' });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']),
+    ).rejects.toThrow(/Nothing to restore/);
+    expect(versions).toHaveLength(1);
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown or empty field lists before changing anything', async () => {
+    const { svc, passwords } = setup();
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, [
+        'color' as unknown as 'username',
+      ]),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, []),
+    ).rejects.toThrow(BadRequestException);
+    expect(passwords[0]?.username).toBe('current@acme.test');
+  });
+
+  it('refuses an archived password', async () => {
+    const { svc } = setup({ archivedAt: new Date('2026-02-01T00:00:00Z') });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('404s on an unknown version and 403s for a non-allow-listed operator', async () => {
+    const { svc } = setup({ restrictedToUserIds: ['user-op'] });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 9, META, ['username']),
+    ).rejects.toThrow(NotFoundException);
+    await expect(
+      svc.restoreVersion(OTHER_OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']),
+    ).rejects.toThrow(ForbiddenException);
+  });
+});
+
+describe('PasswordsService — strength context and restore races', () => {
+  const WRITE_ONLY_KEY: AuthedUser = {
+    ...OPERATOR,
+    apiKeyId: 'key-1',
+    apiKeyAllowWrite: true,
+    apiKeyAllowPasswordReveal: false,
+  };
+
+  function setup(extra: DeepPartial<Password> = {}) {
+    const stubs = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          username: 'current@acme.test',
+          passwordCiphertext: 'ENC(current-secret)',
+          passwordStrength: 4,
+          ...extra,
+        }),
+      ],
+    });
+    stubs.versions.push(
+      versionRow({
+        version: 1,
+        username: 'current-secret',
+        passwordCiphertext: 'ENC(old-secret)',
+      }),
+    );
+    return stubs;
+  }
+
+  it('re-scores the stored password when only the username is restored', async () => {
+    const { svc, passwords } = setup();
+    await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']);
+    expect(passwords[0]?.passwordStrength).toBe(
+      computePasswordStrength('current-secret', [
+        'Acme VPN',
+        'current-secret',
+        'https://vpn.acme.test',
+      ]),
+    );
+    expect(passwords[0]?.passwordStrength).not.toBe(4);
+  });
+
+  it('scores a cleared username as empty, not as the old value', async () => {
+    const { svc, passwords } = setup({ username: 'current-secret', passwordStrength: 0 });
+    await svc.update(OPERATOR, 'co-1', 'pwd-a', { username: null }, META);
+    expect(passwords[0]?.username).toBeNull();
+    expect(passwords[0]?.passwordStrength).toBe(
+      computePasswordStrength('current-secret', ['Acme VPN', '', 'https://vpn.acme.test']),
+    );
+  });
+
+  it('does not re-score for a key without reveal, so the score is no oracle', async () => {
+    const { svc, passwords, crypto } = setup();
+    await svc.update(WRITE_ONLY_KEY, 'co-1', 'pwd-a', { username: 'current-secret' }, META);
+    expect(passwords[0]?.username).toBe('current-secret');
+    expect(passwords[0]?.passwordStrength).toBe(4);
+    expect(crypto.decrypt).not.toHaveBeenCalled();
+  });
+
+  it('refuses a password-only restore to a caller who may not reveal it', async () => {
+    const { svc, passwords } = setup();
+    await expect(
+      svc.restoreVersion(WRITE_ONLY_KEY, 'co-1', 'pwd-a', 1, META, ['password']),
+    ).rejects.toThrow(ForbiddenException);
+    expect(passwords[0]?.passwordCiphertext).toBe('ENC(current-secret)');
+    // The whole-version restore scores against the version's own values.
+    await svc.restoreVersion(WRITE_ONLY_KEY, 'co-1', 'pwd-a', 1, META);
+    expect(passwords[0]?.passwordCiphertext).toBe('ENC(old-secret)');
+  });
+
+  it('refuses a password-only restore on a reason-to-view credential', async () => {
+    const { svc } = setup({ requireReasonToView: true });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['password']),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('fails a restore that kept the password when the row changed meanwhile', async () => {
+    const { svc, passwords, versions, crypto } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          username: 'current@acme.test',
+          passwordCiphertext: 'ENC(same-secret)',
+        }),
+      ],
+    });
+    versions.push(
+      versionRow({
+        version: 1,
+        username: 'old@acme.test',
+        passwordCiphertext: 'ENC(same-secret)',
+      }),
+    );
+    const decrypt = crypto.decrypt.getMockImplementation()!;
+    let calls = 0;
+    crypto.decrypt.mockImplementation((blob: string) => {
+      calls += 1;
+      // Call 1 reads the version; call 2 is the comparison with the live
+      // row. A rotation lands in between.
+      if (calls === 2) {
+        passwords[0] = {
+          ...passwords[0]!,
+          username: 'rotated@acme.test',
+          passwordCiphertext: 'ENC(rotated-secret)',
+          updatedAt: new Date(Date.now() + 60_000),
+        };
+      }
+      return decrypt(blob);
+    });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META),
+    ).rejects.toThrow(ConflictException);
+    expect(passwords[0]?.username).toBe('rotated@acme.test');
+    expect(passwords[0]?.passwordCiphertext).toBe('ENC(rotated-secret)');
+    expect(versions).toHaveLength(1);
+  });
+
+  /** Run `change` on the live row just before the Nth decrypt call. */
+  function changeRowOnDecrypt(
+    stubs: ReturnType<typeof makeStubs>,
+    nth: number,
+    change: Partial<Password>,
+  ) {
+    const decrypt = stubs.crypto.decrypt.getMockImplementation()!;
+    let calls = 0;
+    stubs.crypto.decrypt.mockImplementation((blob: string) => {
+      calls += 1;
+      if (calls === nth) {
+        stubs.passwords[0] = {
+          ...stubs.passwords[0]!,
+          ...change,
+          updatedAt: new Date(Date.now() + 60_000),
+        };
+      }
+      return decrypt(blob);
+    });
+  }
+
+  it('checks the password-only restore gate on the row it writes', async () => {
+    const stubs = setup();
+    // Call 1 decrypts the version's password; reason-to-view is turned on
+    // before update reads the row.
+    changeRowOnDecrypt(stubs, 1, { requireReasonToView: true });
+    await expect(
+      stubs.svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['password']),
+    ).rejects.toThrow(ForbiddenException);
+    expect(stubs.passwords[0]?.passwordCiphertext).toBe('ENC(current-secret)');
+  });
+
+  it('does not report success when TOTP was added during a restore that clears it', async () => {
+    const stubs = setup({ notesCiphertext: 'ENC(current note)' });
+    stubs.versions[0] = versionRow({ version: 1, notesCiphertext: 'ENC(old note)' });
+    // Call 1 reads the version's notes; call 2 compares the live notes.
+    changeRowOnDecrypt(stubs, 2, { totpSecretCiphertext: 'ENC(NEWTOTP)' });
+    await expect(
+      stubs.svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['notes', 'totp']),
+    ).rejects.toThrow(ConflictException);
+    expect(stubs.passwords[0]?.totpSecretCiphertext).toBe('ENC(NEWTOTP)');
+    expect(stubs.passwords[0]?.notesCiphertext).toBe('ENC(current note)');
   });
 });

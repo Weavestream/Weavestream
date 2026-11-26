@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -10,12 +11,14 @@ import type {
   CreatePasswordInput,
   CreatePasswordFolderInput,
   PasswordFilterInput,
+  PasswordRestoreField,
   RevealPasswordInput,
   TotpConfigInput,
   UpdatePasswordFolderInput,
   UpdatePasswordInput,
 } from '@weavestream/shared';
-import { randomUUID } from 'node:crypto';
+import { PASSWORD_RESTORE_FIELDS } from '@weavestream/shared';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { authenticator } from 'otplib';
 import { computeHibpRangeHash } from './hibp-range-hash.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -114,6 +117,15 @@ export interface SerializedPasswordVersion {
   changedByName: string | null;
   changeReason: string | null;
   createdAt: Date;
+  /**
+   * Captured plain-text values. Never notes/password/TOTP (encrypted).
+   * Optional only to match the shared wire contract (older clients and
+   * payloads omit them). `listVersions` sets all three for staff, and omits
+   * all three for CLIENT_USER (portal) actors.
+   */
+  name?: string;
+  username?: string | null;
+  url?: string | null;
 }
 
 export interface SerializedPasswordFolder {
@@ -246,14 +258,19 @@ export class PasswordsService {
       select: { id: true, name: true },
     });
     const nameById = new Map(users.map((u) => [u.id, u.name] as const));
-    return rows.map((r) => ({
-      version: r.version,
-      changedFields: r.changedFields,
-      changedBy: r.changedBy,
-      changedByName: nameById.get(r.changedBy) ?? null,
-      changeReason: r.changeReason,
-      createdAt: r.createdAt,
-    }));
+    const isClient = actor.role === 'CLIENT_USER';
+    return rows.map((r) => {
+      const base: SerializedPasswordVersion = {
+        version: r.version,
+        changedFields: r.changedFields,
+        changedBy: r.changedBy,
+        changedByName: nameById.get(r.changedBy) ?? null,
+        changeReason: r.changeReason,
+        createdAt: r.createdAt,
+      };
+      if (isClient) return base;
+      return { ...base, name: r.name, username: r.username, url: r.url };
+    });
   }
 
   // ------------------------------------------------------------------
@@ -414,6 +431,21 @@ export class PasswordsService {
     input: UpdatePasswordInput,
     meta: AuditMeta,
   ): Promise<SerializedPasswordDetail> {
+    return (await this.applyUpdate(actor, companyId, id, input, meta)).detail;
+  }
+
+  /**
+   * The body of `update()`. Also returns the versioned fields it changed,
+   * so `restoreVersion()` can tell a real restore from a no-op.
+   */
+  private async applyUpdate(
+    actor: AuthedUser,
+    companyId: string,
+    id: string,
+    input: UpdatePasswordInput,
+    meta: AuditMeta,
+    opts: { passwordNeedsSecretAccess?: boolean } = {},
+  ): Promise<{ detail: SerializedPasswordDetail; changedFields: VersionedField[] }> {
     const existing = await this.loadForRead(actor, companyId, id);
     if (existing.archivedAt) {
       throw new BadRequestException(
@@ -451,44 +483,133 @@ export class PasswordsService {
       data.url = input.url ?? null;
       changedFields.push('url');
     }
+    // Secrets are re-encrypted with a fresh nonce on every write, so the
+    // ciphertext can never be compared: decrypt the stored value and flag
+    // a change only when the plaintext truly differs. A stored blob that
+    // cannot be decrypted counts as changed (the write repairs it).
+    //
+    // Comparing a caller-chosen value with the stored secret is a match
+    // oracle (the response, version list and audit trail all show whether
+    // it matched). So compare only for a caller who may read the secret
+    // anyway: the same gate as notes and reveal for API keys and MCP
+    // connections. Any other caller keeps the old behaviour, where a sent
+    // secret always counts as changed. The password and TOTP secret are
+    // also behind the credential's reason-to-view rule, so a match there
+    // would answer without the reason or the reveal audit row: skip the
+    // comparison for those credentials too. Notes are shown without a
+    // reason, so they only need the first gate.
+    const mayCompareNotes = mayReadVaultNotes(actor);
+    const mayCompareSecrets = mayCompareStoredSecrets(actor, existing);
+    if (opts.passwordNeedsSecretAccess && !mayCompareSecrets) {
+      throw new ForbiddenException(
+        'Restoring the password on its own needs access to reveal it without a reason. Restore the whole version instead.',
+      );
+    }
+    // Strength is scored against the name, username and URL, so a change to
+    // any of them re-scores it. An explicit null clears the value.
+    const contextChanged = changedFields.some(
+      (f) => f === 'name' || f === 'username' || f === 'url',
+    );
+    const strengthContext = (): string[] => [
+      (input.name !== undefined ? input.name : existing.name) ?? '',
+      (input.username !== undefined ? input.username : existing.username) ?? '',
+      (input.url !== undefined ? input.url : existing.url) ?? '',
+    ];
     if (input.password !== undefined) {
-      data.passwordCiphertext = this.crypto.encrypt(
-        input.password,
+      const unchanged =
+        mayCompareSecrets &&
+        secretsEqual(
+          this.tryDecryptSecret(
+            existing.passwordCiphertext,
+            passwordVaultAad(companyId, id, 'password'),
+          ),
+          input.password,
+        );
+      if (!unchanged) {
+        data.passwordCiphertext = this.crypto.encrypt(
+          input.password,
+          passwordVaultAad(companyId, id, 'password'),
+        );
+        data.lastRotatedAt = new Date();
+        changedFields.push('password');
+      }
+      // Rotation and history flags stay tied to the password itself.
+      if (!unchanged || contextChanged) {
+        data.passwordStrength = computePasswordStrength(input.password, strengthContext());
+      }
+    } else if (contextChanged && mayCompareSecrets) {
+      // Only the context changed: re-score the stored password. The new
+      // score goes back to the caller, so for a caller who may not read the
+      // password it would be an oracle (send a guessed username, watch the
+      // score). Those callers keep the old score, as before.
+      const current = this.tryDecryptSecret(
+        existing.passwordCiphertext,
         passwordVaultAad(companyId, id, 'password'),
       );
-      data.lastRotatedAt = new Date();
-      data.passwordStrength = computePasswordStrength(input.password, [
-        (input.name ?? existing.name) ?? '',
-        (input.username ?? existing.username) ?? '',
-        (input.url ?? existing.url) ?? '',
-      ]);
-      changedFields.push('password');
+      if (current !== null) {
+        data.passwordStrength = computePasswordStrength(current, strengthContext());
+      }
     }
     if (input.notes !== undefined) {
-      data.notesCiphertext = this.encodeNotes(input.notes, companyId, id);
-      changedFields.push('notes');
+      const nextNotes = input.notes ? input.notes : null;
+      let unchanged = false;
+      if (mayCompareNotes) {
+        if (existing.notesCiphertext === null) {
+          unchanged = nextNotes === null;
+        } else {
+          // null here means the stored blob was undecryptable: treat it as
+          // changed so the write repairs it.
+          const currentNotes = this.safeDecryptNotes(existing.notesCiphertext, companyId, id);
+          unchanged = currentNotes !== null && secretsEqual(currentNotes, nextNotes);
+        }
+      }
+      if (!unchanged) {
+        data.notesCiphertext = this.encodeNotes(input.notes, companyId, id);
+        changedFields.push('notes');
+      }
     }
     if (input.totp !== undefined) {
       if (input.totp === null) {
-        data.totpSecretCiphertext = null;
-        data.totpAlgorithm = 'SHA1';
-        data.totpDigits = 6;
-        data.totpPeriod = 30;
-        if (existing.totpSecretCiphertext) changedFields.push('totpSecret');
+        if (existing.totpSecretCiphertext) {
+          data.totpSecretCiphertext = null;
+          data.totpAlgorithm = 'SHA1';
+          data.totpDigits = 6;
+          data.totpPeriod = 30;
+          changedFields.push('totpSecret');
+        }
       } else {
         const block: TotpConfigInput = input.totp;
-        data.totpSecretCiphertext = this.crypto.encrypt(
-          block.secret,
-          passwordVaultAad(companyId, id, 'totp'),
-        );
-        data.totpAlgorithm = block.algorithm;
-        data.totpDigits = block.digits;
-        data.totpPeriod = block.period;
-        changedFields.push('totpSecret');
-        if (block.algorithm !== existing.totpAlgorithm)
-          changedFields.push('totpAlgorithm');
-        if (block.digits !== existing.totpDigits) changedFields.push('totpDigits');
-        if (block.period !== existing.totpPeriod) changedFields.push('totpPeriod');
+        const secretChanged =
+          !mayCompareSecrets ||
+          !secretsEqual(
+            existing.totpSecretCiphertext
+              ? this.tryDecryptSecret(
+                  existing.totpSecretCiphertext,
+                  passwordVaultAad(companyId, id, 'totp'),
+                )
+              : null,
+            block.secret,
+          );
+        const algoChanged = block.algorithm !== existing.totpAlgorithm;
+        const digitsChanged = block.digits !== existing.totpDigits;
+        const periodChanged = block.period !== existing.totpPeriod;
+        // The secret and its parameters only work together, so when any
+        // part changed write the whole block: two concurrent edits must
+        // never leave one request's secret with another's algorithm.
+        // changedFields still names only the parts that differ.
+        if (secretChanged || algoChanged || digitsChanged || periodChanged) {
+          data.totpSecretCiphertext = this.crypto.encrypt(
+            block.secret,
+            passwordVaultAad(companyId, id, 'totp'),
+          );
+          data.totpAlgorithm = block.algorithm;
+          data.totpDigits = block.digits;
+          data.totpPeriod = block.period;
+        }
+        if (secretChanged) changedFields.push('totpSecret');
+        if (algoChanged) changedFields.push('totpAlgorithm');
+        if (digitsChanged) changedFields.push('totpDigits');
+        if (periodChanged) changedFields.push('totpPeriod');
       }
     }
 
@@ -548,11 +669,23 @@ export class PasswordsService {
     const touchedKeys = Object.keys(data).filter((k) => k !== 'updatedBy');
     if (touchedKeys.length === 0) {
       // Pure no-op — don't write a version or audit row.
-      return this.getDetail(actor, companyId, id);
+      return { detail: await this.getDetail(actor, companyId, id), changedFields };
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.password.updateMany({ where: { id, companyId }, data });
+      // Every decision above (what changed, what was skipped, the strength
+      // context, the reveal gate) rests on the row read at the start. Write
+      // only if that row is still current, so a concurrent edit is never
+      // mixed with this one; the caller reloads and retries instead.
+      const { count } = await tx.password.updateMany({
+        where: { id, companyId, updatedAt: existing.updatedAt },
+        data,
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          'This password changed while you were saving. Reload it and try again.',
+        );
+      }
       const fresh = await tx.password.findFirstOrThrow({ where: { id, companyId } });
       if (changedFields.length > 0) {
         const maxVersion = await tx.passwordVersion.aggregate({
@@ -606,7 +739,7 @@ export class PasswordsService {
     }
 
     const isStarred = await this.stars.isStarred(actor.id, 'password', id);
-    return {
+    const detail: SerializedPasswordDetail = {
       ...this.toSummary(updated, actor),
       notes:
         updated.notesCiphertext && mayReadVaultNotes(actor)
@@ -617,6 +750,7 @@ export class PasswordsService {
       totpPeriod: updated.totpPeriod,
       isStarred,
     };
+    return { detail, changedFields };
   }
 
   async archive(
@@ -834,6 +968,7 @@ export class PasswordsService {
     id: string,
     version: number,
     meta: AuditMeta,
+    fields?: readonly PasswordRestoreField[],
   ): Promise<SerializedPasswordDetail> {
     const existing = await this.loadForRead(actor, companyId, id);
     if (existing.archivedAt) {
@@ -846,45 +981,90 @@ export class PasswordsService {
     });
     if (!v) throw new NotFoundException('version not found');
 
-    // Pipe vN's decrypted contents back through update() so strength
-    // re-computes, HIBP re-enqueues, and a fresh version row is written
-    // by the same code path as a normal edit.
-    const plaintext = this.crypto.decrypt(
-      v.passwordCiphertext,
-      passwordVaultAad(companyId, id, 'password'),
-    );
-    const notes = v.notesCiphertext
-      ? this.safeDecryptNotes(v.notesCiphertext, companyId, id)
-      : null;
-    const totpSecret = v.totpSecretCiphertext
-      ? this.crypto.decrypt(
-          v.totpSecretCiphertext,
-          passwordVaultAad(companyId, id, 'totp'),
-        )
-      : null;
+    // Defence in depth: the controller validates with zod, but the service
+    // is also called directly, so re-check the allow-list here.
+    const requested = fields
+      ? Array.from(new Set(fields))
+      : [...PASSWORD_RESTORE_FIELDS];
+    if (
+      requested.length === 0 ||
+      requested.some((f) => !(PASSWORD_RESTORE_FIELDS as readonly string[]).includes(f))
+    ) {
+      throw new BadRequestException('Unknown or empty restore field list.');
+    }
+    const want = new Set<string>(requested);
 
-    const result = await this.update(
+    // Pipe the chosen fields of vN back through update() so strength
+    // re-computes, HIBP re-enqueues, and a fresh version row is written
+    // by the same code path as a normal edit. Unchosen fields are left
+    // out of the input, so they keep their CURRENT values. Only the
+    // chosen secrets are decrypted.
+    const input: UpdatePasswordInput = {
+      changeReason: fields
+        ? `restore ${requested.join(', ')} from v${version}`
+        : `restore from v${version}`,
+    };
+    if (want.has('name')) input.name = v.name;
+    if (want.has('username')) input.username = v.username;
+    if (want.has('url')) input.url = v.url;
+    if (want.has('password')) {
+      input.password = this.crypto.decrypt(
+        v.passwordCiphertext,
+        passwordVaultAad(companyId, id, 'password'),
+      );
+    }
+    if (want.has('notes')) {
+      if (v.notesCiphertext) {
+        const notes = this.safeDecryptNotes(v.notesCiphertext, companyId, id);
+        // An unreadable snapshot is not "no notes": restoring it as null
+        // would silently delete the current notes.
+        if (notes === null) {
+          throw new BadRequestException(
+            `The notes in version ${version} cannot be decrypted, so they cannot be restored.`,
+          );
+        }
+        input.notes = notes;
+      } else {
+        input.notes = null;
+      }
+    }
+    if (want.has('totp')) {
+      const totpSecret = v.totpSecretCiphertext
+        ? this.crypto.decrypt(
+            v.totpSecretCiphertext,
+            passwordVaultAad(companyId, id, 'totp'),
+          )
+        : null;
+      input.totp = totpSecret
+        ? {
+            secret: totpSecret,
+            algorithm: v.totpAlgorithm,
+            digits: v.totpDigits,
+            period: v.totpPeriod,
+          }
+        : null;
+    }
+
+    // A password restored on its own is scored against the live name,
+    // username and URL, which the caller can set first. The score comes
+    // back to the caller, so it tells them something about the old
+    // password: allow that only to a caller who may read it anyway. A
+    // whole-version restore scores it against the version's own values.
+    // applyUpdate() checks this on the same read that guards its write.
+    const { detail: result, changedFields } = await this.applyUpdate(
       actor,
       companyId,
       id,
-      {
-        name: v.name,
-        username: v.username,
-        url: v.url,
-        password: plaintext,
-        notes,
-        totp: totpSecret
-          ? {
-              secret: totpSecret,
-              algorithm: v.totpAlgorithm,
-              digits: v.totpDigits,
-              period: v.totpPeriod,
-            }
-          : null,
-        changeReason: `restore from v${version}`,
-      },
+      input,
       meta,
+      { passwordNeedsSecretAccess: fields !== undefined && want.has('password') },
     );
+    if (changedFields.length === 0) {
+      // Nothing was written, so there is nothing to audit as a restore.
+      throw new BadRequestException(
+        `Nothing to restore: the current values already match version ${version}.`,
+      );
+    }
 
     await this.audit.log({
       actorId: actor.id,
@@ -895,7 +1075,8 @@ export class PasswordsService {
       ip: meta.ip,
       userAgent: meta.userAgent,
       before: null,
-      after: { fromVersion: version },
+      // Field NAMES only, never values. Absent for a whole-version restore.
+      after: fields ? { fromVersion: version, fields: requested } : { fromVersion: version },
     });
 
     return result;
@@ -1343,6 +1524,22 @@ export class PasswordsService {
     );
   }
 
+  /**
+   * Decrypt a stored secret for a change comparison. Returns null when the
+   * blob cannot be decrypted (logged without the value) so the caller
+   * treats the field as changed.
+   */
+  private tryDecryptSecret(blob: string, aad: string): string | null {
+    try {
+      return this.crypto.decrypt(blob, aad);
+    } catch (err) {
+      this.logger.error(
+        `Failed to decrypt a stored secret for comparison: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
+
   private safeDecryptNotes(
     blob: string,
     companyId: string,
@@ -1475,4 +1672,29 @@ export type { Password, PasswordVersion };
  */
 function mayReadVaultNotes(actor: AuthedUser): boolean {
   return !isProgrammatic(actor) || actor.apiKeyAllowPasswordReveal === true;
+}
+
+/**
+ * Whether a write may compare a value with, or score, the stored password
+ * and TOTP secret. Both answers reach the caller, so they need the same
+ * access as a reveal, and none on a credential that requires a reason to
+ * view (a reveal there needs the reason and writes its own audit row).
+ */
+function mayCompareStoredSecrets(
+  actor: AuthedUser,
+  password: Pick<Password, 'requireReasonToView'>,
+): boolean {
+  return mayReadVaultNotes(actor) && !password.requireReasonToView;
+}
+
+/**
+ * Constant-time equality for two decrypted secrets (null = absent). Both
+ * sides are reduced to a SHA-256 digest first so the comparison is
+ * fixed-length and leaks no length either. The digest is only a
+ * comparison aid here; it is never stored.
+ */
+function secretsEqual(a: string | null, b: string | null): boolean {
+  if (a === null || b === null) return a === b;
+  const digest = (value: string) => createHash('sha256').update(value, 'utf8').digest();
+  return timingSafeEqual(digest(a), digest(b));
 }

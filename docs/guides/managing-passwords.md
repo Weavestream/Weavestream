@@ -94,7 +94,9 @@ Every change to a credential creates a new version. To view the history:
 
 1. Open the credential's detail page
 2. Click the **History** tab
-3. Each version shows what changed, who changed it, and when
+3. Each version shows what changed, who changed it, and when, plus the name, username and URL it captured (the ones that changed are highlighted)
+
+To undo a change, use **Restore** to bring back a whole version, or **Restore this username** (or URL or name) to bring back a single field without touching the password. Restoring adds a new version and keeps the current one in history.
 
 Versions are immutable and cannot be deleted.
 

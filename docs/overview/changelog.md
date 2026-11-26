@@ -13,6 +13,19 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ## [Unreleased]
 
+### Added
+
+- **Restore a single field from password history.** Next to the captured name, username and URL, **Restore this username** (or URL or name) brings back one field without touching the password. Restoring adds a new version and keeps the current one in history.
+
+### Changed
+
+- **Password history shows the name, username and URL of every version.** Earlier usernames can be read straight from the list, and the fields that changed are highlighted. Notes, passwords and TOTP secrets stay encrypted and are only shown through **Reveal**. Client-portal users still see only the history metadata (who changed which fields, and when), never these captured values.
+
+### Fixed
+
+- **Saving a password no longer lists notes as changed every time.** A field is flagged as changed only when its value differs, so unchanged notes, password or TOTP no longer create a change entry. So that saving can never confirm a guessed secret, a re-sent password or TOTP secret still counts as changed on credentials that require a reason to view, and for API keys and MCP connections without reveal access. Versions saved before this release keep the change markers they were recorded with.
+- **Changing a password's name, username or URL now updates its strength score.** The score checks whether the password contains those values, so it went stale when only they changed.
+
 ## [1.13.2] - 2026-11-16
 
 ### Added
