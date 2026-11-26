@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -497,7 +498,22 @@ export class PasswordsService {
     // comparison for those credentials too. Notes are shown without a
     // reason, so they only need the first gate.
     const mayCompareNotes = mayReadVaultNotes(actor);
-    const mayCompareSecrets = mayCompareNotes && !existing.requireReasonToView;
+    const mayCompareSecrets = mayCompareStoredSecrets(actor, existing);
+    // Set when a write decision rests on a stored secret read above (a
+    // secret judged unchanged and so not written, or a strength re-scored
+    // from the stored password). The write must then fail if the row moved
+    // in between, or a concurrent rotation could be mixed with this request.
+    let dependsOnStoredSecret = false;
+    // Strength is scored against the name, username and URL, so a change to
+    // any of them re-scores it. An explicit null clears the value.
+    const contextChanged = changedFields.some(
+      (f) => f === 'name' || f === 'username' || f === 'url',
+    );
+    const strengthContext = (): string[] => [
+      (input.name !== undefined ? input.name : existing.name) ?? '',
+      (input.username !== undefined ? input.username : existing.username) ?? '',
+      (input.url !== undefined ? input.url : existing.url) ?? '',
+    ];
     if (input.password !== undefined) {
       const unchanged =
         mayCompareSecrets &&
@@ -516,20 +532,23 @@ export class PasswordsService {
         data.lastRotatedAt = new Date();
         changedFields.push('password');
       }
-      // Strength is scored against the name, username and URL too, so
-      // re-score when the password changed or when this request changed
-      // that context (for example a restore that brings back an old
-      // username with the same password). Rotation and history flags
-      // stay tied to the password itself.
-      const contextChanged = changedFields.some(
-        (f) => f === 'name' || f === 'username' || f === 'url',
-      );
+      if (unchanged) dependsOnStoredSecret = true;
+      // Rotation and history flags stay tied to the password itself.
       if (!unchanged || contextChanged) {
-        data.passwordStrength = computePasswordStrength(input.password, [
-          (input.name ?? existing.name) ?? '',
-          (input.username ?? existing.username) ?? '',
-          (input.url ?? existing.url) ?? '',
-        ]);
+        data.passwordStrength = computePasswordStrength(input.password, strengthContext());
+      }
+    } else if (contextChanged && mayCompareSecrets) {
+      // Only the context changed: re-score the stored password. The new
+      // score goes back to the caller, so for a caller who may not read the
+      // password it would be an oracle (send a guessed username, watch the
+      // score). Those callers keep the old score, as before.
+      const current = this.tryDecryptSecret(
+        existing.passwordCiphertext,
+        passwordVaultAad(companyId, id, 'password'),
+      );
+      if (current !== null) {
+        data.passwordStrength = computePasswordStrength(current, strengthContext());
+        dependsOnStoredSecret = true;
       }
     }
     if (input.notes !== undefined) {
@@ -545,7 +564,9 @@ export class PasswordsService {
           unchanged = currentNotes !== null && secretsEqual(currentNotes, nextNotes);
         }
       }
-      if (!unchanged) {
+      if (unchanged) {
+        dependsOnStoredSecret = true;
+      } else {
         data.notesCiphertext = this.encodeNotes(input.notes, companyId, id);
         changedFields.push('notes');
       }
@@ -587,6 +608,8 @@ export class PasswordsService {
           data.totpAlgorithm = block.algorithm;
           data.totpDigits = block.digits;
           data.totpPeriod = block.period;
+        } else {
+          dependsOnStoredSecret = true;
         }
         if (secretChanged) changedFields.push('totpSecret');
         if (algoChanged) changedFields.push('totpAlgorithm');
@@ -655,7 +678,17 @@ export class PasswordsService {
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.password.updateMany({ where: { id, companyId }, data });
+      const { count } = await tx.password.updateMany({
+        where: dependsOnStoredSecret
+          ? { id, companyId, updatedAt: existing.updatedAt }
+          : { id, companyId },
+        data,
+      });
+      if (count === 0) {
+        throw new ConflictException(
+          'This password changed while you were saving. Reload it and try again.',
+        );
+      }
       const fresh = await tx.password.findFirstOrThrow({ where: { id, companyId } });
       if (changedFields.length > 0) {
         const maxVersion = await tx.passwordVersion.aggregate({
@@ -963,6 +996,16 @@ export class PasswordsService {
       throw new BadRequestException('Unknown or empty restore field list.');
     }
     const want = new Set<string>(requested);
+    // A password restored on its own is scored against the live name,
+    // username and URL, which the caller can set first. The score comes
+    // back to the caller, so it tells them something about the old
+    // password. Allow that only to a caller who may read it anyway. A
+    // whole-version restore scores it against the version's own values.
+    if (fields && want.has('password') && !mayCompareStoredSecrets(actor, existing)) {
+      throw new ForbiddenException(
+        'Restoring the password on its own needs access to reveal it without a reason. Restore the whole version instead.',
+      );
+    }
 
     // Pipe the chosen fields of vN back through update() so strength
     // re-computes, HIBP re-enqueues, and a fresh version row is written
@@ -1635,6 +1678,19 @@ export type { Password, PasswordVersion };
  */
 function mayReadVaultNotes(actor: AuthedUser): boolean {
   return !isProgrammatic(actor) || actor.apiKeyAllowPasswordReveal === true;
+}
+
+/**
+ * Whether a write may compare a value with, or score, the stored password
+ * and TOTP secret. Both answers reach the caller, so they need the same
+ * access as a reveal, and none on a credential that requires a reason to
+ * view (a reveal there needs the reason and writes its own audit row).
+ */
+function mayCompareStoredSecrets(
+  actor: AuthedUser,
+  password: Pick<Password, 'requireReasonToView'>,
+): boolean {
+  return mayReadVaultNotes(actor) && !password.requireReasonToView;
 }
 
 /**

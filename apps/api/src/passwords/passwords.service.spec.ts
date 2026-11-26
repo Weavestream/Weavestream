@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
@@ -92,6 +93,12 @@ function matchPassword(
     if (!where.OR.some((w) => matchPassword(row, w))) return false;
   }
   if (where.id && (where.id as string) !== row.id) return false;
+  if (
+    where.updatedAt instanceof Date &&
+    row.updatedAt.getTime() !== where.updatedAt.getTime()
+  ) {
+    return false;
+  }
   if (where.companyId && (where.companyId as string) !== row.companyId)
     return false;
   if (
@@ -1517,5 +1524,125 @@ describe('PasswordsService — field-level restoreVersion', () => {
     await expect(
       svc.restoreVersion(OTHER_OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']),
     ).rejects.toThrow(ForbiddenException);
+  });
+});
+
+describe('PasswordsService — strength context and restore races', () => {
+  const WRITE_ONLY_KEY: AuthedUser = {
+    ...OPERATOR,
+    apiKeyId: 'key-1',
+    apiKeyAllowWrite: true,
+    apiKeyAllowPasswordReveal: false,
+  };
+
+  function setup(extra: DeepPartial<Password> = {}) {
+    const stubs = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          username: 'current@acme.test',
+          passwordCiphertext: 'ENC(current-secret)',
+          passwordStrength: 4,
+          ...extra,
+        }),
+      ],
+    });
+    stubs.versions.push(
+      versionRow({
+        version: 1,
+        username: 'current-secret',
+        passwordCiphertext: 'ENC(old-secret)',
+      }),
+    );
+    return stubs;
+  }
+
+  it('re-scores the stored password when only the username is restored', async () => {
+    const { svc, passwords } = setup();
+    await svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['username']);
+    expect(passwords[0]?.passwordStrength).toBe(
+      computePasswordStrength('current-secret', [
+        'Acme VPN',
+        'current-secret',
+        'https://vpn.acme.test',
+      ]),
+    );
+    expect(passwords[0]?.passwordStrength).not.toBe(4);
+  });
+
+  it('scores a cleared username as empty, not as the old value', async () => {
+    const { svc, passwords } = setup({ username: 'current-secret', passwordStrength: 0 });
+    await svc.update(OPERATOR, 'co-1', 'pwd-a', { username: null }, META);
+    expect(passwords[0]?.username).toBeNull();
+    expect(passwords[0]?.passwordStrength).toBe(
+      computePasswordStrength('current-secret', ['Acme VPN', '', 'https://vpn.acme.test']),
+    );
+  });
+
+  it('does not re-score for a key without reveal, so the score is no oracle', async () => {
+    const { svc, passwords, crypto } = setup();
+    await svc.update(WRITE_ONLY_KEY, 'co-1', 'pwd-a', { username: 'current-secret' }, META);
+    expect(passwords[0]?.username).toBe('current-secret');
+    expect(passwords[0]?.passwordStrength).toBe(4);
+    expect(crypto.decrypt).not.toHaveBeenCalled();
+  });
+
+  it('refuses a password-only restore to a caller who may not reveal it', async () => {
+    const { svc, passwords } = setup();
+    await expect(
+      svc.restoreVersion(WRITE_ONLY_KEY, 'co-1', 'pwd-a', 1, META, ['password']),
+    ).rejects.toThrow(ForbiddenException);
+    expect(passwords[0]?.passwordCiphertext).toBe('ENC(current-secret)');
+    // The whole-version restore scores against the version's own values.
+    await svc.restoreVersion(WRITE_ONLY_KEY, 'co-1', 'pwd-a', 1, META);
+    expect(passwords[0]?.passwordCiphertext).toBe('ENC(old-secret)');
+  });
+
+  it('refuses a password-only restore on a reason-to-view credential', async () => {
+    const { svc } = setup({ requireReasonToView: true });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META, ['password']),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('fails a restore that kept the password when the row changed meanwhile', async () => {
+    const { svc, passwords, versions, crypto } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          username: 'current@acme.test',
+          passwordCiphertext: 'ENC(same-secret)',
+        }),
+      ],
+    });
+    versions.push(
+      versionRow({
+        version: 1,
+        username: 'old@acme.test',
+        passwordCiphertext: 'ENC(same-secret)',
+      }),
+    );
+    const decrypt = crypto.decrypt.getMockImplementation()!;
+    let calls = 0;
+    crypto.decrypt.mockImplementation((blob: string) => {
+      calls += 1;
+      // Call 1 reads the version; call 2 is the comparison with the live
+      // row. A rotation lands in between.
+      if (calls === 2) {
+        passwords[0] = {
+          ...passwords[0]!,
+          username: 'rotated@acme.test',
+          passwordCiphertext: 'ENC(rotated-secret)',
+          updatedAt: new Date(Date.now() + 60_000),
+        };
+      }
+      return decrypt(blob);
+    });
+    await expect(
+      svc.restoreVersion(OPERATOR, 'co-1', 'pwd-a', 1, META),
+    ).rejects.toThrow(ConflictException);
+    expect(passwords[0]?.username).toBe('rotated@acme.test');
+    expect(passwords[0]?.passwordCiphertext).toBe('ENC(rotated-secret)');
+    expect(versions).toHaveLength(1);
   });
 });
