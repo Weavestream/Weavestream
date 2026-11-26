@@ -94,6 +94,19 @@ describe('VersionHistoryPanel captured fields', () => {
     expect(screen.getAllByText('changed')).toHaveLength(1);
   });
 
+  it('does not mark the initial version\'s fields as changed', () => {
+    renderPanel([
+      v({
+        version: 1,
+        changedFields: ['name', 'username', 'url', 'password'],
+        name: 'Acme VPN',
+        username: 'old@example.com',
+        url: null,
+      }),
+    ]);
+    expect(screen.queryByText('changed')).not.toBeInTheDocument();
+  });
+
   it('renders nothing extra for an older payload without values', () => {
     renderPanel([v({ version: 1, changedFields: ['password'] })]);
     expect(document.querySelector('[data-changed]')).toBeNull();
@@ -117,8 +130,15 @@ describe('VersionHistoryPanel captured fields', () => {
 
 describe('VersionHistoryPanel restore', () => {
   const versions = [
+    // The newest version mirrors the live values.
+    v({ version: 3, changedFields: ['name'], ...CURRENT }),
     v({ version: 2, changedFields: ['username'], name: 'Acme', username: 'old@example.com', url: 'https://a.example' }),
   ];
+
+  it('offers no restore at all on the newest version', () => {
+    renderPanel([v({ version: 3, changedFields: ['name'], ...CURRENT })]);
+    expect(screen.queryByRole('button', { name: /^Restore/ })).not.toBeInTheDocument();
+  });
 
   it('per-field restore confirms, then posts only that field', async () => {
     apiFetch.mockResolvedValue({ ok: true });

@@ -1310,6 +1310,50 @@ describe('PasswordsService — secret comparison is gated on reveal', () => {
     expect(crypto.decrypt).not.toHaveBeenCalled();
   });
 
+  it('does not compare the password or TOTP of a reason-to-view credential', async () => {
+    const { svc, versions } = makeStubs({
+      passwords: [
+        passwordRow({
+          id: 'pwd-a',
+          requireReasonToView: true,
+          notesCiphertext: 'ENC(same note)',
+          totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)',
+        }),
+      ],
+    });
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      {
+        password: 'super-secret',
+        notes: 'same note',
+        totp: { secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA1', digits: 6, period: 30 },
+      },
+      META,
+    );
+    // Notes are readable without a reason, so they are still compared.
+    expect(versions[0]?.changedFields).toEqual(['password', 'totpSecret']);
+  });
+
+  it('writes the whole TOTP block when only one parameter changed', async () => {
+    const { svc, passwords, versions } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', totpSecretCiphertext: 'ENC(JBSWY3DPEHPK3PXP)' })],
+    });
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      { totp: { secret: 'JBSWY3DPEHPK3PXP', algorithm: 'SHA256', digits: 6, period: 30 } },
+      META,
+    );
+    expect(versions[0]?.changedFields).toEqual(['totpAlgorithm']);
+    expect(passwords[0]?.totpSecretCiphertext).toBe('ENC(JBSWY3DPEHPK3PXP)');
+    expect(passwords[0]?.totpAlgorithm).toBe('SHA256');
+    expect(passwords[0]?.totpDigits).toBe(6);
+    expect(passwords[0]?.totpPeriod).toBe(30);
+  });
+
   it('still compares for a key minted with reveal', async () => {
     const { svc, versions } = makeStubs({
       passwords: [passwordRow({ id: 'pwd-a', notesCiphertext: 'ENC(same note)' })],

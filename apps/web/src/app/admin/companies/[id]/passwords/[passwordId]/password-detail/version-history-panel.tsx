@@ -100,6 +100,7 @@ export function VersionHistoryPanel({
               passwordId={passwordId}
               version={version}
               current={current}
+              isLatest={version.version === sorted[0]?.version}
               canManage={canManage}
               requiresReason={requiresReason}
               busy={busy === version.version}
@@ -117,6 +118,7 @@ function VersionHistoryItem({
   passwordId,
   version,
   current,
+  isLatest,
   canManage,
   requiresReason,
   busy,
@@ -126,6 +128,8 @@ function VersionHistoryItem({
   passwordId: string;
   version: PasswordVersionSummary;
   current: CurrentValues;
+  /** The newest version is the live state, so restoring it changes nothing. */
+  isLatest: boolean;
   canManage: boolean;
   requiresReason: boolean;
   busy: boolean;
@@ -276,7 +280,7 @@ function VersionHistoryItem({
           >
             {plaintext ? 'Hide' : revealBusy ? 'Revealing...' : 'Reveal'}
           </TextAction>
-          {canManage && (
+          {canManage && !isLatest && (
             <TextAction disabled={busy} onClick={() => onRestore()}>
               Restore
             </TextAction>
@@ -369,7 +373,8 @@ function CapturedFields({
     >
       {rows.map((field) => {
         const value = version[field];
-        const changed = version.changedFields.includes(field);
+        // Version 1 lists every field as changed; it is the baseline, not a change.
+        const changed = version.version > 1 && version.changedFields.includes(field);
         // Empty and null are the same stored value; only offer a restore that changes something.
         const differsFromCurrent = (value || null) !== (current[field] || null);
         return (

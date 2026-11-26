@@ -491,8 +491,13 @@ export class PasswordsService {
     // it matched). So compare only for a caller who may read the secret
     // anyway: the same gate as notes and reveal for API keys and MCP
     // connections. Any other caller keeps the old behaviour, where a sent
-    // secret always counts as changed.
-    const mayCompareSecrets = mayReadVaultNotes(actor);
+    // secret always counts as changed. The password and TOTP secret are
+    // also behind the credential's reason-to-view rule, so a match there
+    // would answer without the reason or the reveal audit row: skip the
+    // comparison for those credentials too. Notes are shown without a
+    // reason, so they only need the first gate.
+    const mayCompareNotes = mayReadVaultNotes(actor);
+    const mayCompareSecrets = mayCompareNotes && !existing.requireReasonToView;
     if (input.password !== undefined) {
       const unchanged =
         mayCompareSecrets &&
@@ -520,7 +525,7 @@ export class PasswordsService {
     if (input.notes !== undefined) {
       const nextNotes = input.notes ? input.notes : null;
       let unchanged = false;
-      if (mayCompareSecrets) {
+      if (mayCompareNotes) {
         if (existing.notesCiphertext === null) {
           unchanged = nextNotes === null;
         } else {
@@ -560,25 +565,23 @@ export class PasswordsService {
         const algoChanged = block.algorithm !== existing.totpAlgorithm;
         const digitsChanged = block.digits !== existing.totpDigits;
         const periodChanged = block.period !== existing.totpPeriod;
-        if (secretChanged) {
+        // The secret and its parameters only work together, so when any
+        // part changed write the whole block: two concurrent edits must
+        // never leave one request's secret with another's algorithm.
+        // changedFields still names only the parts that differ.
+        if (secretChanged || algoChanged || digitsChanged || periodChanged) {
           data.totpSecretCiphertext = this.crypto.encrypt(
             block.secret,
             passwordVaultAad(companyId, id, 'totp'),
           );
-          changedFields.push('totpSecret');
-        }
-        if (algoChanged) {
           data.totpAlgorithm = block.algorithm;
-          changedFields.push('totpAlgorithm');
-        }
-        if (digitsChanged) {
           data.totpDigits = block.digits;
-          changedFields.push('totpDigits');
-        }
-        if (periodChanged) {
           data.totpPeriod = block.period;
-          changedFields.push('totpPeriod');
         }
+        if (secretChanged) changedFields.push('totpSecret');
+        if (algoChanged) changedFields.push('totpAlgorithm');
+        if (digitsChanged) changedFields.push('totpDigits');
+        if (periodChanged) changedFields.push('totpPeriod');
       }
     }
 
