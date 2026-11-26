@@ -73,6 +73,44 @@ Each **Asset** is a single instance of a layout within a tenant. Assets support:
 - **External ID tracking** — for synchronising with external systems
 - **Embedded passwords** — link credentials directly to an asset; they archive when the asset is archived
 - **Cross-references** — `ASSET_REFERENCE` fields create navigable links between assets
+- **Version history** — every real change is kept as a version (see below)
+
+## Version History
+
+Every asset keeps an append-only history. Creating an asset records **version 1**; each later edit that actually changes the name or a field value appends a new version holding the **full state** of the asset after that change. Saving without changing anything, archiving and restoring do not create versions.
+
+The **Version history** panel on the asset page is collapsed and loads nothing until you open it. It then lists versions newest first (20 at a time, **Load older versions** for more), each with who made the change (integration syncs show **System**), when, the reason and the names of the changed fields. **Show changes in version N** loads that version's values: changed fields are highlighted with the value they had before (`was: ...`), and **Show N unchanged fields** reveals the rest. The newest version opens by itself.
+
+Users who can edit the asset can restore:
+
+- **Restore this <field>** puts one field (or the name) back to its value in that version. Everything else keeps its current value.
+- **Restore version N** puts the name and every field back to that version.
+
+Restoring is **forward-only**: it appends a new version (reason `restore ... from vN`) and keeps the current one in history, and it goes through the normal edit path, so validation, unique-value checks, search and the audit log behave as for any edit. A restore never changes the integration link (`externalId` / `externalSource`), and it is refused on archived assets. If the asset already matches that version, nothing is written.
+
+Assets that existed before version history was introduced get their previous state recorded as a baseline version the first time they are edited. Edits made before then are not reconstructed (the audit log is the only record of them, and is subject to retention).
+
+Client users can read history only for fields they can see on the asset; fields hidden from clients are removed from the response, including from the list of changed fields. Client users also never see who made a change, and the only reason text they get is `restore from vN`. Stored restore reasons never contain field names (`restore from vN`, or `restore from vN (field restore)`); the panel builds the details from the changed fields when it displays them.
+
+Two things to know before changing history-relevant settings:
+
+- **Making a field visible to clients exposes its history.** Visibility is applied when history is read, not when it is written. If you switch a field to **Visible to clients**, client users can then read every earlier value that field held, including values entered while it was hidden. Redact the field's history first (below) if those older values must stay private.
+- **Restoring can overwrite integration-owned values.** A restore is an ordinary edit, so it will write a field even if an integration syncs it. The next sync normally sets it back to the source value (unless the field is set to preserve manual edits), and that sync appears in history as a **System** version.
+
+History is bounded: at most 500 versions are kept per asset (oldest dropped first, never the first or the latest), and an operator can prune by age with the `prune-asset-versions` CLI command. To erase a value from history, see **Redacting history** below and [Data Retention](/security/data-retention/#asset-versions).
+
+### Redacting history
+
+Users with the asset purge permission can erase captured values from history: all versions of one field, or every value of one version. The version rows and numbers stay, marked **redacted** in the panel. This needs a fresh step-up confirmation and a signed-in session (not an API key), and is audited without values. It does not change the live value, the audit log, or earlier backups.
+
+API (all under `/companies/:companyId/assets/:id`):
+
+| Method and path | Permission | Notes |
+|---|---|---|
+| `GET /versions?limit=&cursor=` | `asset.read` | Lightweight summaries, newest first (`limit` 1-100, default 20; `cursor` = last version of the previous page; response has `nextCursor`). Per version: number, changed fields, author, reason, date, redacted flag. No values. |
+| `GET /versions/:version` | `asset.read` | One version with its captured values (fields the caller can read) and the previous version's state for comparison. |
+| `POST /versions/:version/restore` | `asset.write` | Optional body `{ "fields": ["name", "<field id>", ...] }`; omit for the whole version. Audited as `asset.version.restored` with field names only, in the same transaction as the new version, and only when something changed. |
+| `POST /versions/redact` | `asset.purge`, step-up, human session | Body `{ "fieldId"?, "version"? }` (at least one). Rate limited. Audited as `asset.version.redacted` with ids and a count. |
 
 ## Copying and Moving Assets
 

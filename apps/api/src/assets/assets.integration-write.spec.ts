@@ -1851,12 +1851,124 @@ describe('AssetsService.update in a caller transaction', () => {
     internals.linkFileFieldUploadsToAsset = async () => undefined;
     internals.get = async () => ({});
     (audit as Record<string, unknown>).log = jest.fn();
+    // update() now locks the row and reads its state inside the caller's
+    // transaction (version history); give the tx mock those delegates.
+    const t = tx as unknown as Record<string, any>;
+    t.asset.findFirst.mockResolvedValue({ name: 'Edge', externalId: null, externalSource: null, updatedAt: new Date() });
+    // persistFieldValues is stubbed below, so feed the before/after states directly.
+    t.assetFieldValue.findMany = jest.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([{ assetFieldId: ids.field, value: 'edge-02' }]);
+    t.assetVersion = {
+      aggregate: jest.fn().mockResolvedValue({ _max: { version: 2 } }),
+      create: jest.fn().mockResolvedValue({}),
+      count: jest.fn().mockResolvedValue(1),
+    };
     await service.update(
       { id: ids.actor, role: 'SUPER_ADMIN' } as never, ids.company, ids.asset,
       { fieldValues: { hostname: 'edge-02' } }, { ip: null, userAgent: null } as never, tx as never,
     );
     expect(prisma.$transaction).not.toHaveBeenCalled();
+    // The row lock and the version both ride on the caller's transaction.
+    expect(t.$queryRaw.mock.calls.some((c: unknown[]) => String((c[0] as string[]).join('')).includes('FOR UPDATE'))).toBe(true);
+    expect(t.assetVersion.create).toHaveBeenCalledWith({ data: expect.objectContaining({ companyId: ids.company, assetId: ids.asset }) });
     expect(audit.logWithClient).toHaveBeenCalledWith(tx, expect.objectContaining({ action: 'asset.update', entityId: ids.asset }));
     expect((audit as unknown as { log: jest.Mock }).log).not.toHaveBeenCalled();
+  });
+});
+
+describe('AssetsService integration writes record version history', () => {
+  /** Give the shared tx mock the delegates `recordAssetVersion` reads/writes. */
+  function withVersions(
+    s: ReturnType<typeof setup>,
+    after: { name: string; value: string | null },
+    maxVersion: number | null,
+  ) {
+    let max = maxVersion;
+    const t = s.tx as unknown as Record<string, any>;
+    t.asset.findFirst.mockResolvedValue({
+      name: after.name,
+      externalId: input.externalId,
+      externalSource: input.externalSource,
+    });
+    t.assetFieldValue.findMany = jest
+      .fn()
+      .mockResolvedValue(after.value === null ? [] : [{ assetFieldId: ids.field, value: after.value }]);
+    t.assetVersion = {
+      aggregate: jest.fn().mockImplementation(async () => ({ _max: { version: max } })),
+      createMany: jest.fn().mockImplementation(async () => {
+        max = 1;
+        return { count: 1 };
+      }),
+      create: jest.fn().mockResolvedValue({}),
+      count: jest.fn().mockResolvedValue(1),
+    };
+    return t.assetVersion as { create: jest.Mock; createMany: jest.Mock };
+  }
+
+  it('versions a created asset as version 1 with no human author', async () => {
+    const s = setup();
+    const versions = withVersions(s, { name: 'Edge 01', value: 'edge-01' }, null);
+    await expect(s.service.writeFromIntegration(input)).resolves.toMatchObject({ change: 'created' });
+    expect(versions.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        assetId: ids.asset,
+        companyId: ids.company,
+        version: 1,
+        changedBy: null,
+        changeReason: 'initial version (integration sync)',
+        fieldValues: { [ids.field]: 'edge-01' },
+      }),
+    });
+  });
+
+  it('versions a real update (baseline first for an unversioned asset), attributed to the system', async () => {
+    const s = setup({
+      target: asset({ name: 'Old Edge' }),
+      binding: binding({ state: 'blocked', provenance: fullProvenance('blocked') }),
+    });
+    const versions = withVersions(s, { name: 'Edge 01', value: 'edge-01' }, null);
+    await expect(
+      s.service.writeFromIntegration({ ...input, existingTargetId: ids.asset }),
+    ).resolves.toMatchObject({ change: 'updated' });
+    expect(versions.createMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [expect.objectContaining({ version: 1, name: 'Old Edge', changedBy: null })],
+      }),
+    );
+    expect(versions.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        version: 2,
+        name: 'Edge 01',
+        changedFields: ['name'],
+        changedBy: null,
+        changeReason: 'integration sync',
+      }),
+    });
+  });
+
+  it('writes no version when the sync leaves the content unchanged', async () => {
+    const s = setup({
+      target: asset(),
+      binding: binding({ state: 'blocked', provenance: fullProvenance('blocked') }),
+    });
+    const versions = withVersions(s, { name: 'Edge 01', value: 'edge-01' }, 3);
+    await expect(
+      s.service.writeFromIntegration({ ...input, existingTargetId: ids.asset }),
+    ).resolves.toMatchObject({ change: 'unchanged' });
+    expect(versions.create).not.toHaveBeenCalled();
+    expect(versions.createMany).not.toHaveBeenCalled();
+  });
+
+  it('writes no version for an archive-only restore (content did not change)', async () => {
+    const s = setup({
+      target: asset({ archivedAt: new Date('2026-07-02T00:00:00.000Z') }),
+      binding: binding({ state: 'stale', provenance: fullProvenance('stale') }),
+    });
+    const versions = withVersions(s, { name: 'Edge 01', value: 'edge-01' }, 3);
+    await expect(
+      s.service.writeFromIntegration({ ...input, existingTargetId: ids.asset }),
+    ).resolves.toMatchObject({ change: 'restored' });
+    expect(versions.create).not.toHaveBeenCalled();
   });
 });

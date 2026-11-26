@@ -3,6 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { ApiKeySurfaceGuard } from './api-key-surface.guard.js';
 import { AiSettingsController } from '../../ai/ai-settings.controller.js';
 import { EmailSettingsController } from '../../email/email-settings.controller.js';
+import { SsoSettingsController } from '../../sso/sso-settings.controller.js';
 import { AlertsController } from '../../alerts/alerts.controller.js';
 
 /**
@@ -16,6 +17,8 @@ const CASES: Array<[Type<unknown>, string, string, string]> = [
   [AiSettingsController, 'test', 'POST', '/api/v1/settings/ai/test'],
   [AiSettingsController, 'get', 'GET', '/api/v1/settings/ai'],
   [EmailSettingsController, 'test', 'POST', '/api/v1/settings/email/test'],
+  [SsoSettingsController, 'get', 'GET', '/api/v1/settings/sso'],
+  [SsoSettingsController, 'test', 'POST', '/api/v1/settings/sso/test'],
   [AlertsController, 'create', 'POST', '/api/v1/alerts'],
   [AlertsController, 'list', 'GET', '/api/v1/alerts'],
 ];

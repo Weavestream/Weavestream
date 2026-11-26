@@ -1,3 +1,4 @@
+import { MFA_CHALLENGE_REQUIRED_CODE, MFA_ENROLLMENT_REQUIRED_CODE } from '@weavestream/shared';
 import type { ServerApiResponse } from './server-api/core';
 
 /**
@@ -140,6 +141,23 @@ export function unwrapApiResponse<T>(
   if (res.status === 429) {
     throw new RateLimitedError(path, 'GET', res.retryAfterSeconds ?? 30);
   }
+  return null;
+}
+
+/**
+ * Where an authenticated-but-MFA-incomplete session belongs. `/me` answers
+ * 403 with a stable `code` for those sessions; treating that as "signed out"
+ * sends them to /login, from where SSO returns them here again (a loop).
+ * Fixed paths, same as the password login. Setup wins over challenge.
+ */
+export function mfaRedirectFor(res: {
+  status: number;
+  problem?: unknown;
+}): '/mfa/setup' | '/mfa/challenge' | null {
+  if (res.status !== 403 || !res.problem || typeof res.problem !== 'object') return null;
+  const code = (res.problem as { code?: unknown }).code;
+  if (code === MFA_ENROLLMENT_REQUIRED_CODE) return '/mfa/setup';
+  if (code === MFA_CHALLENGE_REQUIRED_CODE) return '/mfa/challenge';
   return null;
 }
 

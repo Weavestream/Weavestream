@@ -8,6 +8,7 @@ export const SETTINGS_TAB_IDS = [
   'articles',
   'email',
   'ai',
+  'sso',
   'integrations',
   'api',
 ] as const;

@@ -83,9 +83,11 @@ export function StepUpHost() {
   }, [pathname]);
 
   const isMfa = factor === 'mfa';
+  const isSso = factor === 'sso';
 
   async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (isSso) return;
     setError(null);
     setBusy(true);
     try {
@@ -114,28 +116,48 @@ export function StepUpHost() {
       title="Confirm it’s you"
     >
       <form onSubmit={onSubmit} className="flex flex-col gap-5">
-        <Field
-          label={isMfa ? 'Authentication code' : 'Password'}
-          htmlFor="step-up-code"
-        >
-          <Input
-            id="step-up-code"
-            type={isMfa ? 'text' : 'password'}
-            inputMode={isMfa ? 'numeric' : undefined}
-            autoComplete={isMfa ? 'one-time-code' : 'current-password'}
-            autoCapitalize="none"
-            mono={isMfa}
-            required
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-          />
-        </Field>
+        {isSso ? (
+          <p className="text-body text-muted">
+            This action is sensitive. Confirm it is you with your identity
+            provider to continue. You will be sent to sign in again and
+            brought back here.
+          </p>
+        ) : (
+          <Field
+            label={isMfa ? 'Authentication code' : 'Password'}
+            htmlFor="step-up-code"
+          >
+            <Input
+              id="step-up-code"
+              type={isMfa ? 'text' : 'password'}
+              inputMode={isMfa ? 'numeric' : undefined}
+              autoComplete={isMfa ? 'one-time-code' : 'current-password'}
+              autoCapitalize="none"
+              mono={isMfa}
+              required
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+            />
+          </Field>
+        )}
 
         {error && <ErrorBanner title={error} />}
 
-        <Button type="submit" disabled={busy || code.length === 0}>
-          {busy ? 'Confirming…' : 'Confirm'}
-        </Button>
+        {isSso ? (
+          // Full-page navigation, deliberately a plain anchor: the identity
+          // provider round-trip leaves the app and returns to the landing
+          // page, so a client-side route would be wrong. Same tab on purpose.
+          <a
+            href="/api/v1/auth/sso/step-up"
+            className="flex h-control w-full items-center justify-center rounded-pill bg-accent-fill text-body font-semibold text-accent-fill-ink active:bg-accent-pressed"
+          >
+            Continue to identity provider
+          </a>
+        ) : (
+          <Button type="submit" disabled={busy || code.length === 0}>
+            {busy ? 'Confirming…' : 'Confirm'}
+          </Button>
+        )}
         <Button kind="secondary" type="button" onClick={() => settle(false)}>
           Cancel
         </Button>

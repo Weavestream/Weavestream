@@ -5,6 +5,7 @@ import {
   secureCookieOptions,
   setCsrfCookie,
   setSessionCookie,
+  ssoFlowCookieName,
 } from './cookies.js';
 
 // Minimal EnvService stand-in. The cookie helpers only read these fields;
@@ -89,5 +90,15 @@ describe('cookie Secure flag (WS-008: derived from APP_URL, not NODE_ENV)', () =
     expect(calls[0]!.name).toBe('ws_csrf');
     // Double-submit pattern: readable by JS (httpOnly:false) but Secure.
     expect(calls[0]!.opts).toMatchObject({ httpOnly: false, secure: true });
+  });
+});
+
+describe('ssoFlowCookieName', () => {
+  it('is the __Host- form when cookies are Secure', () => {
+    expect(ssoFlowCookieName(envWith('https://portal.example.com'))).toBe('__Host-ws_sso_flow');
+  });
+
+  it('is the plain name over http, where browsers would drop a __Host- cookie', () => {
+    expect(ssoFlowCookieName(envWith('http://localhost:3000', 'development'))).toBe('ws_sso_flow');
   });
 });

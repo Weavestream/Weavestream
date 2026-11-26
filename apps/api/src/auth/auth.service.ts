@@ -7,6 +7,7 @@ import {
   Logger,
   UnauthorizedException,
 } from '@nestjs/common';
+import { SsoConfigService } from '../sso/sso-config.service.js';
 import type { UiTheme, UiAccent } from '@weavestream/shared';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { PasswordService } from './password.service.js';
@@ -59,6 +60,7 @@ export class AuthService {
     private readonly env: EnvService,
     private readonly audit: AuditLogService,
     private readonly setupTokens: SetupTokenService,
+    private readonly ssoConfig: SsoConfigService,
   ) {}
 
   private readonly logger = new Logger(AuthService.name);
@@ -83,7 +85,15 @@ export class AuthService {
     // reveal whether an email maps to a valid active account.
     const hash = user?.passwordHash ?? (await this.passwords.dummyHash());
     const verified = await this.passwords.verify(hash, password);
-    const ok = !!user && user.isActive && !!user.passwordHash && verified;
+    // SSO_LOCAL_LOGIN=false: password sign-in is for SUPER_ADMIN (break-glass)
+    // only. It is folded into `ok` after the Argon2 verification above, so a
+    // refused account is indistinguishable from a wrong password: same 401,
+    // same latency, same failure counting. Compared with `=== false` so an
+    // env object without the key (older callers, specs) keeps the old behaviour.
+    const localLoginRefused =
+      user?.role !== 'SUPER_ADMIN' && (await this.ssoConfig.get()).localLoginEnabled === false;
+    const ok =
+      !!user && user.isActive && !!user.passwordHash && verified && !localLoginRefused;
 
     if (!ok) {
       // The post-increment counts ride along in the audit payload so the
@@ -98,15 +108,73 @@ export class AuthService {
         ip,
         userAgent,
         before: null,
-        after: { attemptedEmail: email, failureCounts: failureCounts ?? null },
+        after: {
+          attemptedEmail: email,
+          failureCounts: failureCounts ?? null,
+          // Audit-only context; the client sees the same 401 either way.
+          ...(verified && localLoginRefused ? { reason: 'local_login_disabled' } : {}),
+        },
       });
       throw new UnauthorizedException('Invalid credentials');
     }
 
     await this.lockout.clear(ip, email);
 
-    const mfaSetupRequired = user.mfaEnforcementCompletedAt === null;
-    const mfaChallengeRequired = !mfaSetupRequired && user.mfaEnabled;
+    const { result, sessionId, mfaChallengeRequired, mfaSetupRequired } =
+      await this.issueSession(user, { ip, userAgent, authMethod: 'password', idpMfa: false });
+
+    await this.audit.log({
+      actorId: user.id,
+      action: 'auth.login.success',
+      entityType: 'Session',
+      entityId: sessionId,
+      ip,
+      userAgent,
+      before: null,
+      after: { mfaPending: mfaChallengeRequired, mfaSetupRequired },
+    });
+
+    return result;
+  }
+
+  /**
+   * Create the session row, mint the refresh + access tokens and stamp
+   * `lastLoginAt`: the part of signing in that is the same whichever way the
+   * user proved who they are. `login` (password) and the single sign-on
+   * callback both go through here, so a session issued either way is
+   * identical in shape (refresh rotation, CSRF, cookies) and the two cannot
+   * drift. The caller audits, because the action name differs.
+   *
+   * `idpMfa` (single sign-on only, and only when the instance trusts the
+   * provider's MFA) makes the session MFA-complete: no TOTP enrolment and no
+   * challenge for this session. Nothing is written to the user row.
+   */
+  async issueSession(
+    user: {
+      id: string;
+      email: string;
+      name: string;
+      role: string;
+      mfaEnabled: boolean;
+      mfaEnforcementCompletedAt: Date | null;
+      uiTheme: Parameters<typeof themeFromDb>[0];
+      uiAccent: Parameters<typeof accentFromDb>[0];
+      showItemCounts: boolean;
+    },
+    opts: {
+      ip: string;
+      userAgent: string;
+      authMethod: 'password' | 'sso';
+      idpMfa: boolean;
+    },
+  ): Promise<{
+    result: LoginResult;
+    sessionId: string;
+    mfaChallengeRequired: boolean;
+    mfaSetupRequired: boolean;
+  }> {
+    const mfaSetupRequired = !opts.idpMfa && user.mfaEnforcementCompletedAt === null;
+    const mfaChallengeRequired = !opts.idpMfa && !mfaSetupRequired && user.mfaEnabled;
 
     const refresh = this.tokens.mintRefreshToken();
     const session = await this.prisma.session.create({
@@ -114,8 +182,10 @@ export class AuthService {
         userId: user.id,
         refreshTokenHash: refresh.hash,
         mfaPending: mfaChallengeRequired,
-        ip,
-        userAgent,
+        authMethod: opts.authMethod,
+        idpMfa: opts.idpMfa,
+        ip: opts.ip,
+        userAgent: opts.userAgent,
         expiresAt: new Date(
           Date.now() + this.env.values.SESSION_MAX_AGE_DAYS * 24 * 60 * 60 * 1000,
         ),
@@ -133,27 +203,21 @@ export class AuthService {
       data: { lastLoginAt: new Date() },
     });
 
-    await this.audit.log({
-      actorId: user.id,
-      action: 'auth.login.success',
-      entityType: 'Session',
-      entityId: session.id,
-      ip,
-      userAgent,
-      before: null,
-      after: { mfaPending: mfaChallengeRequired, mfaSetupRequired },
-    });
-
     return {
-      accessToken,
-      refreshToken: refresh.token,
-      mfaSetupRequired,
+      sessionId: session.id,
       mfaChallengeRequired,
-      user: { id: user.id, email: user.email, name: user.name, role: user.role },
-      preferences: {
-        uiTheme: themeFromDb(user.uiTheme),
-        uiAccent: accentFromDb(user.uiAccent),
-        showItemCounts: user.showItemCounts,
+      mfaSetupRequired,
+      result: {
+        accessToken,
+        refreshToken: refresh.token,
+        mfaSetupRequired,
+        mfaChallengeRequired,
+        user: { id: user.id, email: user.email, name: user.name, role: user.role },
+        preferences: {
+          uiTheme: themeFromDb(user.uiTheme),
+          uiAccent: accentFromDb(user.uiAccent),
+          showItemCounts: user.showItemCounts,
+        },
       },
     };
   }

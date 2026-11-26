@@ -15,6 +15,8 @@ export const TENANT_SCOPED_MODELS = new Set<string>([
   // Phase 3: the asset data plane is per-company.
   'Asset',
   'AssetFieldValue',
+  // Edit history (0098); denormalised companyId, same pattern as PasswordVersion.
+  'AssetVersion',
   'Relation',
   // Phase 4: the documentation plane. All three carry a required
   // (non-null) companyId — see DECISIONS.md D-010 for why there is no

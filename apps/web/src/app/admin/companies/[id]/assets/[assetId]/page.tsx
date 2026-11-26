@@ -27,6 +27,7 @@ import { AssetDetailView } from '../../../../../../components/assets/asset-detai
 import { AssetChatContext } from '../../../../../../components/chat-panel/asset-chat-context';
 import { SidebarActive } from '../../../../../../components/shell/sidebar-active';
 import { AssetHeaderActions } from './asset-header-actions';
+import { AssetVersionHistoryPanel } from './asset-version-history-panel';
 import {
   ProvenanceBadge,
   provenanceAttention,
@@ -139,6 +140,11 @@ export default async function AssetDetailPage({
               assetId={asset.id}
               canResolve={manage && !asset.archivedAt}
               timeZone={timeZone}
+            />
+            <AssetVersionHistoryPanel
+              companyId={companyId}
+              assetId={asset.id}
+              canManage={manage && !asset.archivedAt}
             />
           </div>
 

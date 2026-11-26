@@ -6,7 +6,7 @@ describe('resolveSettingsTab', () => {
   });
 
   it('keeps every known tab', () => {
-    for (const id of ['general', 'passwords', 'articles', 'email', 'ai', 'integrations', 'api']) {
+    for (const id of ['general', 'passwords', 'articles', 'email', 'ai', 'sso', 'integrations', 'api']) {
       expect(resolveSettingsTab(id)).toBe(id);
     }
   });

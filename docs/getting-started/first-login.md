@@ -15,6 +15,8 @@ Navigate to [http://localhost:3000/login](http://localhost:3000/login) (or your 
 
 Enter the email and password you set with `create-admin`.
 
+If your administrator has turned on single sign-on, the page also shows a **Sign in with &lt;provider&gt;** button. If password sign-in has been turned off for everyone except the super admin, the form is hidden behind a small **Use a local account** link. A failed single sign-on shows a short message above the button; see [Authentication](/security/authentication/) for the details.
+
 ## 2. Enroll your authenticator app
 
 Weavestream requires TOTP MFA on **every account**. On first login, you will be redirected to the MFA enrollment screen.
@@ -65,6 +67,7 @@ Click your avatar in the bottom-left corner to access **My Account**. Here you c
 - Timezone (for date/time display throughout the app)
 - Theme (Dark, Light, or System)
 - Accent colour
+- Single sign-on (only when your administrator turned it on): under **Security**, **Link your account** to sign in with your organisation account. Super admins use this, because accounts with that role are never linked automatically. See [Single sign-on](/security/authentication/#single-sign-on-oidc).
 
 ## What's next?
 

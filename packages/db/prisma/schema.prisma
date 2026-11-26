@@ -234,6 +234,7 @@ model User {
   starredAssets     StarredAsset[]
   starredArticles   StarredArticle[]
   chatConversations ChatConversation[]
+  identities        UserIdentity[]
 
   createdArticles         Article[]         @relation("ArticleCreator")
   updatedArticles         Article[]         @relation("ArticleUpdater")
@@ -245,6 +246,7 @@ model User {
   createdMemberships      Membership[]      @relation("MembershipCreator")
   createdPasswordFolders  PasswordFolder[]  @relation("PasswordFolderCreator")
   changedPasswordVersions PasswordVersion[] @relation("PasswordVersionChanger")
+  changedAssetVersions    AssetVersion[]    @relation("AssetVersionChanger")
   createdPasswords        Password[]        @relation("PasswordCreator")
   updatedPasswords        Password[]        @relation("PasswordUpdater")
   createdRelations        Relation[]        @relation("RelationCreator")
@@ -441,6 +443,12 @@ model Session {
   previousRefreshTokenHash String?   @unique @map("previous_refresh_token_hash")
   rotatedAt                DateTime? @map("rotated_at")
   mfaPending               Boolean   @default(false) @map("mfa_pending")
+  // How this session was established: 'password' (local login, the default)
+  // or 'sso' (OIDC). `idpMfa` is true only when single sign-on is configured
+  // to trust the identity provider's MFA and the ID token's `amr` claimed it;
+  // such a session counts as MFA-complete (no TOTP enrolment or challenge).
+  authMethod               String    @default("password") @map("auth_method")
+  idpMfa                   Boolean   @default(false) @map("idp_mfa")
   ip                       String
   userAgent                String    @map("user_agent")
   createdAt                DateTime  @default(now()) @map("created_at")
@@ -562,6 +570,28 @@ model UserMfaBackupCode {
   @@index([userId])
   @@index([userId, consumedAt])
   @@map("user_mfa_backup_codes")
+}
+
+/// A link between a Weavestream user and an account at an external OIDC
+/// identity provider (single sign-on). `subject` is the provider's stable
+/// identifier (`oid` for Microsoft Entra ID, otherwise `sub`); once linked a
+/// user is always matched by `(issuer, subject)`, never by email again.
+/// `email` is the address the provider reported at the last sign-in, kept for
+/// the audit trail only and never used for lookup.
+model UserIdentity {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  issuer      String
+  subject     String
+  email       String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  lastLoginAt DateTime? @map("last_login_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([issuer, subject])
+  @@index([userId])
+  @@map("user_identities")
 }
 
 model UserSetupToken {
@@ -737,6 +767,8 @@ model Asset {
   // refuses to claim an asset that already carries a sync record
   // from the same `(mapping, resource)` pair.
   integrationSyncRecords IntegrationSyncRecord[]
+  // Append-only edit history (0098). Cascades with the asset on purge.
+  versions               AssetVersion[]
 
   company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
   creator User?   @relation("AssetCreator", fields: [createdBy], references: [id], onDelete: SetNull)
@@ -783,6 +815,53 @@ model AssetFieldValue {
   @@index([assetFieldId])
   @@index([companyId, assetFieldId], map: "asset_field_values_company_field_idx")
   @@map("asset_field_values")
+}
+
+// Append-only edit history for an Asset (migration 0098). Each row is the
+// FULL state of the asset AFTER one change (same convention as
+// PasswordVersion), so restoring or diffing never needs replay.
+//
+// `fieldValues` is a JSON object keyed by AssetField.id (not slug, so a
+// slug edit cannot orphan history) holding the value exactly as it is
+// stored in `asset_field_values.value` for that field; fields with no
+// value are absent. Asset field values are stored as plaintext JSON today
+// (WS-004 accepted risk, see docs/security/data-retention.md) and there is
+// no encrypted/secret asset field type, so the snapshot carries the same
+// protection as the live rows: tenant-scoped, never returned by list
+// endpoints, and hidden-from-client fields (`visibleToClients = false`)
+// are stripped on read for CLIENT_USER.
+//
+// `changedFields` holds AssetField ids plus the literal tokens `name`,
+// `externalId`, `externalSource`. `changedBy` is NULL for integration/
+// system writes and for the lazy baseline row (an asset edited for the
+// first time after this feature shipped has its prior state recorded as a
+// baseline version first). `companyId` is denormalised from the parent so
+// the tenant middleware can scope it without a relation.
+model AssetVersion {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  assetId        String   @map("asset_id") @db.Uuid
+  companyId      String   @map("company_id") @db.Uuid
+  version        Int
+  name           String
+  externalId     String?  @map("external_id")
+  externalSource String?  @map("external_source")
+  fieldValues    Json     @default("{}") @map("field_values")
+  changedFields  String[] @default([]) @map("changed_fields")
+  changedBy      String?  @map("changed_by") @db.Uuid
+  changeReason   String?  @map("change_reason")
+  // Set when an operator scrubbed values from this row (H1 erasure path).
+  // `redactedFields` lists the field ids blanked individually; a whole-row
+  // redaction empties `fieldValues` and sets only `redactedAt`.
+  redactedAt     DateTime? @map("redacted_at")
+  redactedFields String[] @default([]) @map("redacted_fields")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  asset   Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  changer User? @relation("AssetVersionChanger", fields: [changedBy], references: [id], onDelete: SetNull)
+
+  @@unique([assetId, version], map: "asset_versions_asset_version_uniq")
+  @@index([assetId, createdAt], map: "asset_versions_asset_created_idx")
+  @@map("asset_versions")
 }
 
 // Phase 4: nested folder tree scoped per company. There is no "global"
@@ -1166,6 +1245,32 @@ model AiSetting {
   updatedBy           String?  @map("updated_by") @db.Uuid
 
   @@map("ai_settings")
+}
+
+// Instance-wide OIDC single sign-on configuration, set from Admin > Settings >
+// Single sign-on. One row. Used only when `SSO_OIDC_ISSUER` is NOT set in the
+// environment (an env-configured install keeps ignoring this table).
+// `clientSecretCiphertext` is encrypted with `IntegrationSecretEncryptionService`
+// (AES-GCM via `INTEGRATION_SECRET_KEY`, AAD `sso-settings:singleton:client-secret`)
+// and is never returned by the API. No row = SSO off.
+model SsoSetting {
+  id                     String   @id @default("singleton")
+  enabled                Boolean  @default(false)
+  providerName           String   @default("Single sign-on") @map("provider_name")
+  issuer                 String?
+  clientId               String?  @map("client_id")
+  clientSecretCiphertext String?  @map("client_secret_ciphertext")
+  scopes                 String   @default("openid profile email")
+  // Entra tenant id the ID token's `tid` must equal. Optional extra pin.
+  allowedTenantId        String?  @map("allowed_tenant_id")
+  linkByEmail            Boolean  @default(false) @map("link_by_email")
+  autoProvision          Boolean  @default(false) @map("auto_provision")
+  trustIdpMfa            Boolean  @default(false) @map("trust_idp_mfa")
+  localLoginEnabled      Boolean  @default(true) @map("local_login_enabled")
+  updatedAt              DateTime @default(now()) @updatedAt @map("updated_at")
+  updatedBy              String?  @map("updated_by") @db.Uuid
+
+  @@map("sso_settings")
 }
 
 // Phase 8: tenant-scoped "watch this domain" record. One row per

@@ -4,6 +4,7 @@ import type {
   AlertConfig,
   ArticleEditorMode,
   EmailSettings,
+  SsoSettings,
   IntegrationPriorityDto,
   McpClientPolicy,
   PasswordAccessMode,
@@ -99,6 +100,30 @@ const DEFAULT_EMAIL_SETTINGS: EmailSettings = {
 export const getEmailSettings = cache(async (): Promise<EmailSettings> => {
   const res = await serverApiFetch<EmailSettings>('/settings/email');
   if (!res.ok || !res.data) return DEFAULT_EMAIL_SETTINGS;
+  return res.data;
+});
+
+const DEFAULT_SSO_SETTINGS: SsoSettings = {
+  source: 'database',
+  envKeysSet: [],
+  enabled: false,
+  providerName: 'Single sign-on',
+  issuer: null,
+  clientId: null,
+  clientSecretSet: false,
+  scopes: 'openid profile email',
+  allowedTenantId: null,
+  linkByEmail: false,
+  autoProvision: false,
+  trustIdpMfa: false,
+  localLoginEnabled: true,
+  callbackUrl: '',
+  updatedAt: null,
+};
+
+export const getSsoSettings = cache(async (): Promise<SsoSettings> => {
+  const res = await serverApiFetch<SsoSettings>('/settings/sso');
+  if (!res.ok || !res.data) return DEFAULT_SSO_SETTINGS;
   return res.data;
 });
 
