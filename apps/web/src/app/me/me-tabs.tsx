@@ -14,6 +14,7 @@ import type { ApiKeySummary, McpClientPolicy, McpConnectionSummary } from '@weav
 import { McpConnectionsList } from './mcp-connections-list';
 import { AppearanceForm } from './appearance-form';
 import { MfaBackupCodes } from './mfa-backup-codes';
+import { SsoLink, type SsoLinkStatus } from './sso-link';
 
 type TabId =
   | 'profile'
@@ -82,6 +83,8 @@ export function MeTabs({
   connectionsLoadFailed,
   mcpRemoteEnabled,
   mcpClientPolicy,
+  sso = null,
+  ssoResult = null,
 }: {
   initialTab: TabId;
   me: Me;
@@ -93,6 +96,10 @@ export function MeTabs({
   mcpRemoteEnabled: boolean;
   mcpClientPolicy: McpClientPolicy;
   sessions: Session[];
+  /** Present only when the instance has single sign-on on. */
+  sso?: SsoLinkStatus | null;
+  /** Raw `?sso=` result from the link callback. */
+  ssoResult?: string | null;
 }) {
   const connectionCount = connectionsLoadFailed ? null : connections.length;
   const router = useRouter();
@@ -302,6 +309,15 @@ export function MeTabs({
                   description="Generate a fresh set of single-use recovery codes. The old set is replaced."
                 >
                   <MfaBackupCodes enabled={me.mfaEnabled} />
+                </Section>
+              )}
+
+              {sso && (
+                <Section
+                  title="Single sign-on"
+                  description={`Link your ${sso.providerName} account to sign in with it. Linking asks you to confirm your identity first.`}
+                >
+                  <SsoLink status={sso} result={ssoResult} />
                 </Section>
               )}
 

@@ -8,16 +8,18 @@ const VERSION = process.env.NEXT_PUBLIC_APP_VERSION ?? 'dev';
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ next?: string }>;
+  searchParams: Promise<{ next?: string; sso_error?: string | string[] }>;
 }) {
-  const next = safeNextPath((await searchParams).next);
+  const params = await searchParams;
+  const next = safeNextPath(params.next);
+  const ssoError = typeof params.sso_error === 'string' ? params.sso_error : null;
   return (
     <AuthShell
       title="Sign in"
       //subtitle="Use your Weavestream credentials."
       footer={<span>v{VERSION}</span>}
     >
-      <LoginForm next={next} />
+      <LoginForm next={next} ssoError={ssoError} />
     </AuthShell>
   );
 }

@@ -13,11 +13,12 @@ import { StepUpService } from './step-up/step-up.service.js';
 import { StepUpController } from './step-up/step-up.controller.js';
 import { UsersModule } from '../users/users.module.js';
 import { SettingsModule } from '../settings/settings.module.js';
+import { SsoConfigModule } from '../sso/sso-config.module.js';
 
 @Module({
   // SettingsModule: ApiKeyService refuses to mint while the instance switch
   // is off. SettingsModule imports nothing, so this adds no cycle.
-  imports: [UsersModule, SettingsModule],
+  imports: [UsersModule, SettingsModule, SsoConfigModule],
   controllers: [AuthController, ApiKeysController, StepUpController],
   providers: [
     AuthService,

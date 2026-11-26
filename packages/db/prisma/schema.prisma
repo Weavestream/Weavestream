@@ -234,6 +234,7 @@ model User {
   starredAssets     StarredAsset[]
   starredArticles   StarredArticle[]
   chatConversations ChatConversation[]
+  identities        UserIdentity[]
 
   createdArticles         Article[]         @relation("ArticleCreator")
   updatedArticles         Article[]         @relation("ArticleUpdater")
@@ -441,6 +442,12 @@ model Session {
   previousRefreshTokenHash String?   @unique @map("previous_refresh_token_hash")
   rotatedAt                DateTime? @map("rotated_at")
   mfaPending               Boolean   @default(false) @map("mfa_pending")
+  // How this session was established: 'password' (local login, the default)
+  // or 'sso' (OIDC). `idpMfa` is true only when single sign-on is configured
+  // to trust the identity provider's MFA and the ID token's `amr` claimed it;
+  // such a session counts as MFA-complete (no TOTP enrolment or challenge).
+  authMethod               String    @default("password") @map("auth_method")
+  idpMfa                   Boolean   @default(false) @map("idp_mfa")
   ip                       String
   userAgent                String    @map("user_agent")
   createdAt                DateTime  @default(now()) @map("created_at")
@@ -562,6 +569,28 @@ model UserMfaBackupCode {
   @@index([userId])
   @@index([userId, consumedAt])
   @@map("user_mfa_backup_codes")
+}
+
+/// A link between a Weavestream user and an account at an external OIDC
+/// identity provider (single sign-on). `subject` is the provider's stable
+/// identifier (`oid` for Microsoft Entra ID, otherwise `sub`); once linked a
+/// user is always matched by `(issuer, subject)`, never by email again.
+/// `email` is the address the provider reported at the last sign-in, kept for
+/// the audit trail only and never used for lookup.
+model UserIdentity {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String    @map("user_id") @db.Uuid
+  issuer      String
+  subject     String
+  email       String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  lastLoginAt DateTime? @map("last_login_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([issuer, subject])
+  @@index([userId])
+  @@map("user_identities")
 }
 
 model UserSetupToken {
@@ -1166,6 +1195,32 @@ model AiSetting {
   updatedBy           String?  @map("updated_by") @db.Uuid
 
   @@map("ai_settings")
+}
+
+// Instance-wide OIDC single sign-on configuration, set from Admin > Settings >
+// Single sign-on. One row. Used only when `SSO_OIDC_ISSUER` is NOT set in the
+// environment (an env-configured install keeps ignoring this table).
+// `clientSecretCiphertext` is encrypted with `IntegrationSecretEncryptionService`
+// (AES-GCM via `INTEGRATION_SECRET_KEY`, AAD `sso-settings:singleton:client-secret`)
+// and is never returned by the API. No row = SSO off.
+model SsoSetting {
+  id                     String   @id @default("singleton")
+  enabled                Boolean  @default(false)
+  providerName           String   @default("Single sign-on") @map("provider_name")
+  issuer                 String?
+  clientId               String?  @map("client_id")
+  clientSecretCiphertext String?  @map("client_secret_ciphertext")
+  scopes                 String   @default("openid profile email")
+  // Entra tenant id the ID token's `tid` must equal. Optional extra pin.
+  allowedTenantId        String?  @map("allowed_tenant_id")
+  linkByEmail            Boolean  @default(false) @map("link_by_email")
+  autoProvision          Boolean  @default(false) @map("auto_provision")
+  trustIdpMfa            Boolean  @default(false) @map("trust_idp_mfa")
+  localLoginEnabled      Boolean  @default(true) @map("local_login_enabled")
+  updatedAt              DateTime @default(now()) @updatedAt @map("updated_at")
+  updatedBy              String?  @map("updated_by") @db.Uuid
+
+  @@map("sso_settings")
 }
 
 // Phase 8: tenant-scoped "watch this domain" record. One row per

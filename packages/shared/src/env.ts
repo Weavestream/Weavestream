@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
+import { isMultiTenantIssuer, validateSsoSettings, type SsoSettingsField } from './sso-validation.js';
 
 // Marker brand on `base64Key` schemas so `loadEnv` can recognise which
 // missing/invalid fields are 32-byte encryption keys and offer freshly
@@ -27,6 +28,16 @@ const base64Key = (minBytes: number) => {
 const boolish = z
   .union([z.boolean(), z.string()])
   .transform((v) => (typeof v === 'boolean' ? v : /^(1|true|yes|on)$/i.test(v)));
+
+// An optional string env var where an empty or whitespace-only value (an
+// unset `SSO_X=` line in the dotenv file) means "not set".
+const optionalTrimmed = z
+  .string()
+  .optional()
+  .transform((v) => {
+    const t = v?.trim();
+    return t ? t : undefined;
+  });
 
 const intFromString = (min: number, max: number) =>
   z
@@ -149,6 +160,32 @@ export const envSchema = z.object({
   // a stolen/idle session can't keep exfiltrating after one prompt;
   // default 15 min balances that against re-prompting on every action.
   STEP_UP_TTL_SEC: intFromString(60, 3600).default(900),
+
+  // OIDC single sign-on (Microsoft Entra ID first). When SSO_OIDC_ISSUER is
+  // set the environment configures SSO entirely and the Admin > Settings >
+  // Single sign-on tab is read-only; when it is unset, that tab (database) is
+  // used instead. Cross-field rules (client id/secret required, a
+  // multi-tenant issuer refused) are enforced by `ssoEnvProblems` in
+  // `loadEnv`, using the same `validateSsoSettings` the tab uses.
+  //
+  // Issuer for Entra: https://login.microsoftonline.com/<tenant-id>/v2.0
+  SSO_OIDC_ISSUER: optionalTrimmed,
+  SSO_OIDC_CLIENT_ID: optionalTrimmed,
+  SSO_OIDC_CLIENT_SECRET: optionalTrimmed,
+  SSO_OIDC_SCOPES: z.string().trim().min(1).default('openid profile email'),
+  SSO_PROVIDER_NAME: z.string().trim().min(1).max(60).default('Single sign-on'),
+  // Link a first-time sign-in to the existing ACTIVE user whose verified
+  // email matches. Off by default: an email is only as trustworthy as the
+  // provider's verification of it.
+  SSO_LINK_BY_EMAIL: boolish.default(false),
+  // Create an OPERATOR with no access when nobody matches (else no_account).
+  SSO_AUTO_PROVISION: boolish.default(false),
+  // Treat an ID token whose `amr` contains `mfa` as MFA-complete.
+  SSO_TRUST_IDP_MFA: boolish.default(false),
+  // false: password login is refused for everyone except SUPER_ADMIN.
+  SSO_LOCAL_LOGIN: boolish.default(true),
+  // Entra tenant id the ID token's `tid` must equal. Optional extra pin.
+  SSO_ALLOWED_TENANT_ID: optionalTrimmed,
 
   // How many trusted reverse-proxy hops sit between the internet and
   // the `web` (Next.js) container — i.e. the edge tier the operator
@@ -361,10 +398,50 @@ const BASE64_KEY_FIELDS: Record<string, number> = (() => {
   return map;
 })();
 
+// The validation rules live in `sso-validation.ts`, shared with the
+// Admin > Settings > Single sign-on API so both configuration routes accept
+// exactly the same things.
+export { isMultiTenantIssuer };
+
+const SSO_ENV_KEY: Record<SsoSettingsField, string> = {
+  issuer: 'SSO_OIDC_ISSUER',
+  clientId: 'SSO_OIDC_CLIENT_ID',
+  clientSecret: 'SSO_OIDC_CLIENT_SECRET',
+  allowedTenantId: 'SSO_ALLOWED_TENANT_ID',
+};
+
+/**
+ * Cross-field validation for the SSO settings. Pure; returns one message per
+ * problem (empty when SSO is off or correctly configured). `loadEnv` throws
+ * on a non-empty result so a half-configured sign-in never boots.
+ */
+export function ssoEnvProblems(
+  env: Pick<
+    Env,
+    'SSO_OIDC_ISSUER' | 'SSO_OIDC_CLIENT_ID' | 'SSO_OIDC_CLIENT_SECRET' | 'SSO_ALLOWED_TENANT_ID'
+  >,
+): string[] {
+  if (!env.SSO_OIDC_ISSUER) return []; // single sign-on is off
+  return validateSsoSettings({
+    issuer: env.SSO_OIDC_ISSUER,
+    clientId: env.SSO_OIDC_CLIENT_ID,
+    clientSecretPresent: !!env.SSO_OIDC_CLIENT_SECRET,
+    allowedTenantId: env.SSO_ALLOWED_TENANT_ID,
+  }).map((p) =>
+    p.code === 'client_id_required' || p.code === 'client_secret_required'
+      ? `  - ${SSO_ENV_KEY[p.field]}: required when SSO_OIDC_ISSUER is set`
+      : `  - ${SSO_ENV_KEY[p.field]}: ${p.message}`,
+  );
+}
+
 export function loadEnv(raw: NodeJS.ProcessEnv = process.env): Env {
   const result = envSchema.safeParse(raw);
   if (!result.success) {
     throw new Error(formatEnvError(result.error.issues));
+  }
+  const sso = ssoEnvProblems(result.data);
+  if (sso.length) {
+    throw new Error(['Invalid env:', ...sso].join('\n'));
   }
   return result.data;
 }

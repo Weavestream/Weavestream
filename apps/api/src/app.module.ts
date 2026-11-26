@@ -12,6 +12,8 @@ import { RedisService } from './redis/redis.service.js';
 import { AuditModule } from './audit/audit.module.js';
 import { AuditController } from './audit/audit.controller.js';
 import { AuthModule } from './auth/auth.module.js';
+import { SsoModule } from './sso/sso.module.js';
+import { SsoConfigModule } from './sso/sso-config.module.js';
 import { HealthModule } from './health/health.module.js';
 import { CacheModule } from './cache/cache.module.js';
 import { RbacModule } from './rbac/rbac.module.js';
@@ -147,6 +149,9 @@ const httpSerializers = {
     AuditModule,
     RbacModule,
     AuthModule,
+    SsoModule,
+    // AuthGuard (APP_GUARD below) reads the SSO config on every request.
+    SsoConfigModule,
     CompaniesModule,
     UsersModule,
     MembershipsModule,

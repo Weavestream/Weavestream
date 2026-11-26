@@ -5,6 +5,7 @@ import { PageBody, PageHeader } from '../../components/shell/page-header';
 import { Panel } from '../../components/ui';
 import { MeTabs } from './me-tabs';
 import type { ApiKeySummary, McpConnectionSummary } from '@weavestream/shared';
+import type { SsoLinkStatus } from './sso-link';
 
 type Session = {
   id: string;
@@ -29,7 +30,7 @@ type TabId = (typeof VALID_TABS)[number];
 export default async function MePage({
   searchParams,
 }: {
-  searchParams: Promise<{ tab?: string }>;
+  searchParams: Promise<{ tab?: string; sso?: string | string[] }>;
 }) {
   const sp = await searchParams;
   const me = await requireMe();
@@ -39,12 +40,20 @@ export default async function MePage({
   const apiKeys = apiKeysRes.ok ? (apiKeysRes.data ?? []) : [];
   const connectionsRes = await serverApiFetch<McpConnectionSummary[]>('/me/mcp-connections');
   const connections = connectionsRes.ok ? (connectionsRes.data ?? []) : [];
+  // Single sign-on: shown only when the instance has it on. A failed lookup
+  // hides the section rather than blocking the page.
+  const ssoRes = await serverApiFetch<SsoLinkStatus>('/auth/sso/link/status');
+  const sso = ssoRes.ok && ssoRes.data?.enabled === true ? ssoRes.data : null;
+  const ssoResult = typeof sp.sso === 'string' && sp.sso !== '' ? sp.sso : null;
   // Request-scoped cache: the root layout already loaded settings.
   const { apiKeysEnabled, mcpRemoteEnabled, mcpClientPolicy } = await getSettings();
 
+  // The link callback returns to `/me?sso=<result>`: land where the result is shown.
   const initialTab: TabId = VALID_TABS.includes(sp.tab as TabId)
     ? (sp.tab as TabId)
-    : 'profile';
+    : ssoResult !== null
+      ? 'security'
+      : 'profile';
 
   return (
     <>
@@ -66,6 +75,8 @@ export default async function MePage({
             connectionsLoadFailed={!connectionsRes.ok}
             mcpRemoteEnabled={mcpRemoteEnabled}
             mcpClientPolicy={mcpClientPolicy}
+            sso={sso}
+            ssoResult={ssoResult}
           />
         </Panel>
       </PageBody>

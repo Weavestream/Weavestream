@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   HttpException,
   UnauthorizedException,
@@ -124,6 +125,69 @@ describe('StepUpService.requiredFactor', () => {
       userRow: { passwordHash: 'h', mfaEnabled: true, mfaSecretEncrypted: null },
     });
     await expect(svc.requiredFactor('u-1')).resolves.toBe('password');
+  });
+});
+
+describe('StepUpService single sign-on factor', () => {
+  const NO_TOTP = { passwordHash: null, mfaEnabled: false, mfaSecretEncrypted: null };
+
+  it('is sso for an SSO session without TOTP', async () => {
+    const { svc } = makeService({ userRow: NO_TOTP });
+    await expect(svc.requiredFactor('u-1', 'sso')).resolves.toBe('sso');
+  });
+
+  it('is sso even when the account also has a password', async () => {
+    const { svc } = makeService({
+      userRow: { passwordHash: 'h', mfaEnabled: false, mfaSecretEncrypted: null },
+    });
+    await expect(svc.requiredFactor('u-1', 'sso')).resolves.toBe('sso');
+  });
+
+  it('stays mfa for an SSO session whose user has TOTP enabled', async () => {
+    const { svc } = makeService({
+      userRow: { passwordHash: 'h', mfaEnabled: true, mfaSecretEncrypted: 'enc' },
+    });
+    await expect(svc.requiredFactor('u-1', 'sso')).resolves.toBe('mfa');
+  });
+
+  it('stays password for a password session, and when the method is unknown', async () => {
+    const { svc } = makeService({ userRow: NO_TOTP });
+    await expect(svc.requiredFactor('u-1', 'password')).resolves.toBe('password');
+    await expect(svc.requiredFactor('u-1')).resolves.toBe('password');
+  });
+
+  it('tells the guard to challenge with sso when the window is closed', async () => {
+    const { svc } = makeService({ userRow: NO_TOTP, verifiedValue: null });
+    await expect(
+      svc.assertVerified({ id: 'u-1', sessionId: 's-1', mfaPending: false, authMethod: 'sso' }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'step_up_required', factor: 'sso' }),
+    });
+  });
+
+  it('lets the sso window, once opened by the callback, through', async () => {
+    const { svc } = makeService({ userRow: NO_TOTP, verifiedValue: 'sso' });
+    await expect(
+      svc.assertVerified({ id: 'u-1', sessionId: 's-1', mfaPending: false, authMethod: 'sso' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('reports the sso factor in status()', async () => {
+    const { svc } = makeService({ userRow: NO_TOTP, verifiedValue: null });
+    await expect(svc.status({ ...USER, authMethod: 'sso' })).resolves.toMatchObject({
+      verified: false,
+      factor: 'sso',
+    });
+  });
+
+  it('cannot be satisfied by typing a credential: verify refuses and checks nothing', async () => {
+    const { svc, passwords, mfa, redis } = makeService({ userRow: NO_TOTP, passwordVerify: true });
+    await expect(
+      svc.verify({ ...USER, authMethod: 'sso' }, 'anything', META),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(passwords.verify).not.toHaveBeenCalled();
+    expect(mfa.verify).not.toHaveBeenCalled();
+    expect(redis.client.set).not.toHaveBeenCalled();
   });
 });
 

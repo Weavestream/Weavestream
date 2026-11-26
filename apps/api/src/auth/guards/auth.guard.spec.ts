@@ -1,7 +1,9 @@
 import { UnauthorizedException } from '@nestjs/common';
+import { fakeSsoConfig } from '../../sso/sso-config.fake.js';
 import type { ExecutionContext } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AuthGuard } from './auth.guard.js';
+import { MfaEnrollmentGuard } from './mfa-enrollment.guard.js';
 import { McpDelegationService } from '../../mcp/mcp-delegation.service.js';
 import { internalListenerHandler } from '../../common/internal-listener.js';
 import { FULL_PASSWORD_ACCESS, NO_PASSWORD_ACCESS } from '../../passwords/password-access-policy.js';
@@ -36,6 +38,9 @@ function makeGuard(
     passwordPolicy = { mode: 'all_users' as const, userIds: [] as string[] },
     memberships = [] as unknown[],
     userRole = 'OPERATOR',
+    sessionRow = {},
+    userRow = {},
+    envValues = {},
   }: {
     apiKeysEnabled?: boolean;
     key?: unknown;
@@ -45,6 +50,9 @@ function makeGuard(
     passwordPolicy?: { mode: 'all_users' | 'selected_users'; userIds: string[] };
     memberships?: unknown[];
     userRole?: string;
+    sessionRow?: Record<string, unknown>;
+    userRow?: Record<string, unknown>;
+    envValues?: Record<string, unknown>;
   } = {},
 ) {
   const reflector = { getAllAndOverride: jest.fn().mockReturnValue(false) } as never;
@@ -59,6 +67,7 @@ function makeGuard(
         revokedAt: null,
         expiresAt: new Date(Date.now() + 1_000_000_000),
         mfaPending: false,
+        ...sessionRow,
       }),
     },
     user: {
@@ -70,6 +79,7 @@ function makeGuard(
         globalAccess: null,
         platformCapabilities: [],
         mfaEnforcementCompletedAt: new Date(),
+        ...userRow,
       }),
     },
   } as never;
@@ -93,12 +103,13 @@ function makeGuard(
     tokens,
     auth as never,
     prisma,
-    ENV,
+    { values: { ...(ENV as { values: object }).values, ...envValues } } as never,
     apiKeys as never,
     settings as never,
     delegations,
     mcpConnections as never,
     permissions as never,
+    fakeSsoConfig(envValues),
   );
   return { guard, auth, apiKeys, settings, delegations, mcpConnections, prisma, permissions };
 }
@@ -468,5 +479,152 @@ describe('AuthGuard remote MCP delegation handles', () => {
     await expect(guard.canActivate(makeDelegatedCtx(delegations.mint(grant)).ctx)).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
+  });
+});
+
+// OIDC single sign-on: a session the identity provider vouched MFA for is
+// MFA-complete for that session only (SSO_TRUST_IDP_MFA + amr=mfa at sign-in).
+describe('AuthGuard single sign-on sessions', () => {
+  const ROTATED = {
+    accessToken: 'new-jwt',
+    refreshToken: 'new-refresh-token',
+    payload: { sub: 'u-1', sid: 's-1', role: 'OPERATOR' },
+  };
+
+  // idpMfa is honoured only while SSO_TRUST_IDP_MFA is on, so the default for
+  // these specs is on; the dedicated tests below turn it off.
+  async function authenticate(opts: Parameters<typeof makeGuard>[1]) {
+    const { guard } = makeGuard(ROTATED, {
+      ...opts,
+      envValues: { SSO_TRUST_IDP_MFA: true, ...opts?.envValues },
+    });
+    const { ctx, req } = makeCtx();
+    await guard.canActivate(ctx);
+    return (req as unknown as { user: import('../../common/current-user.decorator.js').AuthedUser })
+      .user;
+  }
+
+  it('treats an idpMfa session as MFA-complete: enforcement stamped, challenge cleared', async () => {
+    const created = new Date('2026-11-01T10:00:00Z');
+    const user = await authenticate({
+      sessionRow: { authMethod: 'sso', idpMfa: true, mfaPending: true, createdAt: created },
+      userRow: { mfaEnforcementCompletedAt: null },
+    });
+    expect(user.mfaPending).toBe(false);
+    expect(user.mfaEnforcementCompletedAt).toEqual(created);
+    expect(user.authMethod).toBe('sso');
+    expect(user.idpMfa).toBe(true);
+  });
+
+  it('an idpMfa session is not blocked by MfaEnrollmentGuard', async () => {
+    const user = await authenticate({
+      sessionRow: { authMethod: 'sso', idpMfa: true, createdAt: new Date() },
+      userRow: { mfaEnforcementCompletedAt: null },
+    });
+    const enrollment = new MfaEnrollmentGuard({
+      getAllAndOverride: jest.fn().mockReturnValue(false),
+    } as never);
+    const ctx = {
+      switchToHttp: () => ({ getRequest: () => ({ user, method: 'GET', path: '/api/v1/companies' }) }),
+      getHandler: () => ({}),
+      getClass: () => ({}),
+    } as unknown as ExecutionContext;
+    expect(enrollment.canActivate(ctx)).toBe(true);
+  });
+
+  it('keeps an existing enrolment date rather than overwriting it', async () => {
+    const enrolled = new Date('2026-01-01T00:00:00Z');
+    const user = await authenticate({
+      sessionRow: { authMethod: 'sso', idpMfa: true, createdAt: new Date() },
+      userRow: { mfaEnforcementCompletedAt: enrolled },
+    });
+    expect(user.mfaEnforcementCompletedAt).toEqual(enrolled);
+  });
+
+  it('an SSO session without idpMfa still goes through normal MFA rules', async () => {
+    const user = await authenticate({
+      sessionRow: { authMethod: 'sso', idpMfa: false, mfaPending: true },
+      userRow: { mfaEnforcementCompletedAt: null },
+    });
+    expect(user.mfaPending).toBe(true);
+    expect(user.mfaEnforcementCompletedAt).toBeNull();
+    expect(user.idpMfa).toBe(false);
+  });
+
+  it('a password session is unchanged: authMethod password, idpMfa false', async () => {
+    const user = await authenticate({ sessionRow: { authMethod: 'password' } });
+    expect(user.authMethod).toBe('password');
+    expect(user.idpMfa).toBe(false);
+    expect(user.mfaPending).toBe(false);
+  });
+
+  it('idpMfa lives on the session: another session of the same user is unaffected', async () => {
+    const user = await authenticate({
+      sessionRow: { authMethod: 'password', idpMfa: false, mfaPending: true },
+      userRow: { mfaEnforcementCompletedAt: null },
+    });
+    expect(user.mfaPending).toBe(true);
+    expect(user.mfaEnforcementCompletedAt).toBeNull();
+  });
+
+  it('ignores a stored idpMfa session once SSO_TRUST_IDP_MFA is switched off', async () => {
+    const user = await authenticate({
+      sessionRow: { authMethod: 'sso', idpMfa: true, mfaPending: true, createdAt: new Date() },
+      userRow: { mfaEnforcementCompletedAt: null },
+      envValues: { SSO_TRUST_IDP_MFA: false },
+    });
+    expect(user.idpMfa).toBe(false);
+    expect(user.mfaPending).toBe(true);
+    expect(user.mfaEnforcementCompletedAt).toBeNull();
+  });
+
+  it('does not trust idpMfa when the setting is absent altogether', async () => {
+    const { guard } = makeGuard(ROTATED, {
+      sessionRow: { authMethod: 'sso', idpMfa: true, mfaPending: true },
+      userRow: { mfaEnforcementCompletedAt: null },
+    });
+    const { ctx, req } = makeCtx();
+    await guard.canActivate(ctx);
+    expect((req as unknown as { user: { mfaPending: boolean } }).user.mfaPending).toBe(true);
+  });
+});
+
+describe('AuthGuard with SSO_LOCAL_LOGIN=false', () => {
+  const ROTATED = {
+    accessToken: 'new-jwt',
+    refreshToken: 'new-refresh-token',
+    payload: { sub: 'u-1', sid: 's-1', role: 'OPERATOR' },
+  };
+  const off = { SSO_LOCAL_LOGIN: false };
+
+  it('rejects an existing password session for a non-SUPER_ADMIN', async () => {
+    const { guard } = makeGuard(ROTATED, { sessionRow: { authMethod: 'password' }, envValues: off });
+    await expect(guard.canActivate(makeCtx().ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('treats a session with no recorded method (pre-migration) as a password session', async () => {
+    const { guard } = makeGuard(ROTATED, { envValues: off });
+    await expect(guard.canActivate(makeCtx().ctx)).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('leaves a SUPER_ADMIN password session alone (break-glass)', async () => {
+    const { guard } = makeGuard(ROTATED, {
+      userRole: 'SUPER_ADMIN',
+      sessionRow: { authMethod: 'password' },
+      envValues: off,
+    });
+    await expect(guard.canActivate(makeCtx().ctx)).resolves.toBe(true);
+  });
+
+  it('leaves an SSO session alone', async () => {
+    const { guard } = makeGuard(ROTATED, { sessionRow: { authMethod: 'sso' }, envValues: off });
+    await expect(guard.canActivate(makeCtx().ctx)).resolves.toBe(true);
+  });
+
+  it('changes nothing while SSO_LOCAL_LOGIN is true (default) or absent', async () => {
+    for (const envValues of [{ SSO_LOCAL_LOGIN: true }, {}]) {
+      const { guard } = makeGuard(ROTATED, { sessionRow: { authMethod: 'password' }, envValues });
+      await expect(guard.canActivate(makeCtx().ctx)).resolves.toBe(true);
+    }
   });
 });

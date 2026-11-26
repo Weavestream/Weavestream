@@ -21,6 +21,7 @@ Step-by-step guides for the most common Weavestream workflows.
 - [Client Portal Setup](/guides/client-portal-setup/) — Configure what clients can see
 - [Permissions & RBAC](/guides/permissions/) — Assign roles and manage user access
 - [Security Center](/guides/security-center/) — Monitor login activity, sessions, lockouts, and security events
+- [Set up Microsoft Entra single sign-on](/guides/sso-microsoft-entra/) — Let people sign in with Microsoft, step by step, from the settings page
 
 ## Operations
 

@@ -14,7 +14,7 @@
  * console.
  */
 import '@testing-library/jest-dom';
-import { act, render } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { StepUpHost } from './StepUpHost';
 import {
   hasPendingStepUp,
@@ -82,5 +82,45 @@ describe('StepUpHost teardown', () => {
     expect(hasStepUpOpener()).toBe(false);
     // With no host, a request resolves false immediately rather than hanging.
     await expect(requestStepUp('mfa')).resolves.toBe(false);
+  });
+});
+
+describe('StepUpHost sso factor', () => {
+  it('shows an identity-provider link and no code input', () => {
+    render(<StepUpHost />);
+    act(() => {
+      void requestStepUp('sso');
+    });
+
+    const link = screen.getByRole('link', {
+      name: 'Continue to identity provider',
+    });
+    // Full-page navigation to the API route, not a client-side route.
+    expect(link).toHaveAttribute('href', '/api/v1/auth/sso/step-up');
+    expect(screen.getByText(/identity provider to continue/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Password')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Authentication code')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Confirm' })).not.toBeInTheDocument();
+  });
+
+  it('Cancel resolves false', async () => {
+    render(<StepUpHost />);
+    let inflight!: Promise<boolean>;
+    act(() => {
+      inflight = requestStepUp('sso');
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    await expect(inflight).resolves.toBe(false);
+  });
+
+  it('keeps the code input for the password factor', () => {
+    render(<StepUpHost />);
+    act(() => {
+      void requestStepUp('password');
+    });
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: 'Continue to identity provider' }),
+    ).not.toBeInTheDocument();
   });
 });

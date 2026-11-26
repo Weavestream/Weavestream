@@ -83,6 +83,30 @@ Under **Passwords → Password access**, choose **All internal users** (the defa
 
 See [Managing Passwords](/guides/managing-passwords/#setting-a-global-password-access-policy) for the workflow and [Password access restrictions](/features/passwords/#access-restrictions) for the full rule order. This policy applies to lists, search, attachments, stars, related items, PDF exports, and programmatic access as the user.
 
+## Single Sign-On
+
+**Admin → Settings → Single sign-on** sets up sign-in with Microsoft Entra ID or another OpenID Connect provider without any environment variables. Saving needs step-up authentication. For a full walkthrough, see [Set up Microsoft Entra single sign-on](/guides/sso-microsoft-entra/).
+
+| Field | What it does |
+|---|---|
+| **Enable single sign-on** | Shows "Sign in with …" on the login page. Needs the issuer, client ID and client secret. |
+| **Provider name** | The name on the button. Up to 60 characters. |
+| **Issuer URL** | For Entra: `https://login.microsoftonline.com/<tenant-id>/v2.0`. Must be https. The multi-tenant endpoints (`common`, `organizations`, `consumers`) are refused. The **Microsoft Entra tenant ID** helper builds this for you. |
+| **Client ID** | The application (client) ID from the provider. |
+| **Client secret** | Write-only. Once saved the tab shows **Secret set** with **Replace** and **Clear**; the value is encrypted at rest (the same key as the AI key) and never shown or returned again. Leaving it alone keeps it. |
+| **Scopes** | Space separated. Default `openid profile email`. |
+| **Allowed tenant ID** | Optional: only accept sign-ins from this Entra tenant. |
+| **Link accounts by email** | First SSO sign-in connects to the active user with the same verified email. Super admins are never linked this way. |
+| **Create accounts automatically** | Someone with no match gets an Operator account with no access until an admin grants it. |
+| **Trust the provider's multi-factor sign-in** | A session whose ID token says `mfa` skips Weavestream's own two-factor code. |
+| **Allow password sign-in** | Turn off to require SSO for everyone except super admins (break-glass). Refused (409) until at least one active super admin has linked their account at this provider. |
+
+The tab also shows the **Callback URL** to register at the provider (with a copy button; whether it is registered cannot be checked from here), a **Test connection** button that checks the provider's discovery document, issuer match and signing keys without signing anyone in, and a short setup checklist. The test only contacts public internet addresses; private, loopback and link-local addresses are refused.
+
+**Managed by environment variables.** If `SSO_OIDC_ISSUER` is set in the deployment's environment, the environment configures SSO entirely. The tab is then read-only, shows a banner naming which `SSO_*` variables are set (never their values), and still allows **Test connection**. See [Environment variables](environment.md#single-sign-on-oidc).
+
+Changes apply within a few seconds. Every save is audited as `settings.sso.change` with the names of the fields changed, never their values.
+
 ## Integrations
 
 **Admin > Settings > Integrations** holds the integration priority order: which integration's values win when several sync the same asset. See [Several integrations on one asset](/integrations/#several-integrations-on-one-asset).
