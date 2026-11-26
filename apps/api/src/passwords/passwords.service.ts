@@ -514,12 +514,22 @@ export class PasswordsService {
           passwordVaultAad(companyId, id, 'password'),
         );
         data.lastRotatedAt = new Date();
+        changedFields.push('password');
+      }
+      // Strength is scored against the name, username and URL too, so
+      // re-score when the password changed or when this request changed
+      // that context (for example a restore that brings back an old
+      // username with the same password). Rotation and history flags
+      // stay tied to the password itself.
+      const contextChanged = changedFields.some(
+        (f) => f === 'name' || f === 'username' || f === 'url',
+      );
+      if (!unchanged || contextChanged) {
         data.passwordStrength = computePasswordStrength(input.password, [
           (input.name ?? existing.name) ?? '',
           (input.username ?? existing.username) ?? '',
           (input.url ?? existing.url) ?? '',
         ]);
-        changedFields.push('password');
       }
     }
     if (input.notes !== undefined) {

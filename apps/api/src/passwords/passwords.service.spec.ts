@@ -11,6 +11,7 @@ import type {
   TotpAlgo,
 } from '@prisma/client';
 import { PasswordsService } from './passwords.service.js';
+import { computePasswordStrength } from './password-strength.js';
 import { passwordVaultAad } from '../crypto/secret-encryption.service.js';
 import type { AuthedUser } from '../common/current-user.decorator.js';
 import { FULL_PASSWORD_ACCESS, NO_PASSWORD_ACCESS } from './password-access-policy.js';
@@ -1211,6 +1212,26 @@ describe('PasswordsService — update flags only real changes', () => {
     );
     expect(versions).toHaveLength(1);
     expect(versions[0]?.changedFields).toEqual(['username']);
+  });
+
+  it('re-scores strength when an unchanged password is sent with a new username', async () => {
+    const { svc, passwords, versions } = makeStubs({
+      passwords: [passwordRow({ id: 'pwd-a', passwordStrength: 4 })],
+    });
+    const rotatedBefore = passwords[0]?.lastRotatedAt;
+    await svc.update(
+      OPERATOR,
+      'co-1',
+      'pwd-a',
+      { username: 'super-secret', password: 'super-secret' },
+      META,
+    );
+    expect(versions[0]?.changedFields).toEqual(['username']);
+    expect(passwords[0]?.lastRotatedAt).toEqual(rotatedBefore);
+    expect(passwords[0]?.passwordStrength).toBe(
+      computePasswordStrength('super-secret', ['Acme VPN', 'super-secret', 'https://vpn.acme.test']),
+    );
+    expect(passwords[0]?.passwordStrength).not.toBe(4);
   });
 
   it('writes no version at all when every sent field is unchanged', async () => {
