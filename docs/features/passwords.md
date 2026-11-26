@@ -83,7 +83,7 @@ Only 5 characters leave the server — the full password is never transmitted. T
 Every change to a password is stored as an immutable `PasswordVersion` record capturing:
 
 - The values of all fields at that point (name, username, URL, and the encrypted password, notes and TOTP secret)
-- Which fields actually changed. A field is flagged only when its value differs: re-saving a form with unchanged notes, password or TOTP does not create a change entry
+- Which fields actually changed. A field is flagged only when its value differs: re-saving a form with unchanged notes, password or TOTP does not create a change entry. Two deliberate exceptions, so that saving can never confirm a guessed secret: an API key or MCP connection without reveal access gets every notes, password or TOTP value it sends recorded as changed, and on a credential that requires a reason to view, a re-sent password or TOTP secret is always recorded as changed. Versions saved before this behaviour was introduced keep the change markers they were recorded with
 - The actor, optional reason, and timestamp
 
 The history panel shows the captured **name, username and URL** for every version and highlights the ones that changed, so earlier usernames can be read straight from the list. Notes, passwords and TOTP secrets are encrypted and are never listed; the password can be revealed per version with the usual permission and reason rules.

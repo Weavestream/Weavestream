@@ -23,7 +23,7 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 
 ### Fixed
 
-- **Saving a password no longer lists notes as changed every time.** A field is flagged as changed only when its value differs, so unchanged notes, password or TOTP no longer create a change entry. Versions saved before this release keep the change markers they were recorded with.
+- **Saving a password no longer lists notes as changed every time.** A field is flagged as changed only when its value differs, so unchanged notes, password or TOTP no longer create a change entry. So that saving can never confirm a guessed secret, a re-sent password or TOTP secret still counts as changed on credentials that require a reason to view, and for API keys and MCP connections without reveal access. Versions saved before this release keep the change markers they were recorded with.
 
 ## [1.13.2] - 2026-11-16
 
