@@ -26,6 +26,10 @@ All notable changes to Weavestream are documented here. The format follows [Keep
 - **Saving a password no longer lists notes as changed every time.** A field is flagged as changed only when its value differs, so unchanged notes, password or TOTP no longer create a change entry. So that saving can never confirm a guessed secret, a re-sent password or TOTP secret still counts as changed on credentials that require a reason to view, and for API keys and MCP connections without reveal access. Versions saved before this release keep the change markers they were recorded with.
 - **Changing a password's name, username or URL now updates its strength score.** The score checks whether the password contains those values, so it went stale when only they changed.
 
+### Security
+
+- **Next.js is updated to 16.4.6.** This fixes seven advisories published for 16.4.3: GHSA-pc58-hwjq-p385, GHSA-7qx7-33qx-rqx2, GHSA-f3mh-rxg3-f5g2, GHSA-rhh4-g77r-r9qj, GHSA-vvgp-ww4w-46vf, GHSA-vc7v-qv4w-wrv8 and GHSA-mfr8-8qww-v76h. Two can apply to a self-hosted install: the `/api` proxy forwards upstream responses (GHSA-pc58, response desync behind some HTTP/1.1 proxies), and the image optimizer is used (GHSA-7qx7, SVG accepted while disabled). The other five cover Edge runtime route handlers and `use cache`, which Weavestream does not use.
+
 ## [1.13.2] - 2026-11-16
 
 ### Added
